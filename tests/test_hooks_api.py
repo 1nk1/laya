@@ -80,6 +80,8 @@ for label, fn in (("Agent.__init__", Agent.__init__), ("load", load)):
     check_param(label, fn, "compile_cache", False)
     check_param(label, fn, "compile_mode", "default")
 
+# Python and TypeScript share the 0.4.0 fallback for unidentified text.
+check_param("Router.__init__", Router.__init__, "default", "multilingual")
 # Router keeps lang_guess and explicit per-model revisions too
 check_param("Router.__init__", Router.__init__, "lang_guess", None)
 check_param("Router.__init__", Router.__init__, "revisions", None)
