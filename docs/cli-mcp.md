@@ -166,6 +166,8 @@ Laya does not open a network port.
 | `laya_route_batch` | Decides which checkpoint would answer each request, with no forward pass and no checkpoint load. | `requests`, each `{state, questions, model?, task?, lang?, lang_guess?}`, optional `hooks_timeout` |
 | `laya_decide` | Answers a JSON-schema-shaped decision in one forward pass and returns the decided values with per-field confidence, instead of an answer map to parse. Schema properties may be enum choices, booleans, or integers with a minimum and maximum; free strings, arrays, and nested objects are rejected by path. | `state`, `schema`, optional `model`, `min_confidence` |
 
+On `laya_route`, `laya_predict`, `laya_shortlist`, and `laya_decide`, `model` may be omitted or set to `null`; either form resolves to `auto`.
+
 The three batch and schema tools exist because the same operations are available on the SDK and
 `laya-serve`: handling many requests, or serving a caller that already knows the answer shape,
 does not require dropping to Python. For the schema-driven form in more depth, see

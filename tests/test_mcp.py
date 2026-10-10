@@ -1831,6 +1831,21 @@ def test_controls_signature_and_schema():
            required == (["preset", "state"] if name == "laya_preset" else ["state", "questions"]),
            repr(required))
 
+    from laya.mcp import server as server_mod
+
+    model_schemas = []
+    for name in ("laya_predict", "laya_shortlist", "laya_decide", "laya_route"):
+        parameter = inspect.signature(getattr(server_mod, name + "_tool")).parameters["model"]
+        ok("signature/%s_model_default_none" % name, parameter.default is None, repr(parameter.default))
+        tool = by_name[name]
+        schema = tool.input_schema if hasattr(tool, "input_schema") else tool.inputSchema
+        model_schema = schema.get("properties", {}).get("model", {})
+        ok("schema/%s_model_nullable" % name,
+           {"type": "null"} in (model_schema.get("anyOf") or []), repr(model_schema))
+        model_schemas.append(model_schema)
+    ok("schema/model_specs_consistent", all(model_schema == model_schemas[0] for model_schema in model_schemas),
+       repr(model_schemas))
+
 
 def test_lang_guess_control():
     """`lang_guess` -- core's soft routing hint (#489 family) -- reaches the single-request tools.
