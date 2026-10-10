@@ -2,6 +2,7 @@
 
 Run: python tests/test_evidence.py
 """
+import inspect
 import json
 import os
 import sys
@@ -41,11 +42,11 @@ check("zero items -> MISSING", zero["types"]["choice"]["state"], evidence.MISSIN
 
 low = calib({"training": {"laya_train_calibration": {"choice": {"items": 5, "temperature": 1.0,
         "issues": ["not fitted: 5 calibration items, fewer than 10, so the temperature stays 1.0"]}}}})
-check("below MIN_TYPE_N -> INSUFFICIENT", low["types"]["choice"]["state"], evidence.INSUFFICIENT)
+check("upstream below-MIN_TYPE_N limitation -> INSUFFICIENT", low["types"]["choice"]["state"], evidence.INSUFFICIENT)
 
 warned = calib({"training": {"laya_train_calibration": {"choice": {"items": 30, "temperature": 1.2,
         "issues": ["fitted on only 30 calibration items"]}}}})
-check("fitted below CALIB_WARN_N -> INSUFFICIENT", warned["types"]["choice"]["state"], evidence.INSUFFICIENT)
+check("upstream below-CALIB_WARN_N limitation -> INSUFFICIENT", warned["types"]["choice"]["state"], evidence.INSUFFICIENT)
 
 clamped = calib({"training": {"laya_train_calibration": {"choice": {"items": 200, "temperature": 0.5,
         "issues": ["the fitted temperature 0.5 is on the [0.5, 3] clamp"]}}}})
@@ -62,6 +63,35 @@ check("mixed types overall -> INSUFFICIENT", mixed["state"], evidence.INSUFFICIE
 
 malformed = calib({"training": {"laya_train_calibration": {"choice": {"temperature": 1.0}}}})
 check("malformed entry -> UNKNOWN", malformed["types"]["choice"]["state"], evidence.UNKNOWN)
+
+# ------------------------------------------------------ one numeric source of truth
+# `items` is reported here, never judged: #964 deleted the local `_thresholds()` that compared it
+# against copies of `MIN_TYPE_N`/`CALIB_WARN_N`, and the comment describing that mechanism stayed
+# behind. These are the checks the deleted mechanism never had -- a re-introduced floor has to
+# survive all of them, on both sides of both upstream floors.
+for _n in (1, 5, 9, 10, 49, 50, 300, 5000):
+    _t = calib({"training": {"laya_train_calibration": {
+        "choice": {"items": _n, "temperature": 1.1, "issues": []}}}})
+    check("items=%d with no recorded issue -> PRESENT" % _n, _t["types"]["choice"]["state"], evidence.PRESENT)
+
+# The same counts with a limitation recorded, and the state flips -- so the loop above shows that
+# `issues` decides, not that a large `items` does.
+_states = {calib({"training": {"laya_train_calibration": {
+    "choice": {"items": _n, "temperature": 1.1,
+               "issues": ["fitted on only %d calibration items" % _n]}}}})["types"]["choice"]["state"]
+    for _n in (5, 9, 10, 49, 50, 300)}
+check("the limitation text alone decides, at every count", _states, {evidence.INSUFFICIENT})
+
+# The deleted mechanism also exported where its numbers came from. Nothing in this module's result
+# may claim a threshold provenance, because there is no threshold to have a provenance about.
+check("no threshold provenance in the result",
+      "threshold_source" in calib({"training": {"laya_train_calibration": {
+          "choice": {"items": 400, "temperature": 1.1, "issues": []}}}}), False)
+
+_src = inspect.getsource(evidence)
+check_true("the module comments name the artifact as the authority", "second numeric source of truth" in _src)
+check_true("no comment still promises the deleted fallback",
+           "_FALLBACK" not in _src and "fall back to the documented values" not in _src)
 
 # ------------------------------------------------------ report identity
 full_report = {"config": {"schema": "laya-evals-report/1", "dataset_sha256": "a",
