@@ -1,9 +1,9 @@
 """`docs/structured.md`'s tables must be the compiler's behavior, in both directions.
 
-The page promises a "documented subset" (`laya/structured.py:146` says the mapping is one), and the
-subset table is what a reader trusts. It had drifted both ways at once: it promised `title` as an
-"option label", which no code path reads at all (weight-free proof: the compiled plan is
-byte-identical with and without the key), while `Optional[X]` -- the `anyOf`/`oneOf` unwrap and the
+The page promises a "documented subset" -- `laya/structured.py::questions_from_json_schema` calls it
+one -- and the subset table is what a reader trusts. It had drifted both ways at once: it promised
+`title` as an "option label", which no code path reads at all (weight-free proof: the compiled plan
+is byte-identical with and without the key), while `Optional[X]` -- the `anyOf`/`oneOf` unwrap and
 `type: ["x", "null"]` list form -- had been supported for months and appeared nowhere. 13 of the
 module's 19 `SchemaError` messages were also undocumented, the three limits collapsed into one row
 that said only "the limit is named in the message".
