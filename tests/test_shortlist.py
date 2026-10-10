@@ -6,6 +6,7 @@ decision model is never constructed.
 import inspect
 import os
 import sys
+import threading
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 
@@ -777,6 +778,58 @@ check("cache/dim drift caches nothing new", swap_cached.cache_info()["size"], 1)
 swap_cached.cache_clear()
 swap_cached(["beta"])
 check("cache/dim clear then re-embed works", swap_cached.cache_info()["size"], 1)
+
+
+# ------------------------------------------------------- the dimensionality guard is a read
+# That guard reads `rows_by_text`, so it needs the lock every other read holds. Measured on
+# the unlocked version: 3 callers plus a `cache_clear()` churner over 6,000 calls let 41 to 61
+# exceptions escape on each of five runs, every one of them a RuntimeError ("OrderedDict mutated
+# during iteration") or a StopIteration out of `next(iter(...))`, raised at the guard line and
+# handed to the caller instead of a matrix. The switch interval is compressed because at CPython's
+# default 5 ms the same 6,000 calls escaped 0 -- the window between the truthiness test and the
+# iterator is two bytecodes wide, and a thread only lands in it when the interpreter chooses to
+# switch there.
+race_errors = []
+race_shapes = []
+race_stop = threading.Event()
+race_fn = cached_embed_fn(lambda texts: np.zeros((len(texts), 8), dtype=np.float32), maxsize=4)
+
+
+def _race_caller(tid):
+    for n in range(2000):
+        try:
+            rows = race_fn(["t%d-%d" % (tid, n)])
+            if rows.shape != (1, 8):
+                race_shapes.append(rows.shape)
+        except BaseException as exc:
+            race_errors.append(type(exc).__name__)
+
+
+def _race_churner():
+    while not race_stop.is_set():
+        race_fn.cache_clear()
+
+
+_switch_interval = sys.getswitchinterval()
+sys.setswitchinterval(1e-6)
+try:
+    _churner = threading.Thread(target=_race_churner)
+    _churner.start()
+    _callers = [threading.Thread(target=_race_caller, args=(t,)) for t in range(3)]
+    for _caller in _callers:
+        _caller.start()
+    for _caller in _callers:
+        _caller.join()
+    race_stop.set()
+    _churner.join()
+finally:
+    sys.setswitchinterval(_switch_interval)
+
+check_true("cache/concurrent dimensionality guard does not iterate a mutating cache",
+           not race_errors,
+           "%d escaped: %s" % (len(race_errors), sorted(set(race_errors))))
+check_true("cache/concurrent guarded calls still return full-width rows",
+           not race_shapes, "%d calls returned %s" % (len(race_shapes), race_shapes[:3]))
 
 
 # --------------------------------------------------------------- tournament
