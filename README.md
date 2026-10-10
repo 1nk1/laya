@@ -1014,7 +1014,7 @@ A threshold also depends on the autocast dtype. On CUDA at compute capability 8 
 
 ### Opt-in abstention: `min_confidence`
 
-`predict`, `predict_batch`, `system_one`, `decide` and `decide_batch` — on `Agent`, `Router` and `ONNXAgent` — take an opt-in `min_confidence`, off by default. It is a caller-side policy on top of the emitted confidence: every answer whose `answer_confidence` falls below the threshold is flagged `low_confidence: True`, with the raw answer, probabilities and confidence left intact for inspection.
+`predict`, `predict_batch`, `system_one`, `decide` and `decide_batch` — on `Agent`, `Router` and `ONNXAgent` — take an opt-in `min_confidence`, off by default: a number, or a per-bucket map. It is a caller-side policy on top of the emitted confidence: every answer whose `answer_confidence` falls below its threshold is flagged `low_confidence: True`, with the raw answer, probabilities and confidence left intact for inspection.
 
 ```python
 res = agent.predict(state, questions, min_confidence=0.85)
@@ -1026,7 +1026,23 @@ else:
     route_automatically(ans["choice"])
 ```
 
-The threshold reads `answer_confidence` (`max(p)`) — the calibrated quantity, invariant to the number of options — never the entropy `confidence`. With `decide(..., min_confidence=...)` a low-confidence field comes back as `None` in the schema output, while `return_details=True` keeps the answer and its confidence. [LangChain `LayaRouter`](https://github.com/NandhaKishorM/laya/blob/main/docs/langchain.md)'s `confidence_threshold` reads the same value: `answer_confidence` when the answer carries it, `confidence` otherwise. Left unset, `min_confidence` changes nothing.
+The threshold reads `answer_confidence` (`max(p)`) — the field temperature scaling fits, and the one the calibration figures describe — never the entropy `confidence`, which is normalised by the option count. It is not, however, a quantity that means the same thing at every option count. On the committed T4 run (`research/results/t4_colab_benchmark.json`, mean of `max(p)` over each suite's questions), `laya` averages **0.7677** on 3-option XNLI against **0.9659** on 20-option MASSIVE intent, while `laya-multilingual` runs the other way — **0.9152** against **0.8055**. Same field, same run, opposite ordering between the two checkpoints: one flat cutoff abstains at a different accuracy target for every question shape, and neither checkpoint's direction is a rule to extrapolate.
+
+That is why `min_confidence` also accepts a per-bucket map (#394). These are illustrative cuts — fit them, as below:
+
+```python
+res = agent.predict(state, questions, min_confidence={
+    "choice:3-5": 0.90,     # three-option questions (an NLI shape)
+    "choice:11+": 0.98,     # many-option routing (a 20-option intent shape)
+    "default":    0.85,     # every bucket this map does not name
+})
+```
+
+The keys are `laya/confidence.py::bucket_keys` — the cross-product of the three answer types (`choice`, `score`, `noul`) and the four option bands (`2`, `3-5`, `6-10`, `11+`), twelve in all, spelled exactly as `common.temp_bucket` — plus `"default"`. Each answer is gated at the threshold of its own bucket (`laya/confidence.py::resolve_min_confidence`): a bucket the map omits falls through to `"default"`, and a map that names no `"default"` leaves the unnamed buckets ungated at `0.0` rather than guessing. A key no answer can ever produce is refused by `laya/confidence.py::check_min_confidence_map` at validation instead of quietly gating nothing. `abstention_threshold` echoes the threshold *that answer's* bucket was gated at, so a run mixing shapes can still be re-split by the gate that produced it.
+
+Fit the numbers rather than picking them: `laya/calibrate.py::fit_abstention_thresholds` consumes the same `(qtype, logits, target)` records the temperature fit takes and returns a map `min_confidence` accepts directly, one cut per bucket at a `target_error`. Pass its `binning_map` when the serving agent has one — the runtime recalibrates `answer_confidence` through it before the gate reads it, and a cut fitted without it is on a scale the gate never sees (measured there: the cut held 9.8% error over 50% coverage on un-binned confidences, then admitted 94.5% of answers at 25.6% error once compared against binned ones).
+
+With `decide(..., min_confidence=...)` a low-confidence field comes back as `None` in the schema output, while `return_details=True` keeps the answer and its confidence. [LangChain `LayaRouter`](https://github.com/NandhaKishorM/laya/blob/main/docs/langchain.md)'s `confidence_threshold` reads the same value: `answer_confidence` when the answer carries it, `confidence` otherwise. Left unset, `min_confidence` changes nothing.
 
 A gate is a policy, and a policy whose application you cannot observe is not one. `low_confidence` is written only when the gate fires, so its absence cannot tell you "a gate ran and this answer cleared it" apart from "no gate ran at all" — you could neither compute an abstention rate nor prove the gate was in effect. **When you pass `min_confidence`,** every answer therefore also reports `abstention`:
 

@@ -200,9 +200,9 @@ def resolve_min_confidence(answer: Dict[str, Any], thresholds: Dict[str, float],
 def flag_low_confidence(results: List[Dict[str, Any]], min_confidence: float) -> None:
     """Opt-in abstention marker (#361): flag answers whose confidence falls below `min_confidence`.
 
-    Reads `answer_confidence` (`max(p)`, the quantity the calibration figures describe and the one
-    that does not drift with the number of options), falling back to `confidence` if
-    `answer_confidence` is absent.
+    Reads `answer_confidence` (`max(p)`, the quantity the calibration figures describe -- the
+    *level* it reaches still moves with the option count, which is why `min_confidence` takes a
+    per-bucket map), falling back to `confidence` if `answer_confidence` is absent.
     The raw answer and confidence stay intact; `low_confidence: True` is added when the answer
     falls below the threshold, and removed if a previously-flagged answer now clears it (e.g.
     when a result dict is reused or re-evaluated with a different threshold).
