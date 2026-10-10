@@ -781,26 +781,46 @@ check("cache/dim clear then re-embed works", swap_cached.cache_info()["size"], 1
 
 
 # ------------------------------------------------------- the dimensionality guard is a read
-# That guard reads `rows_by_text`, so it needs the lock every other read holds. Measured on
-# the unlocked version: 3 callers plus a `cache_clear()` churner over 6,000 calls let 41 to 61
-# exceptions escape on each of five runs, every one of them a RuntimeError ("OrderedDict mutated
-# during iteration") or a StopIteration out of `next(iter(...))`, raised at the guard line and
-# handed to the caller instead of a matrix. The switch interval is compressed because at CPython's
-# default 5 ms the same 6,000 calls escaped 0 -- the window between the truthiness test and the
-# iterator is two bytecodes wide, and a thread only lands in it when the interpreter chooses to
-# switch there.
+# That guard reads `rows_by_text`, so it needs the lock every other read holds. Measured on the
+# unlocked version: 3 callers plus a `cache_clear()` churner over 6,000 calls (12,000 texts) let
+# 42, 46, 55, 65 and 67 exceptions escape on five runs in a row, each one either a RuntimeError
+# ("OrderedDict mutated during iteration") or a StopIteration out of `next(iter(...))`, raised at
+# the guard line and handed to the caller instead of a matrix. The switch interval is compressed
+# because at CPython's default 5 ms the same workload escaped 0 twice over -- the window between
+# the truthiness test and the iterator is two bytecodes wide, and a thread only lands in it when
+# the interpreter chooses to switch there. The locked build escapes 0 at 1e-6.
+def _race_parse(text):
+    tid, n = text.split("-")
+    return float(int(tid[1:]) * 100000 + int(n))
+
+
+def _race_embed(texts):
+    # Every text embeds to a row of its own, so a call that gets back another text's row is
+    # caught below and not just a call that raises.
+    return np.array([[_race_parse(t)] * 8 for t in texts], dtype=np.float32)
+
+
+def _race_texts(tid, n):
+    # Two texts per call, because a one-text call cannot tell a row bound to the wrong key from
+    # a correct one: there is nothing to compare the position against.
+    return ["t%d-%d" % (tid, n), "t%d-%d" % (tid, n + 5000)]
+
+
 race_errors = []
-race_shapes = []
+race_bad_rows = []
 race_stop = threading.Event()
-race_fn = cached_embed_fn(lambda texts: np.zeros((len(texts), 8), dtype=np.float32), maxsize=4)
+race_fn = cached_embed_fn(_race_embed, maxsize=4)
 
 
 def _race_caller(tid):
     for n in range(2000):
+        texts = _race_texts(tid, n)
+        want = [_race_parse(t) for t in texts]
         try:
-            rows = race_fn(["t%d-%d" % (tid, n)])
-            if rows.shape != (1, 8):
-                race_shapes.append(rows.shape)
+            rows = race_fn(texts)
+            got = [float(row[0]) for row in rows]
+            if rows.shape != (2, 8) or got != want:
+                race_bad_rows.append((tuple(rows.shape), got, want))
         except BaseException as exc:
             race_errors.append(type(exc).__name__)
 
@@ -828,8 +848,11 @@ finally:
 check_true("cache/concurrent dimensionality guard does not iterate a mutating cache",
            not race_errors,
            "%d escaped: %s" % (len(race_errors), sorted(set(race_errors))))
-check_true("cache/concurrent guarded calls still return full-width rows",
-           not race_shapes, "%d calls returned %s" % (len(race_shapes), race_shapes[:3]))
+# The arm above is the one the unlocked build fails; it crashed calls rather than mis-serving
+# them, so this arm measured 0 there too. This one is what catches a wrong row: serving every
+# position from `found[keys[0]]` instead of `found[key]` trips it on all 6,000 calls.
+check_true("cache/concurrent guarded calls return the row for their own text",
+           not race_bad_rows, "%d calls returned %s" % (len(race_bad_rows), race_bad_rows[:3]))
 
 
 # --------------------------------------------------------------- tournament
