@@ -108,9 +108,9 @@ def resolve_device(force: str | None = None) -> str:
 
         if torch.cuda.is_available():
             return "cuda"
-        # Keeps this branch in step with Agent's own auto-detection
-        # (laya/agent.py:355-362): cuda -> mps -> xpu -> cpu. The two ``hasattr`` guards are the
-        # core's, because ``torch.backends.mps`` and ``torch.xpu`` appeared in different torch
+        # Keeps this branch in step with the availability chain inside
+        # `laya/agent.py::Agent.__init__`: cuda -> mps -> xpu -> cpu. The two ``hasattr`` guards
+        # are the core's, because ``torch.backends.mps`` and ``torch.xpu`` appeared in different torch
         # versions; the label must not depend on which one is installed. A machine that answers
         # ``mps`` here and has no CUDA is the common case on Apple silicon, and reporting ``cpu``
         # there tells a client its checkpoint will not use the GPU it has.

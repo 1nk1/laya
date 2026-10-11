@@ -42,10 +42,10 @@ own lifespan, the Router that builds, `/health` in both representations -- which
 
 and `False` for "the cap came from the environment", "the Router holds laya's default", and
 "that default is more than one"; on this branch all three read `True` and the cap reads 2.
-That last line is the half that is not about the default at all: `Router.preload()` raises the
-cap to fit what it preloads (`laya/router.py:275` -> `:372`), so the demo's own default mode ran
-with three checkpoints resident while `/health` reported one. Nothing in the file ever asked the
-running Router what it was holding.
+That last line is the half that is not about the default at all: `laya/router.py::Router.preload`
+raises the cap to fit what it preloads, so the demo's own default mode ran with three checkpoints
+resident while `/health` reported one. Nothing in the file ever asked the running Router what it
+was holding.
 
 `main` is at 66 checks now, and this file is at 81. The fifteen new ones are the request `model`
 field. `laya.router.normalise_name` is core's one resolver -- trim, lower-case, alias table,
@@ -405,9 +405,9 @@ def main():
            ("up to %d kept in memory" % cap)
            in client.get("/health", headers={"accept": "text/html"}).text, repr(cap))
         # The number cannot come from the requested config, because the config and the
-        # Router are allowed to disagree: `Router(preload=True)` raises its own cap to fit
-        # what it preloads (laya/router.py:275 -> :372), so the demo's default mode has run
-        # with three resident while its env said one. Move the Router and the page must move.
+        # Router are allowed to disagree: `Router(preload=True)` raises its own cap to fit what it
+        # preloads (`laya/router.py::Router.preload`), so the demo's default mode has run with
+        # three resident while its env said one. Move the Router and the page must move.
         demo.ROUTER.max_loaded = cap + 1
         moved = client.get("/health")
         ok("and both follow the Router when the Router raises its own cap",

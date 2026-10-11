@@ -123,8 +123,8 @@ def test_device():
     ok("device/report_keys", set(rep) >= {"device", "torch_cuda", "torch_version"})
     ok("device/report_cuda_bool", isinstance(rep["torch_cuda"], bool))
 
-    # The auto-detect branch is a second implementation of Agent's own chain
-    # (laya/agent.py:355-362), so it has to be exercised on devices the runner does not have.
+    # The auto-detect branch is a second implementation of the availability chain inside
+    # `laya/agent.py::Agent.__init__`, so it has to be exercised on devices the runner does not have.
     # `resolve_device` imports torch inside its body, which makes the module the seam: a fake
     # here forces every branch without CUDA, MPS or XPU hardware. Before this block the only
     # auto-detect assertion was the domain check above, and it passed on a narrower chain.
