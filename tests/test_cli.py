@@ -471,6 +471,38 @@ check("questions: declared state_key used", stub.states[0] == {"body": "hello"},
 check("questions: questions unwrapped",
       sorted(stub.questions) == ["spam"], str(sorted(stub.questions or {})))
 
+# A bare mapping containing a question id named "questions" must not be mistaken for a wrapper
+# object: both single-question and multi-question bare mappings keep the question id intact.
+bare_questions_only = {"questions": {"type": "choice", "instructions": "Any questions?",
+                                     "options": ["y", "n"]}}
+bare_questions_path = write_json("bare_questions.json", bare_questions_only)
+code, out, err, stub = run_cli(["hello", "--questions", bare_questions_path],
+                               router=QuestionRecorder())
+check("questions: bare mapping with 'questions' id preserved",
+      stub.questions == bare_questions_only, str(stub.questions))
+check("questions: bare mapping with 'questions' id uses default state_key",
+      stub.states[0] == {"request": "hello"}, str(stub.states[0]))
+
+bare_multi = {
+    "questions": {"type": "choice", "instructions": "Any questions?", "options": ["y", "n"]},
+    "urgency": {"type": "score", "instructions": "How urgent?"},
+}
+bare_multi_path = write_json("bare_multi.json", bare_multi)
+code, out, err, stub = run_cli(["hello", "--questions", bare_multi_path],
+                               router=QuestionRecorder())
+check("questions: multi-question bare mapping with 'questions' id retains all keys",
+      stub.questions == bare_multi, str(stub.questions))
+
+# A wrapper with no state_key unwraps its inner questions.
+wrapped_no_key = {"questions": {"spam": {"type": "noul", "instructions": "Is spam?"}}}
+wrapped_no_key_path = write_json("wrapped_no_key.json", wrapped_no_key)
+code, out, err, stub = run_cli(["hello", "--questions", wrapped_no_key_path],
+                               router=QuestionRecorder())
+check("questions: wrapper without state_key unwraps",
+      sorted(stub.questions) == ["spam"], str(sorted(stub.questions or {})))
+check("questions: wrapper without state_key uses default state_key",
+      stub.states[0] == {"request": "hello"}, str(stub.states[0]))
+
 # The CLI validates the file's shape and defers question semantics to core, so a question set is
 # handed over unchanged rather than normalised twice.
 code, out, err, stub = run_cli(["hi", "--questions", write_json("odd.json", {"a": {"type": "bogus"}})],
