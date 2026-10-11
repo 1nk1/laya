@@ -178,6 +178,55 @@ const out = await predictShortlist(agent, state, questions, embedFn, 20);
 // embedFnFromAgent(agent) mean-pools the loaded encoder; a dedicated bi-encoder usually shortlists better.
 ```
 
+### Tournament (without an embedder)
+
+For a large tool or intent catalog, `predictTournament` lets the decision model narrow the
+options itself. It ports Python's `predict_tournament` to the local Node/browser runtime:
+
+```ts
+import { predictTournament } from "laya-ts";
+
+const out = await predictTournament(agent, state, questions);
+console.log(out.answers.intent);
+console.log(out.tournament.intent); // { labels: [...finalists], n: originalCount, rounds: 1 }
+
+// Pick a group size and forward options to every prediction, including the final one.
+const routed = await predictTournament(router, state, questions, 16, { model: "english" });
+```
+
+Each oversized choice is split into balanced groups of at most 16 labels. All groups from
+all questions share one `predict` call per round; their winners advance until each choice
+fits. Up to 256 labels therefore take one elimination call and one final call. Small choices
+and non-choice questions reach the final call unchanged, and a request needing no
+elimination makes exactly one call. The helper does not mutate the supplied questions.
+
+The returned `tournament` metadata covers every choice, including `rounds: 0` for a
+passthrough. Probabilities and confidences describe **only the finalists**; `usage`,
+`routing`, and other prediction fields come from the final call, not all rounds combined.
+Hooks run for every underlying call. Calibrate thresholds on the strategy you actually use;
+a threshold fitted on the full catalog does not automatically transfer to a tournament.
+Widening the head budget or using a dedicated shortlist embedder can still be a better fit.
+
+A narrowed choice drops its original `option_order` with one warning per question, matching
+Python. Passthrough definitions keep it. This does not add `option_order` handling to the
+TypeScript `Agent`, whose prediction path does not currently apply that field.
+
+For a reproducible local comparison, build the package and export a checkpoint as above,
+then run from the repository root:
+
+```bash
+python laya-ts/scripts/tournament_parity.py --model-dir CHECKPOINT --onnx-dir ./model \
+  --fixture ./tournament-python.json
+node laya-ts/examples/tournament.mjs --model-dir ./model \
+  --fixture ./tournament-python.json --report ./tournament-node.json
+```
+
+The Python script records fresh predictions for fixed inputs; Node independently runs
+the same inputs through the split ONNX export. The check compares each round's questions,
+winners, probabilities and final metadata, including a two-round case. Reports include
+artifact hashes, call counts and warmed timings. These few cases check runtime parity;
+they do not establish accuracy gains or production latency. Model files stay local.
+
 ## Per-language calibration (`lang_temperatures`)
 
 Port of the Python `Agent(lang_temperatures=...)` knob. A language override replaces the

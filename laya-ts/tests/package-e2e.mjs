@@ -107,7 +107,7 @@ test("the packed module installs and works in an external ESM TypeScript project
   await writeFile(
     join(consumerDir, "runtime.mjs"),
     `import assert from "node:assert/strict";
-import { Agent, VERSION } from "laya-ts";
+import { Agent, VERSION, predictTournament, DEFAULT_TOURNAMENT_GROUP } from "laya-ts";
 
 let encoderCalls = 0;
 let headCalls = 0;
@@ -136,6 +136,12 @@ assert.equal(result.answers.intent.probabilities.refund > 0.5, true);
 assert.equal(result.usage.output_tokens, 0);
 assert.equal(encoderCalls, 1);
 assert.equal(headCalls, 1);
+assert.equal(DEFAULT_TOURNAMENT_GROUP, 16);
+const tournament = await predictTournament(agent, "charged twice", {
+  intent: { type: "choice", instructions: "Pick a route", criteria: ["refund", "other"] },
+});
+assert.equal(tournament.answers.intent.choice, "refund");
+assert.deepEqual(tournament.tournament.intent, { labels: ["refund", "other"], n: 2, rounds: 0 });
 `,
   );
   await run(process.execPath, ["runtime.mjs"], consumerDir);
@@ -145,9 +151,12 @@ assert.equal(headCalls, 1);
     `import {
   Agent,
   VERSION,
+  predictTournament,
+  DEFAULT_TOURNAMENT_GROUP,
   type QuestionDef,
   type SessionProvider,
   type SystemOneResult,
+  type TournamentMeta,
 } from "laya-ts";
 
 const provider: SessionProvider = {
@@ -175,6 +184,9 @@ const prediction: Promise<SystemOneResult> = new Agent({ provider }).predict(
 
 void VERSION;
 void prediction;
+const tournament: Promise<SystemOneResult & { tournament: Record<string, TournamentMeta> }> =
+  predictTournament(new Agent({ provider }), "charged twice", questions, DEFAULT_TOURNAMENT_GROUP);
+void tournament;
 `,
   );
   await writeFile(
