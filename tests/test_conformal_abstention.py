@@ -209,12 +209,15 @@ check("validate/the fitted map this suite ran on passes the validator", _accepts
 # both sides so neither can drift silently: the floor is what empties the map (the same records at
 # floor 1 fit every bucket they touch), and the refusal is about emptiness rather than the keys.
 _small = [record(3, 0.9, True) for _ in range(MIN_ABSTAIN_BUCKET_N - 1)]
-check("validate/the shipped floor on a sub-floor set fits nothing",
-      fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {}), {})
+_empty_fit = fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {})
+check("validate/the shipped floor on a sub-floor set fits nothing", _empty_fit, {})
+# `_accepts` returns the map or the refusal's text, so the result has to be read by type: a check
+# that called `.startswith` on it would abort the suite on a mutant that fits a non-empty map,
+# instead of failing this one by name.
+_refusal = _accepts(_empty_fit)
 check_true("validate/the validator refuses that empty fit rather than gating nothing",
-           _accepts(fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {})).startswith("raised: ")
-           and "non-empty" in _accepts(fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {})),
-           _accepts(fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {})))
+           isinstance(_refusal, str) and _refusal.startswith("raised: ") and "non-empty" in _refusal,
+           _refusal)
 _all_buckets = fit_abstention_thresholds(records, [1.0, 1.0, 1.0], {}, target_error=TARGET,
                                          min_bucket_n=1)
 check("validate/the same records at floor 1 fit every bucket they touch",
