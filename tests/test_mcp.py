@@ -390,10 +390,10 @@ def test_model_forwarding():
         def __init__(self):
             self.calls = []
 
-        def predict(self, state, questions, **kwargs):
+        def predict(self, state, questions, model="auto", **kwargs):
             # No `routing` key on purpose: what the tool then reports is the name it settled on,
             # which is the piece an alias could have leaked through.
-            self.calls.append(kwargs)
+            self.calls.append({"model": model, **kwargs})
             return {"answers": {"department": {"choice": "billing", "confidence": 0.94}}}
 
     router = EchoRouter()
@@ -403,6 +403,10 @@ def test_model_forwarding():
        repr(router.calls))
     ok("forward/reports_canonical", by_alias["routing"]["model"] == "english", repr(by_alias["routing"]))
     ok("forward/answers_identical", by_alias["answers"] == by_name["answers"])
+
+    laya_predict(STATE, QUESTIONS, model=None, router=router)
+    ok("forward/model_none_resolves_auto", router.calls[-1].get("model") == "auto",
+       repr(router.calls[-1]))
 
 
 
@@ -1879,6 +1883,26 @@ def test_controls_signature_and_schema():
         ok("schema/%s_required_unchanged" % name,
            required == (["preset", "state"] if name == "laya_preset" else ["state", "questions"]),
            repr(required))
+
+    from laya.mcp import server as server_mod
+
+    model_schemas = []
+    for name in ("laya_predict", "laya_shortlist", "laya_decide", "laya_route"):
+        parameter = inspect.signature(getattr(server_mod, name + "_tool")).parameters["model"]
+        ok("signature/%s_model_default_none" % name, parameter.default is None, repr(parameter.default))
+        tool = by_name[name]
+        schema = tool.input_schema if hasattr(tool, "input_schema") else tool.inputSchema
+        model_schema = schema.get("properties", {}).get("model", {})
+        ok("schema/%s_model_nullable" % name,
+           {"type": "null"} in (model_schema.get("anyOf") or []), repr(model_schema))
+        model_schemas.append(model_schema)
+    ok("schema/model_specs_consistent", all(model_schema == model_schemas[0] for model_schema in model_schemas),
+       repr(model_schemas))
+    for name in ("laya_predict", "laya_shortlist"):
+        description = by_name[name].description.lower()
+        ok("schema/%s_model_doc_matches_nullable_default" % name,
+           all(option in description for option in ("null (default)", "'auto'", "omitted")),
+           description)
 
 
 def test_lang_guess_control():

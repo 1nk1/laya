@@ -91,7 +91,8 @@ _GUARDRAILS = (
 # with the checkpoints, and a copy here would be a second thing to keep current. An invalid name
 # comes back as an error that lists every accepted one.
 _MODEL_DOC = (
-    " model: 'auto' (default) lets the router pick the checkpoint; anything else names one, and "
+    " model: null (default), 'auto', or omitted all let the router pick the checkpoint; "
+    "anything else names one, and "
     "core's aliases and casing are honoured ('en', 'ML', 'laya-multilingual'). The answer's "
     "routing.model always reports the canonical name."
 )
@@ -293,7 +294,7 @@ def laya_route_tool(
 def laya_predict_tool(
     state: dict,
     questions: dict,
-    model: str = "auto",
+    model: str | None = None,
     task: str | None = None,
     lang: str | None = None,
     lang_guess: str | None = None,
@@ -401,7 +402,7 @@ def laya_route_batch_tool(requests: list, hooks_timeout: float = 0) -> str:
 def laya_shortlist_tool(
     state: dict,
     questions: dict,
-    model: str = "auto",
+    model: str | None = None,
     k: int = 20,
     task: str | None = None,
     lang: str | None = None,
@@ -502,7 +503,7 @@ def laya_preset_tool(
         + _GUARDRAILS
     ),
 )
-def laya_decide_tool(state: dict, schema: dict, model: str = "auto",
+def laya_decide_tool(state: dict, schema: dict, model: str | None = None,
                      min_confidence: float | None = None) -> str:
     """Answer a JSON-schema-shaped decision and return the decided values."""
     router = _router_or_error()
