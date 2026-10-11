@@ -168,7 +168,9 @@ try:
     # docs/evals.md lists `revisions` as a block of every `run`. Only the torch Router kept it:
     # the block was read from `router.loaded_revisions` under `if router is not None`, so an ONNX
     # report carried no `revisions` key at all -- an unattributable artifact from a CLI that says
-    # it is attributable. The three shapes `ONNXAgent.revision` takes each get a check.
+    # it is attributable. The three shapes `ONNXAgent.revision` takes each get a check, and each
+    # reads the key through `.get()`: a report that omits the block has to fail by name here, not
+    # abort the suite on a KeyError before the remaining checks run.
     pinned_path = os.path.join(tmp, "pinned.json")
     rc = evals_cli.main(["run", dataset, "--onnx", os.path.join(tmp, "laya.onnx"),
                          "--model", "english-ckpt", "--revision", PINNED, "--json", pinned_path])
@@ -176,9 +178,9 @@ try:
     with open(pinned_path) as f:
         pinned_report = json.load(f)
     check("cli/--onnx records the pinned commit against the checkpoint it serves",
-          pinned_report["config"]["revisions"], {"english-ckpt": PINNED})
+          pinned_report["config"].get("revisions"), {"english-ckpt": PINNED})
     check("cli/an unpinned ONNX run records the commit the default branch resolved to",
-          report["config"]["revisions"], {"english-ckpt": RESOLVED_REVISION})
+          report["config"].get("revisions"), {"english-ckpt": RESOLVED_REVISION})
 
     # A local checkpoint directory has no commit to name, and `ONNXAgent` leaves `revision` None.
     # The block still says that, rather than leaving the reader to tell "ran from a local path"
@@ -192,7 +194,7 @@ try:
     with open(local_path) as f:
         local_report = json.load(f)
     check("cli/a local ONNX checkpoint is recorded as having no commit",
-          local_report["config"]["revisions"], {local_ckpt: None})
+          local_report["config"].get("revisions"), {local_ckpt: None})
 
     check("cli/metrics are computed from the ONNX answers",
           report["overall"]["choice_accuracy"], 1.0)
