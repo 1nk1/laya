@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from laya.common import QTYPES, TEMP_MAX, TEMP_MIN, clamp_temperature, temp_bucket  # noqa: E402
 from laya.lang import analyse, detect_script, guess_latin_language, is_english, state_text  # noqa: E402
+from laya.lang import _non_english_segment  # noqa: E402
 from laya.router import (  # noqa: E402
     BUNDLE_REPO,
     DEFAULT_MODELS,
@@ -532,6 +533,19 @@ for label, state, segment in [
     check("mixed/routes multilingual: " + label, _r_lat.route(state).model, "multilingual")
 check("mixed/reason names the segment",
       "a line or field reads as 'pt'" in _r_lat.route(_TRACE).reason, True)
+# ...but only the segment scan fills it. `_non_english_segment` reads 4,000 characters in all across
+# every leaf, so a long English first field can leave a foreign one unread; the per-value read that
+# then catches it (#384) keeps the leaf in a local and does not report it. `mixed_segment` is None
+# here even though `language` names the field's language -- asserted rather than assumed, because a
+# future change could fill it and no caller can tell the two provenances apart otherwise.
+_BUDGET_NOTE = "Thanks for reaching out. " * 200          # 5,000 chars, first leaf, all English
+_BUDGET_BODY = "WIE SPAET IST ES IN KOELN HEUTE ABEND"
+check("mixed/segment budget exhausted before the foreign field",
+      _non_english_segment({"note": _BUDGET_NOTE, "body": _BUDGET_BODY}), None)
+check("mixed/the per-value read still names the language",
+      analyse({"note": _BUDGET_NOTE, "body": _BUDGET_BODY})["language"], "de")
+check("mixed/and leaves mixed_segment None",
+      analyse({"note": _BUDGET_NOTE, "body": _BUDGET_BODY})["mixed_segment"], None)
 # English stays English: several English lines, a short foreign sign-off, and code pasted into a request
 # (`os.path` reads as Portuguese, `round(el, 2)` as Spanish, `np.mean(na)` as Portuguese)
 for label, state in [
