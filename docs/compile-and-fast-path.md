@@ -126,7 +126,7 @@ stops at packaging:
 The artifact route therefore needs a dtype-explicit action head: either cast its input to the
 head's dtype, or run the head in fp32.
 
-## TileLang portability: the kernels are CUDA-only
+## TileLang portability: the GPU specialisation is CUDA-only
 
 tilelang registers targets for CUDA, HIP, Metal, WebGPU and a C backend. Without AMD or Apple
 hardware, the answerable question was whether `laya/tl_kernels.py` lowers for the CPU at all.
@@ -138,7 +138,7 @@ Probed with `tilelang.compile(kernel.prim_func, target=...)` on Linux x86-64:
 | `"llvm"` | `Cannot find global function target.build.llvm`. The wheel ships no LLVM backend. |
 | `"c"` | Lowers to C and runs on CPU tensors, but only for a subset of the language. |
 
-Every Laya kernel fails on `"c"`, for one of three reasons:
+Every Laya kernel fails on `"c"` **as written for the GPU**, for one of three reasons:
 
 | kernel | failure on `target="c"` | construct |
 |---|---|---|
@@ -153,10 +153,24 @@ The C backend does accept:
 - `T.Pipelined`, which lowers to a plain loop;
 - `T.gemm` with a `T.alloc_local` accumulator, which lowers to a scalar triple loop.
 
-A CPU version would therefore be a second set of kernels, not a target flag. Its GEMM would be an
-unblocked scalar loop, and it would not compete with the MKL/oneDNN path that the stock forward
-already uses on CPU. The same three constructs are the ones to check first on HIP and Metal:
-fragments, `T.gemm` with `GemmWarpPolicy`, and bf16/fp16 support.
+That list is now the specification of a CPU lowering, not an argument against one. Each of the five
+factories takes a keyword-only `cpu=False`, and `compile_cpu` (`laya/tl_kernels.py:258-268`) sets
+`cpu=True` with `dtype="float32"` and lowers the same `prim_func` on `target="c"` with
+`TIR_DISABLE_VECTORIZE`. The three rejected constructs are the three the selector swaps:
+`T.alloc_fragment` and `T.alloc_shared` become `T.alloc_local`, `T.Parallel` becomes `T.grid`, and
+16-bit activations become fp32. Everything else is shared with the GPU form — tile blocking,
+`T.Pipelined`, `T.gemm` with `GemmWarpPolicy`, `T.reduce_sum` / `T.reduce_max` — and the only
+construct the CPU branch drops is the swizzled shared-memory layout annotation
+(`laya/tl_kernels.py:215-216`), which is a GPU concern anyway.
+
+What this is *not* is still what the paragraph before it argued: not a faster way to run on CPU.
+`compile_cpu`'s own docstring calls it "a scalar correctness path, not an Agent.accelerate backend",
+[fast backends](fast-backends.md) claims no CPU speedup and no full-model CPU backend, and
+`tests/test_fast_cpu.py` is the parity check against a reference rather than a benchmark. The
+MKL/oneDNN path the stock forward already uses remains the CPU route that is worth running.
+
+The same three constructs are the ones to check first on HIP and Metal: fragments, `T.gemm` with
+`GemmWarpPolicy`, and bf16/fp16 support.
 
 To reproduce the first row of the second table:
 `tilelang.compile(K.gemm_kernel(768, 768).prim_func, target="c")`.
