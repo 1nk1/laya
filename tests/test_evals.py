@@ -2345,8 +2345,9 @@ SHA = "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851"
 def _fake_router(monkeypatch, recorded):
     """Replace `laya.Router` with a weight-free stand-in that records how `_cmd_run` built it.
 
-    It validates checkpoint names the way `Router.__init__` does, by calling the same
-    `normalise_name`, so the fake refuses a typo for the real reason.
+    It validates checkpoint names the way `Router.__init__` does and resolves a forced `--model` the
+    way `Router.resolve` does, both by calling the same `normalise_name`, so the fake refuses a typo
+    for the real reason.
     """
     import laya
 
@@ -2355,6 +2356,13 @@ def _fake_router(monkeypatch, recorded):
             from laya.router import normalise_name
             recorded.update(device=device, preload=preload, revision=revision,
                             revisions={normalise_name(k): v for k, v in (revisions or {}).items()})
+
+        def resolve(self, name):
+            # `_cmd_run` resolves `--model` against the Router that answers, so the stand-in has to
+            # resolve too. It takes no `models=`, so its registry is the built-in table, and that is
+            # exactly what `normalise_name` checks.
+            from laya.router import normalise_name
+            return normalise_name(name)
 
         def predict(self, state, questions, model=None, min_confidence=None):
             # The gate is a real part of the Router interface since #361; a stub without it would
@@ -2432,6 +2440,50 @@ def test_cli_accepts_a_checkpoint_alias_in_a_pin(tmp_path, monkeypatch):
     dataset = _write_dataset(tmp_path, [{"state": "s", "questions": Q, "expected": {"intent": "a"}}])
     assert evals_cli.main(["run", dataset, "--revision", "en=" + SHA]) == 0
     assert recorded["revisions"] == {"english": SHA}
+
+
+# ------------------------------------------------------------------ --model checkpoint name
+def test_cli_rejects_a_typo_in_the_forced_checkpoint_name(tmp_path, monkeypatch, capsys):
+    """`--model` is resolved by the first row, so a typo used to escape as a traceback and exit 1."""
+    from laya import evals_cli
+
+    recorded = {}
+    _fake_router(monkeypatch, recorded)
+    ran = []
+    real_evaluate = evals_cli.evals.evaluate
+
+    def spy(runner, ds, **kwargs):
+        ran.append(ds)
+        return real_evaluate(runner, ds, **kwargs)
+
+    monkeypatch.setattr(evals_cli.evals, "evaluate", spy)
+    dataset = _write_dataset(tmp_path, [{"state": "s", "questions": Q, "expected": {"intent": "a"}}])
+    assert evals_cli.main(["run", dataset, "--model", "englishg"]) == 2
+    err = capsys.readouterr().err
+    assert "unknown model 'englishg'" in err
+    assert "choose one of" in err, "the message comes from core, with the option list"
+    assert "Traceback" not in err, "a mistyped checkpoint is a usage error, not a crash"
+    assert not ran, "and it fails before a row is predicted"
+
+
+def test_cli_accepts_a_checkpoint_alias_for_the_forced_model(tmp_path, monkeypatch):
+    """Resolution is `Router.resolve`, which owns aliases and casing -- an exact-match check would fail here."""
+    from laya import evals_cli
+
+    recorded = {}
+    _fake_router(monkeypatch, recorded)
+    asked = {}
+    real_evaluate = evals_cli.evals.evaluate
+
+    def spy(runner, ds, **kwargs):
+        asked["model"] = ds.examples[0].model
+        return real_evaluate(runner, ds, **kwargs)
+
+    monkeypatch.setattr(evals_cli.evals, "evaluate", spy)
+    dataset = _write_dataset(tmp_path, [{"state": "s", "questions": Q, "expected": {"intent": "a"}}])
+    assert evals_cli.main(["run", dataset, "--model", "EN "]) == 0
+    # Validated, not rewritten: the spelling asked for is what the row and the report carry.
+    assert asked["model"] == "EN "
 
 
 # --------------------------------------------------------------- opt-in slice gates
