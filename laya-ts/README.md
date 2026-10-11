@@ -170,12 +170,14 @@ Python's `sort_by_length` grouping is not ported yet.
 ## Shortlist (many labels)
 
 ```ts
-import { shortlistChoice, predictShortlist, embedFnFromAgent } from "laya-ts";
+import { shortlistChoice, predictShortlist, embedFnFromAgent, cached } from "laya-ts";
 
-const keep = await shortlistChoice(state, bigCriteriaDict, embedFn, 20);
-const out = await predictShortlist(agent, state, questions, embedFn, 20);
+const cachedEmbed = cached(embedFn);
+const keep = await shortlistChoice(state, bigCriteriaDict, cachedEmbed, 20);
+const out = await predictShortlist(agent, state, questions, cachedEmbed, 20);
 // out.shortlist[qid] = { labels, scores, k, n, passthrough }
 // embedFnFromAgent(agent) mean-pools the loaded encoder; a dedicated bi-encoder usually shortlists better.
+// cached(embedFn) keeps an LRU cache across calls; cachedEmbed.cacheInfo() reports size/hits/misses.
 ```
 
 ### Tournament (without an embedder)
