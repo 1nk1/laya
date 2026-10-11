@@ -16,6 +16,7 @@ from laya.calibrate import (  # noqa: E402
     apply_binning_map,
     fit_abstention_thresholds,
     fit_binning_map,
+    MIN_ABSTAIN_BUCKET_N,
 )
 from laya.confidence import (  # noqa: E402
     check_min_confidence,
@@ -202,6 +203,24 @@ check("validate/'default' is still accepted beside the buckets",
 # (`fit_abstention_thresholds` -> `min_confidence=`) raises on its own output.
 check("validate/the fitted map this suite ran on passes the validator", _accepts(dict(thr)), dict(thr))
 
+# ... and agree on the degenerate arm too. `min_bucket_n` omits buckets too small to fit, which this
+# docstring and `fit_abstention_thresholds` both say; a calibration set too small to fill a SINGLE
+# bucket therefore returns `{}`, and an empty map is what the validator exists to refuse. Checked on
+# both sides so neither can drift silently: the floor is what empties the map (the same records at
+# floor 1 fit every bucket they touch), and the refusal is about emptiness rather than the keys.
+_small = [record(3, 0.9, True) for _ in range(MIN_ABSTAIN_BUCKET_N - 1)]
+check("validate/the shipped floor on a sub-floor set fits nothing",
+      fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {}), {})
+check_true("validate/the validator refuses that empty fit rather than gating nothing",
+           _accepts(fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {})).startswith("raised: ")
+           and "non-empty" in _accepts(fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {})),
+           _accepts(fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {})))
+_all_buckets = fit_abstention_thresholds(records, [1.0, 1.0, 1.0], {}, target_error=TARGET,
+                                         min_bucket_n=1)
+check("validate/the same records at floor 1 fit every bucket they touch",
+      sorted(_all_buckets), ["choice:11+", "choice:2"])
+check("validate/and pass the validator unchanged", _accepts(dict(_all_buckets)), dict(_all_buckets))
+
 BOGUS = {
     "choice:2-5": "an invented band",
     "choice:12": "an option count, not a band",
@@ -238,6 +257,18 @@ check_true("doc/the docstring does not present the buckets as a spelling suggest
 _resolve_doc = " ".join(inspect.getdoc(confidence_module.resolve_min_confidence).split())
 check_true("doc/resolve says a validated map can only miss by omitting a bucket",
            "refused at validation" in _resolve_doc, _resolve_doc)
+# The producer's prose, held to the same contract: "accept directly" is true of a non-empty fit and
+# false of `{}`, so the sentence has to carry the exception the four checks above demonstrate. Without
+# it a caller of a small calibration set reads the promise, passes what came back, and gets a
+# ValueError from their own gate at serving time.
+_fit_doc = " ".join(inspect.getdoc(fit_abstention_thresholds).split())
+check_true("doc/the producer keeps the acceptance promise", "accept directly" in _fit_doc, _fit_doc)
+check_true("doc/the producer names the empty-map exception",
+           "must be a non-empty dict" in _fit_doc, _fit_doc)
+check_true("doc/the producer says to pass no gate rather than an empty map",
+           "Pass no gate in that case" in _fit_doc, _fit_doc)
+check_true("doc/the producer does not leave the promise standing alone",
+           "accept directly -- with one exception" in _fit_doc, _fit_doc)
 # `_option_bucket` must read the one vocabulary list, not keep a second copy of the type names.
 _bucket_src = inspect.getsource(confidence_module._option_bucket)
 check_true("vocabulary/_option_bucket reads BUCKET_QTYPES",
