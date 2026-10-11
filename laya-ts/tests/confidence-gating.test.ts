@@ -87,7 +87,7 @@ describe("checkMinConfidenceMap", () => {
   it("rejects unknown bucket keys and typos", () => {
     for (const typo of ["choice:3_5", "choice:2-5", "Choice:2", "invalid", "score:1", "foo:2", "choice:12"]) {
       expect(() => checkMinConfidenceMap({ [typo]: 0.5 })).toThrowError(
-        /min_confidence map keys must be strings like 'choice:3-5'/,
+        /^min_confidence map keys must be a bucket like 'choice:3-5' or 'default', got /,
       );
     }
   });

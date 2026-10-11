@@ -274,7 +274,7 @@ export function checkMinConfidenceMap(m: unknown): MinConfidenceMap {
   const out: Record<string, number> = {};
   for (const [key, val] of Object.entries(m as Record<string, unknown>)) {
     if (key !== "default" && !BUCKET_KEY.test(key)) {
-      throw new Error(`min_confidence map keys must be strings like 'choice:3-5', got ${pyRepr(key)}`);
+      throw new Error(`min_confidence map keys must be a bucket like 'choice:3-5' or 'default', got ${pyRepr(key)}`);
     }
     if (typeof val === "boolean" || typeof val !== "number" || !Number.isFinite(val) || val < 0.0 || val > 1.0) {
       throw new Error(`min_confidence must be a float in [0.0, 1.0], got ${pyRepr(val)}`);
