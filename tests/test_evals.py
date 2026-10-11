@@ -1249,6 +1249,86 @@ def test_cli_min_confidence_zero_is_accepted(monkeypatch, tmp_path):
     assert seen["min_confidence"] == 0.0
 
 
+# ------------------------------------------------- per-example model (#1107 guard)
+#
+# `Example.model` names an explicit checkpoint, and the single-row path used to forward it
+# unconditionally -- `model=chunk[0].model`, even when the value was `None`. `Agent.predict` is
+# `system_one`, which takes neither `model` nor `**kwargs`, so every row raised `TypeError` and
+# `on_error="skip"` published a zero-case, empty-overall, exit-0 report: the batch half of this
+# exact bug was `_batch_form`'s founding case, the single-row path was left outside it.
+
+
+class AgentShapedRunner:
+    """What `laya.load()` returns: `predict` is `system_one` -- no `model`, no `**kwargs`."""
+
+    def __init__(self, by_state):
+        self.by_state = by_state
+
+    def predict(self, state, questions, lang=None, min_confidence=None):
+        return {"answers": self.by_state[state]}
+
+    def predict_batch(self, states, questions, batch_size=None, lang=None):
+        return [self.predict(s, questions) for s in states]
+
+
+def test_an_agent_shaped_runner_scores_instead_of_a_zero_case_report():
+    """Every row of the issue's report: a runner whose `predict` predates `model` used to fail
+    row by row and -- under the default skip -- publish 0 cases with an empty `overall`."""
+    report = evaluate(AgentShapedRunner(ANSWERS3), _three(), evaluators=[ChoiceAccuracy()],
+                      batch_size=4, on_error="skip")
+    assert len(report.cases) == 3, "the rows score; they do not vanish into on_error"
+    assert report.overall["choice_accuracy"] == pytest.approx(1.0)
+    assert not report.config.get("errored"), "a scoring run is not an erroring one"
+
+
+def test_the_model_kwarg_is_dropped_for_a_runner_without_one():
+    """With `on_error="fail"` the dropped kwarg is observable: had the harness still sent
+    `model=None`, every call here would raise `TypeError` instead of scoring."""
+    report = evaluate(AgentShapedRunner(ANSWERS3), _three(), evaluators=[ChoiceAccuracy()],
+                      batch_size=4)
+    assert len(report.cases) == 3
+    assert report.overall["choice_accuracy"] == pytest.approx(1.0)
+
+
+def test_a_runner_that_takes_model_still_receives_it():
+    """The guard drops the kwarg only for a runner without the parameter: a `Router`-shaped
+    `predict(state, questions, model=...)` keeps seeing the call the docstring promises."""
+    seen = {}
+
+    class Recording(StubRunner):
+        def predict(self, state, questions, model=None):
+            seen[state] = model
+            return StubRunner.predict(self, state, questions, model)
+
+    report = evaluate(Recording(ANSWERS3), _three(), evaluators=[ChoiceAccuracy()], batch_size=2)
+    assert set(seen.values()) == {None}, "no example names a checkpoint, so `None` is the value"
+    assert len(report.cases) == 3
+
+
+def test_an_explicit_model_on_a_runner_without_the_parameter_is_refused():
+    """Dropping the kwarg when an example names a checkpoint would score the row on whatever the
+    runner answers with while the `model` slice labels it with the named one -- a lying report.
+    The pre-flight refuses instead, before any weights load, even under `on_error="skip"`."""
+    dataset = Dataset([Example("s1", Q, {"intent": "a"}, model="english"),
+                       Example("s2", Q, {"intent": "a"})])
+    with pytest.raises(EvalError) as exc:
+        evaluate(AgentShapedRunner(ANSWERS3), dataset, evaluators=[ChoiceAccuracy()],
+                 batch_size=4, on_error="skip")
+    assert "model" in str(exc.value)
+    assert "does not accept" in str(exc.value)
+
+
+def test_an_explicit_model_still_reaches_a_runner_that_takes_it():
+    """The refusal is scoped to runners without the parameter; a named checkpoint keeps flowing
+    through both entry points of a `Router`-shaped runner."""
+    dataset = Dataset([Example("s1", Q, {"intent": "a"}, model="english"),
+                       Example("s2", Q, {"intent": "a"}, model="english")])
+    report = evaluate(StubRunner({"s1": {"intent": choice_answer("a")},
+                                  "s2": {"intent": choice_answer("a")}}),
+                      dataset, evaluators=[ChoiceAccuracy()], batch_size=2)
+    assert report.overall["choice_accuracy"] == 1.0
+
+
 # --------------------------------------------------------------- timing (#585)
 FORWARD_MS = 100.0
 SHARED = 0.6                      # a batch of n costs SHARED * n * FORWARD_MS, as one call

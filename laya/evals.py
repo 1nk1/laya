@@ -899,6 +899,29 @@ def _takes_min_confidence(runner: Any, fn_name: str = "predict_batch") -> bool:
     return any(p.name == "min_confidence" or p.kind is p.VAR_KEYWORD for p in params)
 
 
+def _takes_model(runner: Any, fn_name: str = "predict") -> bool:
+    """Whether `runner`'s entry point accepts a per-example checkpoint on the call.
+
+    The same signature check `_takes_min_confidence` makes, applied to the `model` kwarg the
+    single-row path forwards from `Example.model` (#1107). The batch half of this exact mistake
+    was `_batch_form`'s founding bug -- every chunk raised ``TypeError: ... unexpected keyword
+    argument 'model'``, which `on_error="skip"` turned into a zero-case report -- and
+    `laya.load()`'s default runner still hit it one row at a time, because `Agent.predict` is
+    `system_one`, which takes neither `model` nor any `**kwargs` forwarder. Unlike the threshold,
+    an unsent `model` is no lie: a runner without the parameter answers from its own checkpoint.
+    So the harness drops the kwarg when no example names one, and the pre-flight refusal in
+    `evaluate` fires only when an example does.
+    """
+    fn = getattr(runner, fn_name, None)
+    if fn is None:
+        return False
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "model" or p.kind is p.VAR_KEYWORD for p in params)
+
+
 def evaluate(runner: Any, dataset: Dataset, evaluators: Optional[Sequence[Evaluator]] = None,
              batch_size: Optional[int] = None, on_error: str = "fail",
              config: Optional[Dict[str, Any]] = None, sort_by_length: bool = False,
@@ -910,7 +933,11 @@ def evaluate(runner: Any, dataset: Dataset, evaluators: Optional[Sequence[Evalua
     ``predict_batch(states, questions, model=..., batch_size=...)``, or the per-request-dict form
     `Router.predict_batch` takes -- ``predict_batch([{"state": ..., "questions": ...,
     "model": ...}, ...], batch_size=...)``. A runner that offers neither is scored one ``predict``
-    at a time, which is slower but not wrong.
+    at a time, which is slower but not wrong. A runner whose ``predict`` takes no ``model`` --
+    ``laya.load()``'s default `Agent` is one, its ``predict`` being an alias of `system_one`
+    (#1107) -- is scored on its own checkpoint: the kwarg is dropped unless an example names an
+    explicit ``model``, and a dataset that names one on such a runner is refused in pre-flight
+    rather than published as a silent zero-case report.
 
     `sort_by_length` is forwarded to a chunked runner so similarly sized examples share a forward
     pass and pad to a shorter maximum. It reaches the checkpoint's own batching only when the
@@ -973,6 +1000,21 @@ def evaluate(runner: Any, dataset: Dataset, evaluators: Optional[Sequence[Evalua
                     "abstention threshold. Either use a Router/ONNXAgent that gates on "
                     "answer_confidence (#361), or drop the threshold -- the report would "
                     "otherwise name a `min_confidence` it never applied." % (min_confidence, target))
+    # Whether `predict` can be handed `Example.model` at all (#1107). `Agent.predict` is
+    # `system_one` -- no `model`, no `**kwargs` -- so the single-row path used to raise `TypeError`
+    # on every row, and `on_error="skip"` published a zero-case report. The batch half was already
+    # gated by `_batch_form`; this is the single-row guard, computed once and reused at the call.
+    takes_model = _takes_model(runner)
+    if not takes_model and any(e.model is not None for e in dataset.examples):
+        # Dropping the kwarg here would score each row on whatever checkpoint the runner answers
+        # with while the report's `model` slice labels it with the named one -- the same class of
+        # lie the `min_confidence` guard exists to prevent. The kwarg is dropped only when no
+        # example names a checkpoint, in which case scoring on the runner's own is what was asked.
+        raise EvalError(
+            "evaluate() refused: the dataset names an explicit per-example `model`, but this "
+            "runner's predict does not accept one. Either use a Router/ONNXAgent whose predict "
+            "forwards the checkpoint, or drop the per-example `model` -- the report would "
+            "otherwise name a checkpoint it never sent (#1107).")
     evaluators = list(evaluators) if evaluators is not None else default_evaluators()
     cases: List[Dict[str, Any]] = []
     waits: List[float] = []          # what each request actually waited: its chunk's whole call
@@ -1035,9 +1077,15 @@ def evaluate(runner: Any, dataset: Dataset, evaluators: Optional[Sequence[Evalua
             else:
                 # A chunk of one still sees the gate: the pre-flight refusal proved `predict`
                 # accepts it whenever `mc` is set, so nothing here has to re-check the signature.
+                # The `model` kwarg is the same honesty (#1107): sent only when `predict` accepts
+                # it, and the pre-flight already refused any run where an example needed it sent.
                 single_kwargs = {"min_confidence": mc} if mc is not None else {}
-                results = [runner.predict(chunk[0].state, chunk[0].questions,
-                                          model=chunk[0].model, **single_kwargs)]
+                if takes_model:
+                    results = [runner.predict(chunk[0].state, chunk[0].questions,
+                                              model=chunk[0].model, **single_kwargs)]
+                else:
+                    results = [runner.predict(chunk[0].state, chunk[0].questions,
+                                              **single_kwargs)]
         except Exception as exc:  # noqa: BLE001 -- honoured by on_error
             if on_error == "fail":
                 raise
