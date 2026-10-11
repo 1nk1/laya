@@ -113,8 +113,14 @@ def test_the_env_path_raises_and_force_passes_through():
         else:
             os.environ["LAYA_DEVICE"] = old
     # force= is the documented tests hook: it is returned verbatim, exactly like the
-    # CLI --device flag, which never reads the environment.
-    ok("force= hook stays verbatim", resolve_device("cuda:") == "cuda:")
+    # CLI --device flag, which never reads the environment. Guarded, because the check is
+    # about the pass-through: a version that parses `force` has to fail by name, not abort.
+    try:
+        forced = resolve_device("cuda:")
+    except Exception as exc:
+        ok("force= hook stays verbatim", False, "raised %s: %s" % (type(exc).__name__, exc))
+    else:
+        ok("force= hook stays verbatim", forced == "cuda:", repr(forced))
 
 
 def parses(value):
