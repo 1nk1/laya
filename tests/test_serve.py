@@ -3632,6 +3632,12 @@ def test_a_restarted_app_still_queues_concurrent_requests(monkeypatch):
 # reporting) describe the full shape, so the SDK page contradicted them. The gate AST-parses the
 # handler's returns so the doc's key set has to match the code's -- any new /health field added
 # to the return dict must be named on this page too, or the test fails with the exact mismatch.
+# Reading only the return dict's own keys left one kind of field out: `**idle` spreads a local
+# conditional dict, so `idle_unload_seconds` and `idle_seconds` were invisible to the gate and the
+# page under-reported the shape by two fields on a deployment that sets
+# `LAYA_IDLE_UNLOAD_SECONDS`. `test_idle_details_stay_authenticated` and
+# `test_idle_unload_reloads_on_the_next_request` read both of them off a live handler, so the gate
+# now resolves a starred spread to the local dict it unpacks.
 TS_SDK_PAGE = os.path.join(ROOT, "docs", "typescript-sdk.md")
 TS_SDK_OLD_CLAIM = (
     "Laya's public `/health` returns `status`, `loaded`, and `device`. "
@@ -3639,11 +3645,22 @@ TS_SDK_OLD_CLAIM = (
 )
 
 
+def _literal_dict_keys(value):
+    """Keys of a dict literal, looking through `({...} if condition else {})`."""
+    if isinstance(value, ast.Dict):
+        return {key.value for key in value.keys if isinstance(key, ast.Constant)}
+    if isinstance(value, ast.IfExp):
+        return _literal_dict_keys(value.body) | _literal_dict_keys(value.orelse)
+    return set()
+
+
 def _serve_health_return_keys():
-    """Every literal dict key the `health` handler returns across all branches.
+    """Every dict key the `health` handler returns across all branches.
 
     `LIVENESS_ONLY` is a module-level dict, so the `return LIVENESS_ONLY` branch resolves via
-    the module scope; the authorized `return {...}` branch contributes its own keys directly.
+    the module scope; the authorized `return {...}` branch contributes its own keys directly, and
+    a `**name` spread contributes the keys of the dict `name` was assigned -- that is how the two
+    conditional idle fields reach the response, and reading the return dict's own keys missed them.
     """
     with open(os.path.join(ROOT, "laya", "serve.py"), encoding="utf-8") as handle:
         tree = ast.parse(handle.read(), filename="laya/serve.py")
@@ -3652,20 +3669,30 @@ def _serve_health_return_keys():
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    module_dicts[target.id] = {
-                        k.value for k in node.value.keys if isinstance(k, ast.Constant)
-                    }
+                    module_dicts[target.id] = _literal_dict_keys(node.value)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "health":
+            local_dicts = {}
+            for assign in ast.walk(node):
+                if isinstance(assign, ast.Assign):
+                    for target in assign.targets:
+                        if isinstance(target, ast.Name):
+                            local_dicts[target.id] = _literal_dict_keys(assign.value)
             keys = set()
             for ret in ast.walk(node):
                 if not isinstance(ret, ast.Return) or ret.value is None:
                     continue
                 value = ret.value
                 if isinstance(value, ast.Dict):
-                    keys.update(k.value for k in value.keys if isinstance(k, ast.Constant))
-                elif isinstance(value, ast.Name) and value.id in module_dicts:
-                    keys.update(module_dicts[value.id])
+                    for key, spread in zip(value.keys, value.values):
+                        if isinstance(key, ast.Constant):
+                            keys.add(key.value)
+                        elif key is None and isinstance(spread, ast.Name):
+                            keys.update(local_dicts.get(spread.id, ()))
+                            keys.update(module_dicts.get(spread.id, ()))
+                elif isinstance(value, ast.Name):
+                    keys.update(local_dicts.get(value.id, ()))
+                    keys.update(module_dicts.get(value.id, ()))
             return keys
     raise AssertionError("no `health` handler found in laya/serve.py -- gate is checking a moved symbol")
 
@@ -3673,7 +3700,7 @@ def _serve_health_return_keys():
 def _ts_sdk_health_claim_keys():
     r"""The backticked key names in the sentence that opens 'public `/health` returns'.
 
-    The claim spans two lines on this page, so read from "public \`/health\` returns" up to the
+    The claim spans several lines on this page, so read from "public \`/health\` returns" up to the
     sentence-ending "Prediction never probes health first" before collecting backticked names;
     that stops the scan from picking up later backticked references.
     """
@@ -3685,21 +3712,31 @@ def _ts_sdk_health_claim_keys():
     end = tail.find("Prediction never probes health first")
     assert end != -1, "the /health claim's tail sentence is gone -- the gate cannot bound its scan"
     sentence = tail[:end]
-    return set(re.findall(r"`([A-Za-z_][A-Za-z_0-9]*)`", sentence)) - {"health"}
+    names = set(re.findall(r"`([A-Za-z_][A-Za-z_0-9]*)`", sentence)) - {"health"}
+    # The sentence names the two settings that decide which fields appear. A response key of this
+    # payload is never spelled in upper case, so an ALL-CAPS backtick is an environment variable and
+    # not a field the caller reads off the body.
+    return {name for name in names if not name.isupper()}
 
 
 def test_ts_sdk_health_claim_matches_the_handler():
     """The SDK page must name exactly the keys `laya/serve.py`'s `health` handler returns."""
     assert "returns `status`, `loaded`, and `device`" in TS_SDK_OLD_CLAIM, (
         "the pre-fix literal must itself carry the wrong key set, otherwise this ban is vacuous")
-    # Sanity-check the AST extraction: the shipped code returns seven keys on the authorized
-    # branch, so a future PR that reshapes /health without updating this page fails below.
+    # Sanity-check the AST extraction: the shipped code returns seven keys on the authorized branch
+    # and spreads two more when idle unloading is on, so a future PR that reshapes /health without
+    # updating this page fails below.
     handler_keys = _serve_health_return_keys()
     assert "status" in handler_keys, "the LIVENESS_ONLY short-circuit disappeared; the AST reader missed it"
     for key in ("loaded", "revisions", "device", "device_is_preference",
                 "checkpoint_devices", "cpu_fallbacks"):
         assert key in handler_keys, "%s is not in the /health handler's return set -- did the " \
                                     "shape change without this test being updated?" % key
+    assert {"idle_unload_seconds", "idle_seconds"} <= handler_keys, (
+        "`health` no longer spreads a conditional dict into its return, or the spread is now a shape "
+        "this reader cannot resolve. The handler answers nine keys on a deployment with "
+        "LAYA_IDLE_UNLOAD_SECONDS set and docs/typescript-sdk.md names all nine; re-read the "
+        "handler before re-pinning either side.")
     documented = _ts_sdk_health_claim_keys()
     assert documented == handler_keys, (
         "docs/typescript-sdk.md's /health sentence names %s, but `laya/serve.py`'s `health` "
