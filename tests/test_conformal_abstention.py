@@ -272,6 +272,14 @@ check_true("doc/the producer says to pass no gate rather than an empty map",
            "Pass no gate in that case" in _fit_doc, _fit_doc)
 check_true("doc/the producer does not leave the promise standing alone",
            "accept directly -- with one exception" in _fit_doc, _fit_doc)
+# The prose points at `laya.train` as the caller that already does the right thing. Read its text
+# instead of importing it, so this suite stays weight-free (`tests/test_calibrate.py` reads source
+# text the same way for its `load/` checks).
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir,
+                       "laya", "train.py"), encoding="utf-8") as _train:
+    _train_src = _train.read()
+check_true("doc/the pointer into `laya.train` names a guard that is really there",
+           "if abstention_thresholds:" in _train_src, "no such guard in laya/train.py")
 # `_option_bucket` must read the one vocabulary list, not keep a second copy of the type names.
 _bucket_src = inspect.getsource(confidence_module._option_bucket)
 check_true("vocabulary/_option_bucket reads BUCKET_QTYPES",
