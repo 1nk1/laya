@@ -178,8 +178,15 @@ for param in ("max_len", "head_max_len"):
 check_param("shortlist_choice", laya.shortlist_choice, "return_scores", False,
             inspect.Parameter.KEYWORD_ONLY)
 
-# predict_tournament splits a choice into groups of 16 labels unless the caller picks a size
-check_param("predict_tournament", laya.predict_tournament, "group_size", 16)
+# The TypeScript helper follows this positional contract; both default to groups of 16.
+check_param("predict_tournament", laya.predict_tournament, "group_size", 16,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD)
+check("predict_tournament/positional prefix",
+      [p.name for p in sig(laya.predict_tournament).values()
+       if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD],
+      ["agent", "state", "questions", "group_size"])
+check_param("predict_tournament", laya.predict_tournament, "predict_kwargs", inspect.Parameter.empty,
+            inspect.Parameter.VAR_KEYWORD)
 
 # route() and route_batch() take per-call hooks so a hook can pin a checkpoint for one call
 for label, fn in (("Router.route", Router.route),
