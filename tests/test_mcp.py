@@ -390,10 +390,10 @@ def test_model_forwarding():
         def __init__(self):
             self.calls = []
 
-        def predict(self, state, questions, **kwargs):
+        def predict(self, state, questions, model="auto", **kwargs):
             # No `routing` key on purpose: what the tool then reports is the name it settled on,
             # which is the piece an alias could have leaked through.
-            self.calls.append(kwargs)
+            self.calls.append({"model": model, **kwargs})
             return {"answers": {"department": {"choice": "billing", "confidence": 0.94}}}
 
     router = EchoRouter()
@@ -403,6 +403,10 @@ def test_model_forwarding():
        repr(router.calls))
     ok("forward/reports_canonical", by_alias["routing"]["model"] == "english", repr(by_alias["routing"]))
     ok("forward/answers_identical", by_alias["answers"] == by_name["answers"])
+
+    laya_predict(STATE, QUESTIONS, model=None, router=router)
+    ok("forward/model_none_resolves_auto", router.calls[-1].get("model") == "auto",
+       repr(router.calls[-1]))
 
 
 
