@@ -1271,6 +1271,23 @@ class AgentShapedRunner:
         return [self.predict(s, questions) for s in states]
 
 
+class NotIntrospectableRunner:
+    """Entry points whose signature cannot be read -- a C-level or hand-rolled ``__call__``
+    (#1112 review): `_batch_form` keeps the batch call there, so `_takes_model` must too."""
+
+    class _Callable:
+        __signature__ = None
+
+        def __call__(self, *args, **kwargs):
+            return None
+
+        def __get__(self, obj, cls):
+            return self
+
+    predict = _Callable()
+    predict_batch = _Callable()
+
+
 def test_an_agent_shaped_runner_scores_instead_of_a_zero_case_report():
     """Every row of the issue's report: a runner whose `predict` predates `model` used to fail
     row by row and -- under the default skip -- publish 0 cases with an empty `overall`."""
@@ -1305,10 +1322,37 @@ def test_a_runner_that_takes_model_still_receives_it():
     assert len(report.cases) == 3
 
 
+class BatchOnlyRouting(StubRunner):
+    """Routes in the batch entry point but not in the single one -- the shape `_batch_form`
+    approves (#1112 review)."""
+
+    def predict(self, state, questions):
+        return {"model": "single", "answers": self.by_state[state]}
+
+    def predict_batch(self, states, questions, model=None, batch_size=None):
+        return [{"model": model or "batched", "answers": self.by_state[s]} for s in states]
+
+
+def test_a_runner_that_routes_only_in_batch_survives_a_chunk_of_one():
+    """Chunking splits on (model, questions), so a differing row lands on the single `predict`.
+    `takes_model` reads `predict` alone, so this runner keeps batching and survives: the shape
+    that made the bug read as intermittent rather than as a contract mismatch."""
+    mixed = Dataset([Example("s1", Q, {"intent": "a"}),
+                     Example("s3", QNOUL, {"flag": True}),
+                     Example("s2", Q, {"intent": "a"})])
+    answers = {"s1": {"intent": choice_answer("a")}, "s2": {"intent": choice_answer("a")},
+               "s3": {"flag": noul_answer(0.9)}}
+    report = evaluate(BatchOnlyRouting(answers), mixed,
+                      evaluators=[ChoiceAccuracy(), NoulAccuracy()], batch_size=8)
+    assert not report.config.get("errored")
+    assert report.overall["choice_accuracy"] == 1.0
+
+
 def test_an_explicit_model_on_a_runner_without_the_parameter_is_refused():
     """Dropping the kwarg when an example names a checkpoint would score the row on whatever the
     runner answers with while the `model` slice labels it with the named one -- a lying report.
-    The pre-flight refuses instead, before any weights load, even under `on_error="skip"`."""
+    The pre-flight refuses instead, before any weights load, even under `on_error="skip"`, and
+    names the offending row and checkpoint so a large dataset is not a grep hunt."""
     dataset = Dataset([Example("s1", Q, {"intent": "a"}, model="english"),
                        Example("s2", Q, {"intent": "a"})])
     with pytest.raises(EvalError) as exc:
@@ -1316,6 +1360,27 @@ def test_an_explicit_model_on_a_runner_without_the_parameter_is_refused():
                  batch_size=4, on_error="skip")
     assert "model" in str(exc.value)
     assert "does not accept" in str(exc.value)
+    assert "example 0" in str(exc.value)
+    assert "'english'" in str(exc.value)
+
+
+def test_an_unreadable_signature_answers_both_guards_the_same_way():
+    """A C-level entry point cannot be read, and both guards then keep the call the harness makes
+    (#1112 review): with `_takes_model` on `_takes_min_confidence`'s ``False`` fallback, `model`
+    was sent on the batch path and dropped on the single one, and a named checkpoint was refused
+    even though the batch entry point would have carried it."""
+    assert evals._batch_form(NotIntrospectableRunner()) == evals._BATCH_STATES
+    assert evals._takes_model(NotIntrospectableRunner()) is True
+
+
+def test_a_named_model_runs_on_a_runner_with_unreadable_entry_points():
+    """The refusal is about a guard saying no, not about introspection failing: on the same
+    C-level runner the run goes through, batch path and all."""
+    dataset = Dataset([Example("s1", Q, {"intent": "a"}, model="english")])
+    report = evaluate(NotIntrospectableRunner(), dataset, evaluators=[ChoiceAccuracy()],
+                      batch_size=4, on_error="skip")
+    assert report.config["timing"]["batch_form"] == "states"
+    assert report.config["timing"]["chunks"] == 1
 
 
 def test_an_explicit_model_still_reaches_a_runner_that_takes_it():
