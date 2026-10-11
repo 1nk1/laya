@@ -252,7 +252,7 @@ in
     };
 
     tournamentGroup = lib.mkOption {
-      type = lib.types.nullOr (lib.types.ints.between 2 255);
+      type = lib.types.nullOr (lib.types.ints.between 2 100);
       default = null;
       example = 16;
       description = ''

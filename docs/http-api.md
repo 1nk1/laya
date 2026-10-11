@@ -43,7 +43,7 @@ Everything is environment variables, so one image serves a laptop dev run and a 
 | `LAYA_MAX_CONCURRENT` | requests admitted past auth at once; excess gets `503` | `16` |
 | `LAYA_MAX_BATCH_TOKENS` | tokens one `/v1/systemone/batch` FORWARD PASS may collate (`states` x questions x row width); a larger batch is split into several passes, not refused | `131072` |
 | `LAYA_JEV_STRICT` | serve the strict Jev wire contract: no root `routing`, no per-answer `action` / `answer_confidence`, no `confidence` on noul answers, and `usage` reduced to `input_tokens` + `output_tokens`. For clients that validate the response against the Jev contract with no extra fields | `0` |
-| `LAYA_TOURNAMENT_GROUP` | answer a `choice` with more options than this by elimination, in groups of this size, on `/v1/systemone`, and raise its option cap from 100 to 255. See [Large choices](#large-choices-laya_tournament_group). Unset, or outside 2 to 255, is off | `0` |
+| `LAYA_TOURNAMENT_GROUP` | answer a `choice` with more options than this by elimination, in groups of this size, on `/v1/systemone`, and raise its option cap from 100 to 255. See [Large choices](#large-choices-laya_tournament_group). Unset, or outside 2 to 100, is off | `0` |
 
 For a deployment published under a prefix such as `/laya`, set `LAYA_ROOT_PATH=/laya`.
 FastAPI uses it when generating OpenAPI and Swagger UI URLs. Configure the reverse proxy to
@@ -294,7 +294,11 @@ the request is refused. Jev accepts up to 255. With `LAYA_TOURNAMENT_GROUP=16`, 
 answers a choice with more than 16 options the way `laya.predict_tournament` does: the options are
 cut into groups of at most 16, each group is answered in one shared call, and the group winners go
 to a final call. Its option cap becomes 255. A choice of 16 or fewer, and every other question,
-takes the usual path unchanged.
+takes the usual path unchanged. The group size is limited to 2 to 100, the one-pass cap, so every
+choice the raised cap newly admits is always narrowed rather than read in one pass it cannot fit.
+A larger group is not a better one: each group is still read in one pass, and one pass loses
+accuracy as its options grow (the measurement below), so keep the group small; 16 is what was
+measured.
 
 The answer keeps the Jev shape, so the official SDK parses it:
 

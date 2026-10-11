@@ -379,8 +379,10 @@ def _resolve_tournament_group() -> int:
     """Group size for choices answered by elimination, from LAYA_TOURNAMENT_GROUP; 0 is off (#302).
 
     A choice with more options than this goes through `predict_tournament` in groups of this size.
-    Anything unset, unparseable, below 2 or above MAX_TOURNAMENT_CHOICE_OPTIONS leaves it off, so
-    the one-pass path is the default: no choice the cap admits has more options than such a group.
+    Anything unset, unparseable, below 2 or above MAX_CHOICE_OPTIONS leaves it off, so the one-pass
+    path is the default. The upper bound is what keeps the raised cap honest: every choice it newly
+    admits has more than MAX_CHOICE_OPTIONS options, so it is always over the group and always
+    narrowed, never handed to a one-pass read that cannot fit it.
     """
     raw = os.environ.get("LAYA_TOURNAMENT_GROUP")
     if not raw:
@@ -389,7 +391,7 @@ def _resolve_tournament_group() -> int:
         n = int(raw)
     except ValueError:
         return 0
-    return n if 2 <= n <= MAX_TOURNAMENT_CHOICE_OPTIONS else 0
+    return n if 2 <= n <= MAX_CHOICE_OPTIONS else 0
 
 
 def _resolve_idle_unload_seconds() -> float:

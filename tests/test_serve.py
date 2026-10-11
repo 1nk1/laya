@@ -374,6 +374,26 @@ def test_tournament_answers_a_large_choice_in_the_jev_shape(monkeypatch):
     assert body["usage"]["input_tokens"] == 90
 
 
+@pytest.mark.parametrize("group, n", [("100", 101), ("100", 150), ("100", 255), ("16", 101), ("2", 255)])
+def test_every_choice_over_the_one_pass_cap_is_narrowed(monkeypatch, group, n):
+    """A choice only the raised cap admits never reaches the one-pass path, at any valid group."""
+    client, fake = _tournament_client(monkeypatch, group)
+    r = client.post("/v1/systemone", json=_large_req(n))
+    assert r.status_code == 200
+    sizes = [len(q["criteria"]) for q in fake.calls[0].values()]
+    assert len(sizes) == -(-n // int(group)) and sum(sizes) == n and max(sizes) <= int(group)
+    assert len(r.json()["answers"]["queue"]["probabilities"]) == n
+
+
+def test_a_group_over_the_one_pass_cap_leaves_the_flag_off(monkeypatch):
+    """`LAYA_TOURNAMENT_GROUP=200` with 150 options: off, so the clear cap refusal, not a budget one."""
+    client, fake = _tournament_client(monkeypatch, "200")
+    r = client.post("/v1/systemone", json=_large_req(150))
+    assert r.status_code == 413
+    assert "150 > 100" in r.json()["detail"]
+    assert fake.calls == []
+
+
 def test_tournament_accepts_up_to_255_options(monkeypatch):
     client, _ = _tournament_client(monkeypatch, "16")
     assert client.post("/v1/systemone", json=_large_req(255)).status_code == 200
@@ -414,8 +434,8 @@ def test_batch_keeps_the_one_pass_cap_with_a_tournament_group(monkeypatch):
 
 
 @pytest.mark.parametrize("raw, want", [(None, 0), ("", 0), ("abc", 0), ("0", 0), ("1", 0), ("-4", 0),
-                                       ("2", 2), ("16", 16), ("255", 255),
-                                       ("256", 0)])
+                                       ("2", 2), ("16", 16), ("100", 100),
+                                       ("101", 0), ("200", 0), ("255", 0)])
 def test_tournament_group_resolution(monkeypatch, raw, want):
     if raw is None:
         monkeypatch.delenv("LAYA_TOURNAMENT_GROUP", raising=False)
