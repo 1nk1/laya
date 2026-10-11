@@ -401,8 +401,16 @@ def _cmd_run(args) -> int:
     # the run: `preload=False` means no checkpoint is resident before the first row.
     # `loaded_revisions` reports the commit each resident agent came from -- the pin when there is
     # one, the commit the default branch resolved to when there is not, None for a local path.
-    if router is not None:
-        report.config = dict(report.config, revisions=getattr(router, "loaded_revisions", {}))
+    # The ONNX arm answers from one checkpoint and `ONNXAgent` resolves the same fact for it
+    # (`self.revision`, `laya/onnx_agent.py`), so the block is written there too: `--revision`
+    # promises "the report records the commit that answered either way", and a `revisions` block
+    # that only ever appears on the torch path does not keep it -- nor does the config table in
+    # `docs/evals.md`, which documents `revisions` for every `run`.
+    if args.onnx:
+        revisions = {agent.model_id: getattr(agent, "revision", None)}
+    else:
+        revisions = getattr(router, "loaded_revisions", {})
+    report.config = dict(report.config, revisions=revisions)
 
     if extra:
         _warn_no_value(extra, report)
