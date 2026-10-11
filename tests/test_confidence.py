@@ -281,6 +281,26 @@ clean_res = [{"answers": {"q": {"answer_confidence": 0.95}}}]
 flag_low_confidence(clean_res, 0.5)
 check_true("stale/unflagged answer stays clean", "low_confidence" not in clean_res[0]["answers"]["q"])
 
+# `0.0` belongs to this case as much as `0.5` does -- it is the most permissive threshold there is --
+# but the function used to short-circuit on it before the clearing pass, so a stricter threshold's
+# marker survived a re-evaluation at `0.0`.
+zero_res = [{"answers": {"intent": {"choice": "refund", "answer_confidence": 0.8}}}]
+zero_ans = zero_res[0]["answers"]["intent"]
+flag_low_confidence(zero_res, 0.9)
+check_true("stale/flag 0.9 sets flag before the 0.0 pass", zero_ans.get("low_confidence") is True)
+flag_low_confidence(zero_res, 0.0)
+check_true("stale/flag 0.0 clears flag", "low_confidence" not in zero_ans)
+
+# One rule, one implementation: the boolean the flag writes and the state the gate reports cannot
+# disagree about the same threshold change, which is the claim `apply_confidence_gate`'s docstring
+# makes about delegating rather than re-implementing.
+gate_both = [{"answers": {"intent": {"choice": "refund", "answer_confidence": 0.8}}}]
+apply_confidence_gate(gate_both, 0.9)
+apply_confidence_gate(gate_both, 0.0)
+check_true("stale/flag and gate agree after 0.9 -> 0.0",
+           ("low_confidence" in zero_ans) == ("low_confidence" in gate_both[0]["answers"]["intent"]),
+           repr((zero_ans, gate_both[0]["answers"]["intent"])))
+
 # 2. apply_confidence_gate clears stale flag and updates abstention state on re-evaluation
 gate_reuse = [{
     "answers": {

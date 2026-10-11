@@ -386,8 +386,8 @@ on the flag downstream of the harness.
 The accepted range is core's `laya.confidence.check_min_confidence` -- `[0.0, 1.0]`, finite, not
 a bool -- rather than a copy here, so a value the gate itself would reject fails as a usage error
 (exit 2) before any checkpoint loads. `0.0` is a legal ask: it is the control arm for an
-abstention sweep and the value `flag_low_confidence` treats as a no-op, so a check that dropped
-it would hide which arm actually ran.
+abstention sweep and the threshold at which `flag_low_confidence` marks no answer, so a check that
+dropped it would hide which arm actually ran.
 
 A runner whose `predict` or (for a batched run) whose `predict_batch` predates the gate is
 **refused with a named `EvalError`**, not run without the threshold. Silently dropping it would
