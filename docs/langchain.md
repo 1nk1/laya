@@ -10,6 +10,10 @@ Laya provides fast, non-autoregressive decision components for **LangChain** and
 
 Every node also takes core's per-call decision controls -- the two token budgets (`max_len`, `head_max_len`), the language and abstention controls (`lang`, `min_confidence`), and the five prediction-hook arguments (`hooks`, `on_predict_start`, `on_predict_end`, `hooks_raise`, `hooks_timeout`).
 
+For high-cardinality choice questions, see the [many-option guidance](benchmarks.md#limits-to-check-on-your-own-data)
+and [runtime-parity check](benchmarks.md#check-runtime-parity-before-comparing-accuracy) before
+comparing checkpoint results across backends.
+
 Supports both **local in-process inference** (`Agent` or `Router`) and **remote HTTP inference** against your own `laya-serve` without requiring PyTorch on edge clients.
 
 ---
