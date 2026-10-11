@@ -285,7 +285,7 @@ def evaluate_agreement(runner: Any, reference: Dict, repeat: Dict, *,
     The runner receives copied inputs and its exceptions propagate without dropping cases.
 
     An abstention reaches this through the gate's own vocabulary: an answer carrying
-    ``abstention`` equal to :data:`laya.confidence.GATE_ABSTAINED` becomes a null, which is what
+    ``abstention`` equal to ``laya.confidence.GATE_ABSTAINED`` becomes a null, which is what
     `student_coverage` then counts as uncovered. The gate's two other states do not. `passed` is
     a clearance, and `unevaluated` means the gate had no usable confidence to compare -- the
     student still answered, so the choice is kept.
