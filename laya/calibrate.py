@@ -651,7 +651,9 @@ def apply_calibration_payload(obj, payload: Dict[str, Any]) -> None:
     temps = payload.get("temperature")
     if not isinstance(temps, (list, tuple)) or len(temps) != N_QTYPES:
         raise ValueError("calibration JSON must contain temperature: [3 floats]")
-    by_options = payload.get("temperature_by_options") or {}
+    by_options = payload.get("temperature_by_options")
+    if by_options is None:   # absent, or an explicit null: a file from before bucket temperatures
+        by_options = {}
     if not isinstance(by_options, dict):
         raise ValueError(
             "calibration JSON temperature_by_options must be an object of bucket -> float, "

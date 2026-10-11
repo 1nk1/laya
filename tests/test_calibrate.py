@@ -647,6 +647,26 @@ _refuses("shape/scalar by_options",
 _refuses("shape/list by_options",
          {"temperature": [1.0] * 3, "temperature_by_options": [["choice:2", 1.5]]},
          "temperature_by_options")
+# A falsy non-object is the same mistake as a truthy one, but `payload.get(...) or {}` used to
+# hide it: JSON's `0`, `0.0`, `""`, `false` and `[]` each became an empty bucket map and loaded,
+# so a hand-written file whose map is a list of pairs silently lost every per-bucket temperature
+# instead of being refused. Measured against the previous build, all five of those shapes loaded
+# and installed `temperature_by_options == {}`; here all five raise the ValueError the
+# docstring names. `binning_map`, the other field the same sentence lists, already refused them.
+for _falsy in (0, 0.0, "", False, []):
+    _refuses("shape/falsy non-object by_options %r" % (_falsy,),
+             {"temperature": [1.0] * 3, "temperature_by_options": _falsy},
+             "temperature_by_options")
+# `null` is the deliberate other half: a file written before bucket temperatures existed has no
+# key at all, and an explicit null means the same thing, so both install an empty map rather
+# than refusing -- the treatment an absent `binning_map` already gets ("stub/binning_map cleared
+# when absent", above).
+_no_key = type("Stub", (), {})()
+apply_calibration_payload(_no_key, {"temperature": [1.0, 1.0, 1.0]})
+check("shape/absent by_options installs an empty map", _no_key.temperature_by_options, {})
+_null_key = type("Stub", (), {})()
+apply_calibration_payload(_null_key, {"temperature": [1.0] * 3, "temperature_by_options": None})
+check("shape/null by_options installs an empty map", _null_key.temperature_by_options, {})
 # and a numeric string version still parses, as it did before the check existed
 version_ok = type("Stub", (), {})()
 apply_calibration_payload(version_ok, {"temperature": [1.1, 1.2, 1.3], "version": "1"})
