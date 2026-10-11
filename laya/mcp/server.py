@@ -91,7 +91,8 @@ _GUARDRAILS = (
 # with the checkpoints, and a copy here would be a second thing to keep current. An invalid name
 # comes back as an error that lists every accepted one.
 _MODEL_DOC = (
-    " model: 'auto' (default) lets the router pick the checkpoint; anything else names one, and "
+    " model: null (default), 'auto', or omitted all let the router pick the checkpoint; "
+    "anything else names one, and "
     "core's aliases and casing are honoured ('en', 'ML', 'laya-multilingual'). The answer's "
     "routing.model always reports the canonical name."
 )

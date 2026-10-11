@@ -1849,6 +1849,11 @@ def test_controls_signature_and_schema():
         model_schemas.append(model_schema)
     ok("schema/model_specs_consistent", all(model_schema == model_schemas[0] for model_schema in model_schemas),
        repr(model_schemas))
+    for name in ("laya_predict", "laya_shortlist"):
+        description = by_name[name].description.lower()
+        ok("schema/%s_model_doc_matches_nullable_default" % name,
+           all(option in description for option in ("null (default)", "'auto'", "omitted")),
+           description)
 
 
 def test_lang_guess_control():
