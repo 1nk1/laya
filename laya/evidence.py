@@ -24,11 +24,7 @@ INSUFFICIENT = "INSUFFICIENT"
 UNKNOWN = "UNKNOWN"
 INCOMPARABLE = "INCOMPARABLE"
 
-# Documented upstream floors/thresholds. `laya.calibrate.MIN_TYPE_N` and
-# `laya.train.CALIB_WARN_N` live in modules that import torch at module scope, so a
-# read-only command cannot import them without pulling torch in. We prefer the live
-# constants when torch is importable and fall back to the documented values with an
-# explicit provenance note when it is not; we never silently duplicate.
+
 def _entry(state: str, reason: str, detail: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     out = {"state": state, "reason": reason}
     if detail:
@@ -55,7 +51,10 @@ def inspect_calibration(config: Dict[str, Any]) -> Dict[str, Any]:
             continue
         # Persisted issues are the authoritative limitation text (#933 writes
         # not-fitted/below-floor/clamped/unchanged-fit there); we do not keep a
-        # second numeric source of truth.
+        # second numeric source of truth. `laya/calibrate.py::MIN_TYPE_N` and
+        # `laya/train.py::CALIB_WARN_N` could not be imported here even if a recomputed
+        # floor were wanted: both modules import torch at module scope, and this read-only
+        # path has to run without it.
         issues = entry.get("issues")
         if not isinstance(issues, list):
             types[name] = _entry(UNKNOWN, "calibration entry has no issues list; cannot tell limitations")
