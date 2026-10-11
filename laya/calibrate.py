@@ -418,8 +418,11 @@ def fit_binning_map(records: Iterable, temperature: Sequence[float],
     `temperature_by_options` first), so a binning map composes on top of a temperature map rather
     than replacing it. Returns `{bucket: {"bins": N, "values": [recalibrated confidence per bin]}}`;
     buckets below `min_bucket_n` are omitted. Apply it with :func:`apply_binning_map`. An empty bin
-    (a confidence range the calibration set never produced) maps to its own midpoint, i.e. leaves
-    that region unchanged, so an unseen value is never recalibrated to a fabricated 0.
+    (a confidence range the calibration set never produced) maps to that bin's centre, a point
+    inside the region the value came from: the value is still rewritten, and moves by at most half a
+    bin width. What the centre buys is that an unseen confidence is never recalibrated to a
+    fabricated 0, not that it passes through -- only a bucket the map has no entry for does that
+    (:func:`apply_binning_map`).
     """
     if bins < 1:
         raise ValueError("bins must be >= 1, got %r" % (bins,))
