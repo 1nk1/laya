@@ -135,12 +135,19 @@ check_true("mcp/both dependency buckets are populated", bool(mcp_needing) and bo
 _buckets = (ast.get_docstring(mcp_init) or "").split(";")
 check_true("mcp/docstring keeps the two-clause dependency sentence this gate reads",
            len(_buckets) == 2, repr(ast.get_docstring(mcp_init)))
-_declared_free = set(re.findall(r"``(\w+)``", _buckets[0])) & set(mcp_modules)
-_declared_needing = set(re.findall(r"``(\w+)``", _buckets[1])) & set(mcp_modules) if len(_buckets) > 1 else set()
+_raw_free = set(re.findall(r"``(\w+)``", _buckets[0]))
+_raw_needing = set(re.findall(r"``(\w+)``", _buckets[1])) if len(_buckets) > 1 else set()
+_declared_free = _raw_free & set(mcp_modules)
+_declared_needing = _raw_needing & set(mcp_modules)
 check("mcp/docstring's extra-free list is exactly the submodules that bind no mcp import",
       sorted(_declared_free), sorted(mcp_free))
 check("mcp/docstring's extra list is exactly the submodules that bind mcp at import",
       sorted(_declared_needing), sorted(mcp_needing))
+# A name the sentence claims that is not on disk is as wrong as one it omits: it sends a reader to
+# `python -m laya.mcp.<name>` for a file that does not exist. `mcp` is the dependency the same
+# sentence names in the same breath ("without the ``mcp`` dependency"), so it is excused.
+check("mcp/docstring names no submodule that is not on disk",
+      sorted((_raw_free | _raw_needing) - set(mcp_modules) - {"mcp"}), [])
 
 requires_python = re.search(r'requires-python\s*=\s*"[>=~^]*\s*([\d.]+)"', pyproject)
 check_true("pyproject/declares requires-python", requires_python is not None)
