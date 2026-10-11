@@ -1176,6 +1176,13 @@ def test_batch_tool_control_forwarding():
         ok("batch_tool/min_confidence_forwarded", seen["kwargs"]["min_confidence"] == 0.75,
            repr(seen["kwargs"]["min_confidence"]))
 
+        # A bool is never an unset marker: `False == 0` in Python, so a plain equality or
+        # `or None` fold would hide the tools layer's explicit refusal of booleans.
+        for bad in (True, False):
+            server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=bad)
+            ok("batch_tool/hooks_timeout_%r_reaches_tools" % (bad,),
+               seen["kwargs"]["hooks_timeout"] is bad, repr(seen["kwargs"]["hooks_timeout"]))
+
         # Out of range reaches the tools layer untouched instead of being folded into "unset".
         for bad in (-1.0, -0.5):
             server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=bad)
@@ -1190,6 +1197,10 @@ def test_batch_tool_control_forwarding():
     # And the tools layer does refuse them, which is what makes the forwarding observable.
     expect_tool_error("batch_tool/hooks_timeout_rejected_downstream",
                       lambda: laya_predict_batch(BATCH_REQUESTS, hooks_timeout=-0.5,
+                                                 router=BatchRouter()),
+                      "invalid_hooks_timeout")
+    expect_tool_error("batch_tool/hooks_timeout_false_rejected_downstream",
+                      lambda: laya_predict_batch(BATCH_REQUESTS, hooks_timeout=False,
                                                  router=BatchRouter()),
                       "invalid_hooks_timeout")
     expect_tool_error("batch_tool/min_confidence_rejected_downstream",
