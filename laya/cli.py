@@ -165,7 +165,15 @@ def load_questions(path):
         raise ValueError("--questions file must be a JSON object of question id -> definition")
     state_key = "request"
     questions = raw
-    if "questions" in raw:
+    wrapper_keys = {"questions", "state_key"}
+    is_wrapped = False
+    if set(raw.keys()) <= wrapper_keys and "questions" in raw:
+        inner = raw["questions"]
+        if "state_key" in raw or not isinstance(inner, dict) or not inner:
+            is_wrapped = True
+        elif all(isinstance(v, dict) for v in inner.values()):
+            is_wrapped = True
+    if is_wrapped:
         if not isinstance(raw["questions"], dict):
             raise ValueError("the 'questions' field of the --questions file must be an object")
         questions = raw["questions"]
