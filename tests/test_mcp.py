@@ -1133,6 +1133,71 @@ def test_batch_predict():
                       "internal_error")
 
 
+def test_batch_tool_control_forwarding():
+    """A control the tool cannot honour must reach the layer that rejects it, not vanish.
+
+    `laya_predict_batch` owns validation and answers an out-of-range `hooks_timeout` or
+    `min_confidence` with a ToolError naming the value. Collapsing those to None before the call
+    turned an invalid deadline into "no deadline" and an invalid gate into "no gate": the client
+    got a clean response and no way to tell the control it asked for had been dropped (#707).
+    """
+    import laya.mcp.server as server_mod
+
+    seen = {}
+
+    def fake_wrap(fn, **kwargs):
+        seen["kwargs"] = kwargs
+        return "{}"
+
+    real_router_or_error, real_wrap = server_mod._router_or_error, server_mod._wrap
+
+    def fake_router_or_error():
+        return BatchRouter()
+
+    server_mod._router_or_error = fake_router_or_error
+    server_mod._wrap = fake_wrap
+    try:
+        # Unset stays unset: 0 is what an eager MCP client sends for a default, and the
+        # declaration defaults are unset too.
+        server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=0)
+        ok("batch_tool/hooks_timeout_zero_is_unset", seen["kwargs"]["hooks_timeout"] is None,
+           repr(seen["kwargs"]["hooks_timeout"]))
+        server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS)
+        ok("batch_tool/hooks_timeout_default_is_unset", seen["kwargs"]["hooks_timeout"] is None,
+           repr(seen["kwargs"]["hooks_timeout"]))
+        ok("batch_tool/min_confidence_default_is_unset", seen["kwargs"]["min_confidence"] is None,
+           repr(seen["kwargs"]["min_confidence"]))
+
+        # A value in range is forwarded as given.
+        server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=1.5,
+                                           min_confidence=0.75)
+        ok("batch_tool/hooks_timeout_forwarded", seen["kwargs"]["hooks_timeout"] == 1.5,
+           repr(seen["kwargs"]["hooks_timeout"]))
+        ok("batch_tool/min_confidence_forwarded", seen["kwargs"]["min_confidence"] == 0.75,
+           repr(seen["kwargs"]["min_confidence"]))
+
+        # Out of range reaches the tools layer untouched instead of being folded into "unset".
+        for bad in (-1.0, -0.5):
+            server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=bad)
+            ok("batch_tool/hooks_timeout_%r_reaches_tools" % (bad,),
+               seen["kwargs"]["hooks_timeout"] == bad, repr(seen["kwargs"]["hooks_timeout"]))
+            server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, min_confidence=bad)
+            ok("batch_tool/min_confidence_%r_reaches_tools" % (bad,),
+               seen["kwargs"]["min_confidence"] == bad, repr(seen["kwargs"]["min_confidence"]))
+    finally:
+        server_mod._router_or_error, server_mod._wrap = real_router_or_error, real_wrap
+
+    # And the tools layer does refuse them, which is what makes the forwarding observable.
+    expect_tool_error("batch_tool/hooks_timeout_rejected_downstream",
+                      lambda: laya_predict_batch(BATCH_REQUESTS, hooks_timeout=-0.5,
+                                                 router=BatchRouter()),
+                      "invalid_hooks_timeout")
+    expect_tool_error("batch_tool/min_confidence_rejected_downstream",
+                      lambda: laya_predict_batch(BATCH_REQUESTS, min_confidence=-0.5,
+                                                 router=BatchRouter()),
+                      "invalid_min_confidence")
+
+
 def test_batch_route():
     expect_tool_error("batch/route_no_router",
                       lambda: laya_route_batch(BATCH_REQUESTS, router=None), "models_not_ready")
@@ -2765,6 +2830,7 @@ test_option_order_forwarding()
 test_shortlist()
 test_batch_validation()
 test_batch_predict()
+test_batch_tool_control_forwarding()
 test_batch_route()
 test_decide()
 test_shortlist_lang_parity()
