@@ -95,8 +95,12 @@ def resolve_device(force: str | None = None) -> str:
     fallback happens silently at agent build time).
 
     A ``LAYA_DEVICE`` value torch cannot parse raises here too (see
-    ``env_device``): there is no path on which this function labels a device
-    torch would refuse, so the label and the build cannot disagree.
+    ``env_device``), and the auto-detected labels are device types torch names,
+    so neither the environment nor the availability chain can label a device
+    torch would refuse. ``force`` is the exception, on purpose: it is returned
+    verbatim, exactly like the CLI ``--device`` flag, so a test can ask what a
+    given preference would be reported as -- including a preference torch
+    refuses, which then fails where it is used rather than here.
     """
     if force:
         return force
@@ -150,8 +154,12 @@ def agent_device(agent: Any) -> str | None:
     """The real device a loaded agent computes on (str), or None if unreadable.
 
     Reads ``Agent.device``, a ``torch.device`` that already reflects the
-    silent GPU -> CPU fallback done at build time. Accepts a plain string too,
-    so tests can fake an agent without torch.
+    silent GPU -> CPU fallback done at build time. The answer is that device's
+    *type*, which carries no index: a checkpoint built on ``cuda:1`` is
+    reported as ``cuda``. A plain string is accepted too, so tests can fake an
+    agent without torch, and a string is returned as written -- so a fake whose
+    ``device`` is ``"cuda:1"`` reports an index that the real ``torch.device``
+    it stands in for would have dropped.
     """
     if agent is None:
         return None
