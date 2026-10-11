@@ -106,25 +106,34 @@ Reproduce cold/restart timings, memory, and cache counters with
 `benchmarks/bench_compile_defaults.py`; see
 [the recorded measurements](https://github.com/NandhaKishorM/laya/blob/main/benchmarks/results/compile-defaults/README.md).
 
-## AOTInductor: not yet
+## AOTInductor
 
 Shipping a precompiled artifact per checkpoint and GPU architecture
-(`torch._inductor.aoti_compile_and_package`) would remove the compile entirely. On torch 2.11 it
-stops at packaging:
+(`torch._inductor.aoti_compile_and_package`) removes the compile entirely. It works on the current
+tree. The blocker these notes recorded was real and is fixed; [fast backends](fast-backends.md) has
+the export recipe, the check and the measured package/load timings, so this section keeps only what
+a reader of these notes needs to not walk into it again.
 
 - **Export works.** `torch.export` of `DecisionModel` succeeds, in about 5 s, with dynamic rows,
   markers and tokens. Tokens must be declared as a multiple of 16 (`16 * Dim(...)`); a plain range
   fails the exporter's own `L % 8` alignment guard. This is the same mask alignment as above.
-- **Packaging fails.** How it fails depends on how the program was exported:
-  - **Under autocast**, the program carries dtype asserts that AOTI trips outside autocast:
-    `Tensor dtype mismatch! Expected: torch.bfloat16, Got: torch.float32`.
-  - **From a bf16 copy without autocast**, tracing fails inside the forward:
-    `mat1 and mat2 must have the same dtype`. `DecisionModel.forward` upcasts the pooled state
-    and the confidence features to fp32 before the action head, and autocast normally
-    reconciles that.
+- **The dtype failure these notes measured is fixed.** Packaging from a bf16 copy exported without
+  autocast used to fail inside the forward with `mat1 and mat2 must have the same dtype`:
+  `DecisionModel.forward` keeps the pooled state and the confidence features in fp32 even when the
+  weights are bf16, and with no autocast to reconcile that the first action linear received fp32
+  against bf16 weights. The forward now casts the concatenated input to the head's weight dtype
+  **only when no autocast is active** (`laya/common.py:653-657`), so the AMP and fp32 paths keep
+  their numerics and the decision logits stay fp32.
+  `tests/test_decision_model.py::test_action_head_explicit_dtype_and_autocast` pins the input each
+  head sees for every combination of fp32/bf16 weights with no-AMP/bf16-AMP/fp16-AMP.
+- **Autocast is still the wrong export context.** A program traced under autocast carries dtype
+  asserts that AOTI trips outside autocast:
+  `Tensor dtype mismatch! Expected: torch.bfloat16, Got: torch.float32`. Export a separate
+  evaluation copy in an explicit dtype instead — that is why the cast above is conditional rather
+  than unconditional.
 
-The artifact route therefore needs a dtype-explicit action head: either cast its input to the
-head's dtype, or run the head in fp32.
+`python scripts/check_aoti.py` runs the whole route on a tiny randomly initialised encoder with no
+network access, and prints `SKIP: CUDA and a C++ compiler are required` where it cannot package.
 
 ## TileLang portability: the kernels are CUDA-only
 
