@@ -107,6 +107,33 @@ toplevel = {"schema": "laya-evals-report/1", "dataset_sha256": "a", "questions_s
             "config": {}}
 check("identity at top level still read", evidence.inspect_report(toplevel)["state"], evidence.PRESENT)
 
+# ------------------------------------------------------ identity vocabulary pinned to laya.evals
+# `laya/evidence.py` copies the report-identity vocabulary instead of importing `laya.evals` (numpy at
+# module scope), and a copy is only safe while it is held against the original -- the same way
+# `tests/test_conformal_abstention.py` holds `confidence.BUCKET_QTYPES` against `common.temp_bucket`.
+# Unpinned, a key renamed upstream would make every report read as identity-incomplete here, and a key
+# added upstream would read as identity-complete; both silently, in the verdict this module exists to
+# give. These four checks fail in both directions, on either side of the copy.
+from laya import evals  # noqa: E402
+
+check("the copied identity vocabulary is evals' own, in order",
+      list(evidence._IDENTITY_KEYS), list(evals._IDENTITY_KEYS))
+check("the provenance key is recorded upstream but not compared there",
+      [k for k in evidence._PROVENANCE_KEYS if k not in evals._IDENTITY_KEYS],
+      list(evidence._PROVENANCE_KEYS))
+check("checkpoint <-> report conflicts are the identity vocabulary minus the report tag",
+      sorted(set(evals._IDENTITY_KEYS) - set(evidence._IDENTITY_CONFLICT_KEYS)), ["schema"])
+check("inspect_report reads exactly its declared vocabulary",
+      sorted(evidence.inspect_report({"config": {}})["fields"]),
+      sorted(evidence._IDENTITY_KEYS + evidence._PROVENANCE_KEYS))
+
+# ... and `schema` stays out of the conflict set on purpose: two artifacts that agree on the
+# deterministic digests but carry different report tags are still the same measurement.
+check("a differing schema is not a checkpoint <-> report conflict",
+      evidence.relate({"dataset_sha256": "a"},
+                      {"config": {"dataset_sha256": "a", "schema": "laya-evals-report/2"}})["state"],
+      evidence.UNKNOWN)
+
 # ------------------------------------------------------ relationship
 config = {"training": {"laya_train": {"laya_version": "0.3.28"}}}
 match = evidence.relate(config, {"config": {"laya_version": "0.3.28"}})
