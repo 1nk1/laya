@@ -12,6 +12,7 @@ Exit 0 only when no test skipped, none failed, no package failed to build, and a
 """
 import argparse
 import json
+import os
 import sys
 
 
@@ -57,6 +58,11 @@ def main(argv=None):
     parser.add_argument("--min-tests", type=int, default=1,
                         help="fail when fewer tests than this ran (tests and subtests both count)")
     args = parser.parse_args(argv)
+    if args.events != "-" and not os.path.isfile(args.events):
+        # The step that writes this file is a separate one and an earlier step's failure skips it.
+        print("check_test_json: %s does not exist: the `go test` step that writes it did not run "
+              "or failed before producing it; see that step's log" % args.events, file=sys.stderr)
+        return 1
     handle = sys.stdin if args.events == "-" else open(args.events, encoding="utf-8")
     with handle:
         counts, problems = summarise(read_events(handle))

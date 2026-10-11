@@ -79,6 +79,13 @@ class CheckerTest(unittest.TestCase):
         code, _ = run(["go: downloading example.com/x v1.0.0"] + PASSING)
         self.assertEqual(code, 0)
 
+    def test_a_missing_file_says_the_test_step_did_not_run(self):
+        done = subprocess.run([sys.executable, CHECKER, "/nonexistent/go-test.json"],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("did not run", done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,10 @@
 
 Three files, three sources, and the split is the point:
 
-  * internal/unicodedata/tables_gen.go -- recorded from CPython, because `laya/lang.py` is
+  * internal/unicodedata/tables_gen.go -- recorded from CPython (the header names the minor
+    version and the Unicode release, never the patch: the tables are a function of the Unicode
+    database, which a patch release does not change, and a patch in the header made --check fail
+    on every runner whose interpreter was not the one the file was generated on), because `laya/lang.py` is
     written against `str.isalpha()`, `str.lower()` and `re`'s `\\w`, and Go's own `unicode`
     package follows whichever Unicode the Go toolchain ships (it moves between releases).
   * lang/tables_gen.go -- read straight from `laya.lang`: the script ranges, the per-language
@@ -102,7 +105,7 @@ def render_unicode():
         ("title", "The Lt category: cased, but neither upper nor lower, so str.isupper() on a\n"
          "// string holding one is false.", lambda cp: unicodedata.category(chr(cp)) == "Lt"),
     ]
-    out = [header("CPython %s (Unicode %s)" % (sys.version.split()[0], unicodedata.unidata_version)),
+    out = [header("CPython %d.%d (Unicode %s)" % (sys.version_info[:2] + (unicodedata.unidata_version,))),
            "package unicodedata\n\n"
            "// Version is the Unicode release these tables were recorded from.\n"
            "const Version = %r\n\n" % unicodedata.unidata_version]

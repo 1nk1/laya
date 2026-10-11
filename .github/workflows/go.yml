@@ -52,6 +52,10 @@ env:
   # not the one first recorded for that version.
   STATICCHECK_VERSION: v0.8.1
   GOVULNCHECK_VERSION: v1.9.0
+  # Every setup-go below pins Go 1.27.1 and NOT `stable`: staticcheck reads the toolchain's
+  # export data, so a Go release newer than the pinned staticcheck knows ("export data version
+  # 5 is greater than maximum supported version 4") breaks the job on a day nothing in this repo
+  # changed. Bump Go, staticcheck and govulncheck together.
   GOLDENS: ${{ github.workspace }}/.go-goldens
 
 jobs:
@@ -69,7 +73,7 @@ jobs:
           cache-dependency-path: laya-dotnet/tools/requirements-regen.txt
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: stable
+          go-version: "1.27.1"
           cache: false
       - name: Install the Python toolchain the goldens are recorded with
         run: |
@@ -157,7 +161,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: stable
+          go-version: "1.27.1"
           cache: false
       - name: gofmt
         working-directory: laya-go
@@ -188,7 +192,7 @@ jobs:
           python-version: "3.12"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: stable
+          go-version: "1.27.1"
           cache: false
 
       # Standard library only, so no install step.

@@ -136,7 +136,7 @@ jobs:
   # cannot see that.
   #
   # A matrix rather than `languages: python, java-kotlin` in one cell: the Java cell needs a JDK
-  # and a build, and keeping them separate means a Java build failure cannot take the Python
+  # and a build (the Go cell a toolchain and a build), and keeping them separate means a Java build failure cannot take the Python
   # analysis down with it.
   codeql:
     name: CodeQL (${{ matrix.language }})
@@ -153,8 +153,10 @@ jobs:
         # matrix cell and no build risk. `csharp` is NOT here: CodeQL would have to run
         # `dotnet build` for it, and a build this change cannot verify locally would turn a
         # scanner into a broken required check. laya-dotnet is covered by gitleaks only today;
-        # adding it needs whoever owns that build to confirm autobuild works.
-        language: [python, java-kotlin, javascript-typescript]
+        # adding it needs whoever owns that build to confirm autobuild works. `go` builds the
+        # module in laya-go/, not the repo root: autobuild finds laya-go/go.mod itself (checked
+        # with the CodeQL CLI: "Found 1 go.mod files in: laya-go/go.mod", 20 non-test files).
+        language: [python, java-kotlin, javascript-typescript, go]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Only the Java cell compiles anything, so only it needs a JDK -- and the wrapper jar it
@@ -168,13 +170,21 @@ jobs:
           cache: gradle
       - uses: gradle/actions/wrapper-validation@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
         if: ${{ matrix.language == 'java-kotlin' }}
+      # The Go cell compiles too, so it needs the same pinned toolchain `go.yml` uses and not
+      # whatever the runner image happens to carry.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: ${{ matrix.language == 'go' }}
+        with:
+          go-version: "1.27.1"
+          cache: false
       - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
-      # Python needs no build step; Java does, and autobuild finds the Gradle build itself.
+      # Python needs no build step; Java and Go do, and autobuild finds the Gradle build and
+      # laya-go/go.mod itself.
       - uses: github/codeql-action/autobuild@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
-        if: ${{ matrix.language == 'java-kotlin' }}
+        if: ${{ matrix.language == 'java-kotlin' || matrix.language == 'go' }}
       - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
 
   supply_chain:
