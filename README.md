@@ -94,20 +94,26 @@ The shipped checkpoints work zero-shot, but fine-tuning on decisions from your o
 
 **[nandhakishorm.github.io/laya](https://nandhakishorm.github.io/laya/)**: guides for [prediction hooks](https://nandhakishorm.github.io/laya/hooks/), [schema-driven decisions](https://nandhakishorm.github.io/laya/structured/), [Docker](https://nandhakishorm.github.io/laya/docker/) and [LangChain and LangGraph](https://nandhakishorm.github.io/laya/langchain/), plus a full [API reference](https://nandhakishorm.github.io/laya/reference/).
 
-## What's new in 0.4.2
+## What's new in 0.4.3
 
-* **The TypeScript tree parses again.** An unterminated template literal in `hooks.ts` shipped
-  in 0.4.1 and stopped 22 of 34 test files from loading (#1056).
-* **Jev confidence alongside ours.** `/v1/systemone` adds `x_jev_confidence`, computed locally
-  from the same probabilities, so a threshold carried over from Jev can be compared directly
-  (#1066, #302). `confidence` is unchanged and the field is absent under `LAYA_JEV_STRICT`.
-* **Shortlisting keeps working with an `option_order`.** A narrowed choice drops the order with
-  a warning instead of failing the agent's permutation check (#1063).
-* **A near-miss checkpoint name warns.** Registering `englsh` tells you it is one edit from
-  `english`, and registers it anyway (#1055, #919).
-* **Compose forwards four more knobs** that the runtime already read (#1053, #1054), and the
-  Java and .NET docs now name the multilingual default 0.4.0 moved them to (#1069).
-* **Java** gains `Router.predictBatch` and `Shortlist.predictTournament` (#1060, #1061).
+* **The TypeScript SDK accepts the server's own answers again.** `sdk/typescript`'s response
+  validation rejected the `x_jev_confidence` 0.4.2 added, which had the CI lane red since that
+  release; the field is now typed, validated in `[0, 1]`, and absent on `noul` (#1072).
+* **`laya.jev_confidence(answer)`** is a public export, so the formula behind the served
+  `x_jev_confidence` can be applied to a direct `predict()` result (#1083, #302).
+* **Choices past 100 options over HTTP.** `LAYA_TOURNAMENT_GROUP=N` answers a larger `choice` by
+  elimination in groups of N, names every option in `probabilities`, and reports the finalists
+  under `x_tournament`. Off unless set (#1073, #302).
+* **`model: null` is accepted by all four MCP tools**, which is what the shared validator always
+  meant by `auto` (#1105, #1102).
+* **Fixes**: the shortlist cache's width guard reads under the lock it documents (#1104); a falsy
+  non-object `temperature_by_options` is refused instead of silently loading empty (#1109);
+  `evaluate()` stops forwarding `model=` to a runner whose `predict` predates it (#1112, #1107);
+  a question id literally called `questions` is no longer read as a wrapper (#1113, #1110).
+* **laya-ts** gains `predictTournament` and a cached embedder, matching Python and Java (#1108,
+  #1117), and its `min_confidence` bucket-key error now names `default` (#1106, #1100).
+* **Java test floors** are remeasured on the merged tree: 1168 and 1169, up from 1007 and 1008,
+  closing 161 tests of coverage the floor could not see (#1090).
 
 Earlier releases are in the [GitHub releases](https://github.com/NandhaKishorM/laya/releases).
 
