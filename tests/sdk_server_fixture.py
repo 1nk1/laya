@@ -19,7 +19,7 @@ from tokenizers.models import WordLevel  # noqa: E402
 from transformers import BertConfig, BertModel, PreTrainedTokenizerFast  # noqa: E402
 from laya import Router, load  # noqa: E402
 from laya.common import DecisionModel  # noqa: E402
-from laya.serve import _add_jev_confidence, create_app  # noqa: E402
+from laya.serve import create_app  # noqa: E402
 
 
 def main():
@@ -52,7 +52,7 @@ def main():
             "single": {"type": "choice", "instructions": "Pick", "criteria": ["only"]},
         }
         state = {"text": "hello", "unicode": "नमस्ते", "metadata": {"count": 0, "flag": False}}
-        expected = _add_jev_confidence(agent.predict(state, questions))
+        expected = agent.predict(state, questions)
         router = Router()
         # Both routing branches reach the same tiny fixture; this tests transport,
         # model invocation and numeric parity, not pretrained model quality.
