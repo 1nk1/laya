@@ -27,15 +27,15 @@ not a probability.
 
 That distinction decides how the column reads against the guard's own gate.
 `laya/integrations/_guard.py` turns the level into the probability that the answer sits at or above
-the middle of its scale — `sum(P[i] for i in range(k // 2, k))`, the same rule `LayaGuardrail`
-carried inline at the 0.3.21 and 0.3.22 revisions this page reports — and on four levels that
-probability cannot exceed half the level it came from, because
-`P[2] + P[3] <= (P[1] + 2*P[2] + 3*P[3]) / 2`. A level under 1.0 therefore caps under the default
-0.5 threshold whatever distribution sat behind it, and all three levels here are under 1.0 — they are
-printed rounded to two decimals, and no rounding carries 0.82 past 1.0. So the gate probability for
-c011, c012 and c042 caps at about 0.41, 0.39 and 0.26, and none of the three could have flagged
-`harm_severity` at all. (An answer carrying no distribution takes the normalised-level branch
-instead, `score / (k - 1)` — 0.27 for 0.82 — which lands in the same place.)
+the middle of its scale — on this preset, `P(serious) + P(severe)`, computed as
+`sum(P[i] for i in range(k // 2, k))`, the same rule `LayaGuardrail` carried inline at the 0.3.21 and
+0.3.22 revisions this page reports — and on four levels that probability cannot exceed half the level
+it came from, because `P[2] + P[3] <= (P[1] + 2*P[2] + 3*P[3]) / 2`. A level under 1.0 therefore caps
+under the default 0.5 threshold whatever distribution sat behind it, and all three levels here are
+under 1.0 — they are printed rounded to two decimals, and no rounding carries 0.82 past 1.0. So the
+gate probability for c011, c012 and c042 caps at about 0.41, 0.39 and 0.26, and none of the three
+could have flagged `harm_severity` at all. (An answer carrying no distribution takes the
+normalised-level branch instead, `score / (k - 1)` — 0.27 for 0.82 — which lands in the same place.)
 
 The `harm_severity` column still moves where `prompt_injection` does not — 0.82 and 0.78 on c011 and
 c012, against 0.51 on c042 — though #781 reports that column without defining a decision threshold for
