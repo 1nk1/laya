@@ -3,6 +3,7 @@ import type { Batch } from "./providers.js";
 import type { QuestionDef, SystemOneResult } from "./agent.js";
 
 export const DEFAULT_SHORTLIST_K = 20;
+export const DEFAULT_SHORTLIST_MAXSIZE = 4096;
 
 export type EmbedFn = (texts: string[]) => Promise<number[][]> | number[][];
 
@@ -12,6 +13,21 @@ export interface ShortlistMeta {
   k: number;
   n: number;
   passthrough: boolean;
+}
+
+export interface CacheInfo {
+  size: number;
+  maxsize: number;
+  hits: number;
+  misses: number;
+}
+
+export interface CachedEmbedFn {
+  (texts: string[]): Promise<number[][]>;
+  cacheInfo(): CacheInfo;
+  cache_info(): CacheInfo;
+  cacheClear(): void;
+  cache_clear(): void;
 }
 
 function checkK(k: unknown): number {
@@ -225,3 +241,136 @@ export function embedFnFromAgent(agent: unknown, maxLength = 512, batchSize = 32
     return out;
   };
 }
+
+/**
+ * Wrap `embedFn` with an LRU cache keyed by text.
+ *
+ * Shortlisting embeds the query plus every option on every call. When the option
+ * set is fixed -- a label list, an intent taxonomy -- those rows never change
+ * between requests and are re-embedded every time. Wrapping the embedder once
+ * leaves the first call unchanged and reduces each repeat to embedding the new
+ * query alone.
+ *
+ * A cold cache costs the same number of embedder calls as the unwrapped function:
+ * the misses are deduplicated and embedded in one call. Nothing is cached when
+ * the embedder throws or returns a bad shape, so a transient failure cannot
+ * poison the cache.
+ *
+ * @param embedFn The underlying embedding function
+ * @param maxsize Maximum number of distinct text rows to cache (default: 4096)
+ */
+export function cachedEmbedFn(embedFn: EmbedFn, maxsize: number = DEFAULT_SHORTLIST_MAXSIZE): CachedEmbedFn {
+  if (typeof embedFn !== "function") {
+    throw new TypeError("embed_fn must be callable");
+  }
+  if (typeof maxsize !== "number" || !Number.isInteger(maxsize) || maxsize < 1) {
+    throw new Error(`maxsize must be a positive integer, got ${JSON.stringify(maxsize)}`);
+  }
+
+  const rowsByText = new Map<string, number[]>();
+  let hitsTotal = 0;
+  let missesTotal = 0;
+  let generation = 0;
+
+  const fn = async (texts: string[]): Promise<number[][]> => {
+    const keys = (texts ?? []).map((t) => (t === null || t === undefined ? "" : String(t)));
+    if (keys.length === 0) return [];
+
+    const found = new Map<string, number[]>();
+    let hitsThisCall = 0;
+
+    for (const key of keys) {
+      const row = rowsByText.get(key);
+      if (row !== undefined) {
+        found.set(key, row);
+        hitsThisCall++;
+      }
+    }
+
+    hitsTotal += hitsThisCall;
+    missesTotal += keys.length - hitsThisCall;
+
+    const missing: string[] = [];
+    const seenMissing = new Set<string>();
+    for (const key of keys) {
+      if (!found.has(key) && !seenMissing.has(key)) {
+        seenMissing.add(key);
+        missing.push(key);
+      }
+    }
+
+    const genAtStart = generation;
+
+    if (missing.length > 0) {
+      const fresh = await embeddings(embedFn, missing);
+
+      // Validate dimensions of all returned rows before caching any
+      const heldDim = rowsByText.size > 0 ? rowsByText.values().next().value?.length : undefined;
+      const expectedDim = heldDim ?? (fresh.length > 0 ? fresh[0]?.length : undefined);
+
+      for (let i = 0; i < fresh.length; i++) {
+        const rowDim = fresh[i]?.length ?? 0;
+        if (expectedDim !== undefined && rowDim !== expectedDim) {
+          if (heldDim !== undefined) {
+            throw new Error(
+              `the embedder returned dim ${rowDim}, but the cache holds dim ${heldDim}; call cacheClear() if the model behind it changed`,
+            );
+          } else {
+            throw new Error(
+              `the embedder returned inconsistent embedding dimensions (${expectedDim} vs ${rowDim})`,
+            );
+          }
+        }
+      }
+
+      for (let i = 0; i < missing.length; i++) {
+        found.set(missing[i], fresh[i]);
+      }
+
+      // If cacheClear() ran while embeddings() was pending, do not restore entries into the cleared cache
+      if (generation !== genAtStart) {
+        return keys.map((key) => [...(found.get(key) ?? [])]);
+      }
+    }
+
+    // Apply recency updates and evictions in input key order
+    for (const key of keys) {
+      const row = found.get(key);
+      if (row !== undefined) {
+        rowsByText.delete(key);
+        rowsByText.set(key, row);
+        while (rowsByText.size > maxsize) {
+          const victim = rowsByText.keys().next().value!;
+          rowsByText.delete(victim);
+        }
+      }
+    }
+
+    return keys.map((key) => [...(found.get(key) ?? [])]);
+  };
+
+  const cacheInfo = (): CacheInfo => ({
+    size: rowsByText.size,
+    maxsize,
+    hits: hitsTotal,
+    misses: missesTotal,
+  });
+
+  const cacheClear = (): void => {
+    rowsByText.clear();
+    hitsTotal = 0;
+    missesTotal = 0;
+    generation++;
+  };
+
+  const cachedResult = fn as CachedEmbedFn;
+  cachedResult.cacheInfo = cacheInfo;
+  cachedResult.cache_info = cacheInfo;
+  cachedResult.cacheClear = cacheClear;
+  cachedResult.cache_clear = cacheClear;
+
+  return cachedResult;
+}
+
+export const cached = cachedEmbedFn;
+
