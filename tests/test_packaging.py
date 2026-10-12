@@ -3,11 +3,16 @@
 Text parsing, not tomllib: the floor is 3.10 and tomllib arrives in 3.11.
 """
 import ast
+import contextlib
 import fnmatch
+import importlib.util
+import io
 import os
 import re
 import shlex
+import subprocess
 import sys
+import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -339,6 +344,91 @@ for label, source, job in (("ci/linux", workflow, "test"),
                job_block is not None and re.search(r"^\s+run:\s+python scripts/test_suites\.py\s*$",
                                                    job_block.group(1), re.M) is not None,
                "expected run: python scripts/test_suites.py in %s" % job)
+
+
+# -------------------------------------------------- the runner's own failure surface
+# A suite does not always get to report. `tests (windows)` has printed
+# `1 suite invocation(s) failed: tests/test_runtime_fixes.py` with not one line of that suite's
+# output above it, and no exit status below -- a child's stdout is a pipe, CPython block-buffers a
+# pipe, and a process that leaves by a native fault never flushes. So the log could not tell a
+# crash from a failed assertion, which is a red lane nobody can diagnose. Pinned on both halves:
+# the child runs unbuffered so its evidence reaches the log first, and the summary carries the exit
+# status.
+_runner_spec = importlib.util.spec_from_file_location(
+    "laya_test_suites", os.path.join(ROOT, "scripts", "test_suites.py"))
+suites_runner = importlib.util.module_from_spec(_runner_spec)
+_runner_spec.loader.exec_module(suites_runner)
+
+# Through `getattr`, so a runner that lacks the surface reports which check failed instead of
+# aborting the suite on an AttributeError -- the thing this section exists to make impossible.
+check("harness/the child runs unbuffered",
+      getattr(suites_runner, "CHILD_ENV", {}).get("PYTHONUNBUFFERED"), "1")
+# The banner labels stay the bare suite paths the CI log has always printed, so a reader who greps
+# for a suite by name still finds it after the runner's own command line changes.
+check("harness/a command still labels as its suite paths",
+      suites_runner._commands()[0][1:], [suites_runner.SCRIPT_SUITES[0]])
+
+# The mechanism itself, not just the constant that asks for it: a child that dies by `os._exit`
+# has already written its line when the runner's env is used, and loses it when it is not.
+_DEATH = "import os; print('EVIDENCE'); os._exit(7)"
+
+
+def _die(env):
+    proc = subprocess.run([sys.executable, "-c", _DEATH], stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, env=env)
+    return proc.stdout.decode(), proc.returncode
+
+
+_strip = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+_buffered_out, _buffered_rc = _die(_strip)
+_unbuffered_out, _unbuffered_rc = _die(getattr(suites_runner, "CHILD_ENV", None) or _strip)
+check_true("harness/a buffered child loses its evidence when it dies",
+           "EVIDENCE" not in _buffered_out, repr(_buffered_out))
+check_true("harness/the unbuffered child has already written it",
+           "EVIDENCE" in _unbuffered_out, repr(_unbuffered_out))
+check("harness/and the exit status survives either way",
+      (_buffered_rc, _unbuffered_rc), (7, 7))
+
+_death_note = getattr(suites_runner, "_death_note", None)
+
+
+def _note(code):
+    return _death_note(code) if _death_note is not None else None
+
+
+check("harness/a plain failure says exit", _note(1), "exit 1")
+check("harness/a signal says what did it", _note(-11), "killed by signal 11")
+check("harness/an NTSTATUS prints the form a reader recognises",
+      _note(3221225477), "exit 3221225477 (0xC0000005)")
+
+# End to end, because the note and the env only matter if `main` uses them: every child faked to
+# crash the way the Windows lane does, with the call recorded. Nothing here runs a real suite.
+_real_run = suites_runner.subprocess.run
+_calls = []
+
+
+def _crash(*args, **kwargs):
+    _calls.append(kwargs)
+    return types.SimpleNamespace(returncode=3221225477)
+
+
+suites_runner.subprocess.run = _crash
+try:
+    _summary_buf = io.StringIO()
+    with contextlib.redirect_stdout(_summary_buf):
+        _main_rc = suites_runner.main([])
+finally:
+    suites_runner.subprocess.run = _real_run
+check_true("harness/every child is given the unbuffered env",
+           _calls and all((call.get("env") or {}).get("PYTHONUNBUFFERED") == "1" for call in _calls),
+           "%d children, %d of them unbuffered"
+           % (len(_calls), sum(1 for c in _calls if (c.get("env") or {}).get("PYTHONUNBUFFERED"))))
+_summary = _summary_buf.getvalue()
+_last_line = (_summary.strip().splitlines() or ["<empty>"])[-1]
+check("harness/a crashed suite still fails the run", _main_rc, 1)
+check_true("harness/the summary names the suite", "tests/test_router.py" in _summary, _last_line)
+check_true("harness/the summary says how it died",
+           "exit 3221225477 (0xC0000005)" in _summary, _last_line)
 
 
 # -------------------------------------------------- CONTRIBUTING.md's "Running the tests" section
