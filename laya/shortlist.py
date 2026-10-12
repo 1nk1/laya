@@ -87,12 +87,16 @@ def predict_shortlist(
     choice and non-choice questions keep theirs.
 
     The returned dict is the model result plus a ``shortlist`` entry. Probabilities
-    on a shortlisted choice are over the kept labels only. ``shortlist[qid]`` holds
-    ``labels``, ``scores``, ``k``, ``n``, and ``passthrough``. ``labels`` is the rank
-    order a shortlist produced, or the criteria order itself when ``passthrough`` is
-    set and no ranking ran; ``scores`` is the signed cosine of each kept label in that
-    order -- negative included, never clamped to 0 -- or ``None`` when nothing was
-    dropped.
+    on a shortlisted choice are over the kept labels only. ``shortlist`` has an entry
+    for each choice question; a non-choice id is absent, because no ranking ran for it.
+    Each entry holds ``labels``, ``scores``, ``k``, ``n``, and ``passthrough``.
+    ``labels`` is the rank order a shortlist produced, or the criteria order itself when
+    ``passthrough`` is set and no ranking ran, and it always holds ``min(k, n)`` labels;
+    ``scores`` is the signed cosine of each kept label in that order -- negative
+    included, never clamped to 0 -- or ``None`` when nothing was dropped. Neither
+    ``k`` nor ``n`` counts what ``labels`` kept: ``k`` is the cap the caller asked
+    for, which a question with fewer labels than that does not reach, and ``n`` is
+    the caller's label count before any narrowing.
 
     Extra keyword arguments are forwarded to ``predict`` / ``system_one`` (for
     example ``model=`` on a ``Router``).
@@ -164,10 +168,14 @@ def predict_tournament(
     onto them would silently move options between slots, so it is dropped instead. A
     choice that needed no round keeps its order.
 
-    The returned dict is the final call's result plus a ``tournament`` entry.
-    ``tournament[qid]`` holds ``labels`` (the finalists, in criteria order), ``n`` (the
-    label count) and ``rounds`` for each choice question. Probabilities, confidences and
-    ``usage`` come from the final call, so a tournament choice's probabilities are over its
+    The returned dict is the final call's result plus a ``tournament`` entry. It has
+    an entry for each choice question -- a non-choice id is absent, since such a
+    question plays no round -- holding ``labels`` (the finalists, in criteria order),
+    ``n`` and ``rounds``. ``n`` is the caller's label count before the first round,
+    the same meaning as in ``predict_shortlist``'s metadata: it says how wide the
+    field was, not how many finalists came out of it, so on a choice that played a
+    round it is larger than ``len(labels)``. Probabilities, confidences and ``usage``
+    come from the final call, so a tournament choice's probabilities are over its
     finalists only.
 
     Extra keyword arguments are forwarded to every call (for example ``model=`` on a ``Router``).
