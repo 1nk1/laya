@@ -627,6 +627,71 @@ check_raises("validation/hook method must be callable", TypeError,
              lambda: normalise_hooks(hooks=[BadMethod()]))
 
 
+# ------------------------------------------------- docs/hooks/errors.md's table, executed
+# The "Configuration errors" table is the page's only statement about which bad configuration
+# raises what, and its `example` column is the part a reader copies. Row "non-callable event"
+# used to read `on_predict_start = 5`, which is the row beneath it: both raise
+# `on_predict_start must be callable, got int` from `_StartAdapter.__init__`, so the branch that
+# validates an event attribute on a `hooks=` entry (laya/hooks.py:186-190) was unreachable from
+# the page while the page still claimed it. This gate parses the table, calls
+# `normalise_hooks(<example>)` for every row exactly as the page spells it, and pins the message
+# each row produces -- a row whose example drifts onto another row's error fails here rather
+# than in a reader's terminal. Weight-free: `normalise_hooks` builds no model.
+import re as _re  # noqa: E402
+from pathlib import Path as _CfgPath  # noqa: E402
+
+_cfg_doc = _CfgPath(__file__).resolve().parents[1] / "docs" / "hooks" / "errors.md"
+_cfg_section = _cfg_doc.read_text(encoding="utf-8").split("## Configuration errors", 1)[1] \
+    .split("\n## ", 1)[0]
+_cfg_rows = [[c.strip() for c in line.strip().strip("|").split("|")]
+             for line in _cfg_section.split("\n") if line.strip().startswith("|")][2:]
+
+
+def _cfg_message(cells):
+    """The TypeError text one row's example raises, or 'NO ERROR' if it raises nothing."""
+    parts = _re.split(r"`\s*,\s*with\s*`", cells[2].strip("`"), maxsplit=1)
+    ns = {"normalise_hooks": normalise_hooks, "MyHook": type("MyHook", (), {})}
+    if len(parts) > 1:
+        exec(parts[1], ns)                       # the class or value the example needs
+    try:
+        eval("normalise_hooks(%s)" % parts[0], ns)
+    except TypeError as exc:
+        return str(exc)
+    return "NO ERROR"
+
+
+_cfg_events = "on_predict_start, on_predict_end, on_route, on_load, on_evict, on_error"
+_cfg_implements = ("hooks entries must implement at least one of %s; got %%s. "
+                   "Pass a plain callable as on_predict_start=/on_predict_end= instead."
+                   % _cfg_events)
+_CFG_EXPECT = [
+    ("class instead of instance", "hooks entries must be instances, not classes; got MyHook. "
+                                  "Instantiate it first."),
+    ("no lifecycle method", _cfg_implements % "object"),
+    ("non-callable event", "hooks entry BadMethod.on_predict_start must be callable, got int"),
+    ("non-callable convenience hook", "on_predict_start must be callable, got int"),
+    ("plain callable in `hooks=`", _cfg_implements % "function"),
+]
+
+_cfg_msgs = [_cfg_message(c) for c in _cfg_rows]
+check("errors.md's configuration table still names these five cases, in order",
+      [c[0] for c in _cfg_rows], [c for c, _ in _CFG_EXPECT])
+check("every row is raised at construction, as its column claims",
+      sorted({c[1] for c in _cfg_rows}), ["construction"])
+for (case, want), got in zip(_CFG_EXPECT, _cfg_msgs):
+    check("errors.md row %r reaches its own message" % case, got, want)
+check("the event-attribute row does not raise the convenience hook's error",
+      _cfg_msgs[2] == _cfg_msgs[3], False)
+def _cfg_check_id(msg):
+    """The check a message came from, with the `got <type>` token it embeds stripped."""
+    return msg.split("; got")[0]
+
+
+check("an object and a lambda trip the same check, and no two rows share a message",
+      [_cfg_check_id(_cfg_msgs[1]) == _cfg_check_id(_cfg_msgs[4]), len(set(_cfg_msgs))],
+      [True, 5])
+
+
 # --------------------------------------------------------------- Router
 class RouteHook:
     def __init__(self):

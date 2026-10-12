@@ -112,7 +112,7 @@ Bad configuration fails fast with `TypeError`, before any inference:
 |---|---|---|
 | class instead of instance | construction | `hooks=[MyHook]` |
 | no lifecycle method | construction | `hooks=[object()]` |
-| non-callable event | construction | `on_predict_start = 5` |
+| non-callable event | construction | `hooks=[BadMethod()]`, with `class BadMethod: on_predict_start = 5` |
 | non-callable convenience hook | construction | `on_predict_start=123` |
 | plain callable in `hooks=` | construction | `hooks=[lambda ctx: None]` |
 
