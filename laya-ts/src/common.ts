@@ -396,9 +396,34 @@ export function flagLowConfidence(
   }
 }
 export const TEMP_MIN = 0.5, TEMP_MAX = 5.0;
+/**
+ * A usable temperature: `t` confined to [`TEMP_MIN`, `TEMP_MAX`], falling back to the neutral 1.0
+ * when it is not a number. Parity with py `common.clamp_temperature`, which asks that question with
+ * `float()`.
+ *
+ * `Number()` asks it more loosely, so a value that is not a number at all reaches the clamp as one.
+ * Measured as `clamp_temperature(t)` / `clampTemperature(t)` over the values a checkpoint config can
+ * hold:
+ *
+ *     t        py     ts (before)
+ *     " "      1.0    0.5     Number(" ") is 0, float(" ") raises
+ *     []       1.0    0.5     Number([]) is 0
+ *     [2]      1.0    2.0     Number([2]) is 2
+ *     ["2"]    1.0    2.0     Number(["2"]) is 2
+ *
+ * The nested lists are the worse half: 2.0 is inside the range, so the loader's own diagnostic
+ * compared it, found it equal, and said nothing about the value the reference refuses outright.
+ * Whichever number landed then scales the logits every published confidence comes from. Take an
+ * answer the neutral 1.0 puts at 0.60: the port's old 0.5 reads it as 0.69 among two options and
+ * 0.92 among six, and its old 2.0 reads the same answer as 0.55 and 0.35. So one malformed field
+ * made a coin flip look certain or a real preference look like noise, depending on which way
+ * `Number()` happened to coerce it. Only a number, or a string that holds one, reaches the clamp.
+ */
 export function clampTemperature(t: unknown): number {
-  if (t === null || t === undefined || t === "" || typeof t === "boolean") return 1.0;
-  const f = typeof t === "number" ? t : Number(t);
+  let f: number;
+  if (typeof t === "number" || typeof t === "bigint") f = Number(t);
+  else if (typeof t === "string" && t.trim() !== "") f = Number(t);
+  else return 1.0;
   if (!Number.isFinite(f)) return 1.0;
   return Math.min(TEMP_MAX, Math.max(TEMP_MIN, f));
 }
