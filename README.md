@@ -94,27 +94,25 @@ The shipped checkpoints work zero-shot, but fine-tuning on decisions from your o
 
 **[nandhakishorm.github.io/laya](https://nandhakishorm.github.io/laya/)**: guides for [prediction hooks](https://nandhakishorm.github.io/laya/hooks/), [schema-driven decisions](https://nandhakishorm.github.io/laya/structured/), [Docker](https://nandhakishorm.github.io/laya/docker/) and [LangChain and LangGraph](https://nandhakishorm.github.io/laya/langchain/), plus a full [API reference](https://nandhakishorm.github.io/laya/reference/).
 
-## What's new in 0.4.5
+## What's new in 0.4.6
 
+* **`laya.load(..., backend="onnx")` is annotated as what it returns.** It builds an `ONNXAgent`,
+  which shares the hook machinery with `Agent` but is not a subclass of it, so a caller who trusted
+  the `-> Agent` annotation and reached for the PyTorch-side controls got an `AttributeError` the
+  type checker called impossible (#1166).
+* **`Router.route_batch` rejects a `None` state before loading a checkpoint**, naming the request
+  index instead of failing later inside `Agent.predict_batch` (#1165).
+
+Carried over from 0.4.5, an hour earlier, because they are the ones to read before upgrading:
+
+* **laya-ts routes unidentified text to multilingual**, matching Python since 0.4.0. This changes
+  the default: pass `new Router({ default: "english" })` for the old fallback (#1157). It also
+  clears a stale `low_confidence` marker on a reused result, gating on the same number Python does
+  (#1153, #910).
 * **A ragged calibration pool keeps its fit.** `fit_one_temperature` squared off rows of different
   option counts with a pad value that then competed in the same softmax, so a question type pooled
   across option-count bands could report the neutral `1.0`, or the ceiling, for a fit that ran.
-  Rows are now grouped by option count and the search on log T is bounded. Single-width fits are
-  unchanged to twelve decimal places (#1158).
-* **laya-ts routes unidentified text to multilingual**, matching Python since 0.4.0. This changes
-  the default: pass `new Router({ default: "english" })` for the old fallback (#1157).
-* **laya-ts clears a stale `low_confidence` marker** when a reused result is re-evaluated at a more
-  permissive threshold, `0.0` included, gating on the same number Python does (#1153, #910).
-* **Windows CI runs the shared suite list.** Its inline copy had drifted to 55 of the 87 suites and
-  accepted missing suite files silently (#1156).
-* **`cached_embed_fn` says what it caches.** A transient `NaN` row is repaired to zeros and the
-  repaired row is cached, so that option ranks as a zero vector until `cache_clear()`, while the
-  unwrapped embedder recovers on its own (#1161).
-* **Docs**: three snippets that could not run as written now can (a missing `sys`, a missing
-  `hashlib, json`, a configuration row whose example raised the row below it), the option ceiling
-  is published with the instruction it was measured with, and the `run_id` count, the empty-batch
-  `ctx.usage`, the `revisions` block per route and the whole-model quantization failure are each
-  stated as measured (#1151, #1154, #1155, #1159, #1162, #1163, #1150, #1160, #1164).
+  Single-width fits are unchanged to twelve decimal places (#1158).
 
 Earlier releases are in the [GitHub releases](https://github.com/NandhaKishorM/laya/releases).
 
