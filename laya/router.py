@@ -1599,6 +1599,7 @@ class Router(HookRegistry):
         on_predict_start=None,
         on_predict_end=None,
         hooks_raise: Optional[bool] = None,
+        diagnostics: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Route and execute a heterogeneous request batch with minimal model churn.
 
@@ -1641,6 +1642,13 @@ class Router(HookRegistry):
             on_predict_start (PredictHookArg): Plain callable or sequence of callables for start events.
             on_predict_end (PredictHookArg): Plain callable or sequence of callables for end events.
             hooks_raise: Override the Router's ``hooks_raise`` policy for this call.
+            diagnostics: Optional dict that receives the per-group sort outcome under the key
+                ``"sort_by_length"`` once the batch has run: how many question groups actually
+                reached an agent, how many of those could reorder, and the smallest / largest
+                group size. The reorder switches per group inside this call, so a caller that
+                wants to say whether the knob did anything (#1111) reads this instead of
+                guessing from the request count beforehand. Untouched when ``sort_by_length``
+                is false or no group reached an agent.
 
         Returns:
             One normal Router prediction result per request, in the same order as the input.
@@ -1664,6 +1672,11 @@ class Router(HookRegistry):
         # `predict` returns as it is.
         results: List[Any] = [None] * len(requests)
         answered = 0
+        # The per-group sort outcome, kept only for a caller that asked for it (#1111): the
+        # reorder switches per question group inside the loop below, and no caller outside
+        # this method can see the group sizes it forms.
+        sort_report = ({"groups": 0, "reordered": 0, "smallest": None, "largest": None}
+                       if sort_by_length and diagnostics is not None else None)
         # `compose_hooks`, not `list(self.hooks)`: the composition `predict` uses. It merges
         # `set_default_hooks` defaults, then installed hooks, then this call's `hooks`,
         # `on_predict_start` and `on_predict_end`. Reading the instance list alone silently
@@ -1783,6 +1796,22 @@ class Router(HookRegistry):
                             % (len(batch_results), len(items))
                         )
 
+                    if sort_report is not None:
+                        # What this group actually did with the knob: the agent reorders only
+                        # when `batch_size` clears its own `1 < chunk < len(states)` gate
+                        # (agent.py:1519, onnx_agent.py:761) over this group's states. A group
+                        # whose agent predates the knob (#294) reports as unsorted, not as an
+                        # error -- the run answered, just at one state's width.
+                        n = len(items)
+                        reorders = bool("sort_by_length" in batch_kwargs and batch_size
+                                        and batch_size > 1 and batch_size < n)
+                        sort_report["groups"] += 1
+                        sort_report["reordered"] += int(reorders)
+                        if sort_report["smallest"] is None or n < sort_report["smallest"]:
+                            sort_report["smallest"] = n
+                        if sort_report["largest"] is None or n > sort_report["largest"]:
+                            sort_report["largest"] = n
+
                     for (i, ctx), result in zip(items, batch_results):
                         result["routing"] = dict(decisions[i])
                         ctx.results = [result]
@@ -1821,6 +1850,8 @@ class Router(HookRegistry):
         if answered != len(requests):
             raise RuntimeError("internal error: batch execution did not produce every result")
 
+        if sort_report is not None:
+            diagnostics["sort_by_length"] = sort_report
         return results
 
     predict_many = predict_batch

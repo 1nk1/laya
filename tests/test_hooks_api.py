@@ -158,6 +158,8 @@ check_param("Agent.predict_batch", Agent.predict_batch, "batch_size", None)
 check_param("Agent.predict_batch", Agent.predict_batch, "sort_by_length", False)
 check_param("Router.predict_batch", Router.predict_batch, "batch_size", None)
 check_param("Router.predict_batch", Router.predict_batch, "sort_by_length", False)
+# the #1111 report: an out-dict the batch fills with the per-group sort outcome
+check_param("Router.predict_batch", Router.predict_batch, "diagnostics", None)
 
 # per-call token-budget overrides
 for label, fn in (("Agent.predict_batch", Agent.predict_batch),
