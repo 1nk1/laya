@@ -94,26 +94,31 @@ The shipped checkpoints work zero-shot, but fine-tuning on decisions from your o
 
 **[nandhakishorm.github.io/laya](https://nandhakishorm.github.io/laya/)**: guides for [prediction hooks](https://nandhakishorm.github.io/laya/hooks/), [schema-driven decisions](https://nandhakishorm.github.io/laya/structured/), [Docker](https://nandhakishorm.github.io/laya/docker/) and [LangChain and LangGraph](https://nandhakishorm.github.io/laya/langchain/), plus a full [API reference](https://nandhakishorm.github.io/laya/reference/).
 
-## What's new in 0.4.3
+## What's new in 0.4.4
 
-* **The TypeScript SDK accepts the server's own answers again.** `sdk/typescript`'s response
-  validation rejected the `x_jev_confidence` 0.4.2 added, which had the CI lane red since that
-  release; the field is now typed, validated in `[0, 1]`, and absent on `noul` (#1072).
-* **`laya.jev_confidence(answer)`** is a public export, so the formula behind the served
-  `x_jev_confidence` can be applied to a direct `predict()` result (#1083, #302).
-* **Choices past 100 options over HTTP.** `LAYA_TOURNAMENT_GROUP=N` answers a larger `choice` by
-  elimination in groups of N, names every option in `probabilities`, and reports the finalists
-  under `x_tournament`. Off unless set (#1073, #302).
-* **`model: null` is accepted by all four MCP tools**, which is what the shared validator always
-  meant by `auto` (#1105, #1102).
-* **Fixes**: the shortlist cache's width guard reads under the lock it documents (#1104); a falsy
-  non-object `temperature_by_options` is refused instead of silently loading empty (#1109);
-  `evaluate()` stops forwarding `model=` to a runner whose `predict` predates it (#1112, #1107);
-  a question id literally called `questions` is no longer read as a wrapper (#1113, #1110).
-* **laya-ts** gains `predictTournament` and a cached embedder, matching Python and Java (#1108,
-  #1117), and its `min_confidence` bucket-key error now names `default` (#1106, #1100).
-* **Java test floors** are remeasured on the merged tree: 1168 and 1169, up from 1007 and 1008,
-  closing 161 tests of coverage the floor could not see (#1090).
+* **laya-go**: a pure-Go tokenizer and language detection, standard library only, with its own
+  advisory parity lane that re-records every golden from the Python package at each commit and
+  fails on a skipped test (#1145).
+* **An out-of-range MCP batch control is reported, not dropped.** `min_confidence=-0.5` or
+  `hooks_timeout=-1` reached the tool as "no gate" and "no deadline"; both now come back named
+  from the validator (#1118).
+* **`min_confidence=0.0` clears a stale abstention marker** instead of returning early, which is
+  what `flag_low_confidence` always documented (#1119, #910).
+* **`laya --sort-by-length` judges its note per checkpoint group.** The reorder switches inside
+  each group, so a file routing to two checkpoints could reorder nothing while the old file-wide
+  condition held and printed nothing. `Router.predict_batch` takes a `diagnostics` dict that
+  reports it (#1114, #1111).
+* **`backend="eager"` pushes an existing replacement aside** rather than reporting itself while a
+  graph backend still answers every request, and restores it on uninstall (#1131).
+* **laya-ts hook timeouts name the hook and the event**, with Python's `TimeoutError` and message
+  (#1140).
+* **Evaluation harness**: a mistyped `--model` fails as a usage error before any download (#1120),
+  an ONNX run records the commit that answered (#1122), a student's abstention is read from the
+  gate's own vocabulary (#1134), and an unreadable runner signature answers both guards the same
+  way (#1112).
+* **Docs**: measured option-budget ceilings for `/v1/systemone`, the `harm_severity` column's unit
+  and why it cannot flag at the default threshold, the AOTInductor route now that it packages, the
+  TileLang CPU lowering, and `/health`'s nine-key shape under idle unloading.
 
 Earlier releases are in the [GitHub releases](https://github.com/NandhaKishorM/laya/releases).
 
