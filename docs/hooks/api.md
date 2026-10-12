@@ -70,6 +70,8 @@ The key has to cover everything the answer depends on, and the hook has to cover
 call carries: hooks fire once per call, and `predict_batch` calls them with every state at once.
 
 ```python
+import hashlib, json
+
 CACHE = {}
 
 def key(ctx, index):
