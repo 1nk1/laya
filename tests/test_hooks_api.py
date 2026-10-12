@@ -571,6 +571,85 @@ for path, namespace in TAUGHT[1:]:
           key_of(namespace, cache_ctx(Q_ORDER_A, states=BATCH), 1),
           key_of(TAUGHT[0][1], cache_ctx(Q_ORDER_A, states=BATCH), 1))
 
+# ------------------------------------------- every taught copy imports what its body reads
+# `taught_cache` slices from `CACHE = {` and execs that in a namespace which already holds `json`
+# and `hashlib` -- the stand-in for the module-level imports the real `examples/hooks/cache.py`
+# has. So the exec never sees a page that dropped its import line, and `docs/hooks/api.md` had
+# none: the block on the page that documents `ctx.skip()` reads both names and imports neither,
+# which means the copy a reader pastes raises NameError on the first call while this suite stayed
+# green. Read the same block from its fence up, and require every standard-library name the exec'd
+# slice reads to be imported above it.
+import ast as _ast  # noqa: E402
+import builtins as _builtins  # noqa: E402
+
+
+def taught_head_and_body(path):
+    """`(head, body)` of one taught copy: `body` is what `taught_cache` execs, `head` its imports."""
+    with open(os.path.join(REPO, path), encoding="utf-8") as handle:
+        text = handle.read()
+    start = text.index("CACHE = {")
+    stop = len(text)
+    for cut in ("\nlaya.load", "\nagent = laya.load", "\n```"):
+        found = text.find(cut, start)
+        if found != -1:
+            stop = min(stop, found)
+    try:
+        head_start = text.rindex("```python", 0, start) + len("```python\n")
+    except ValueError:                       # a real module: the file's own head is the head
+        head_start = 0
+    return text[head_start:start], text[start:stop]
+
+
+def read_stdlib_names(src):
+    """Standard-library modules the slice reads but never binds -- a reader needs an import."""
+    tree = _ast.parse(src)
+    bound = set(dir(_builtins))
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.Import, _ast.ImportFrom)):
+            bound.update((a.asname or a.name).split(".")[0] for a in node.names)
+        elif isinstance(node, _ast.Name) and isinstance(node.ctx, (_ast.Store, _ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, _ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, _ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+    used = {n.id for n in _ast.walk(tree)
+            if isinstance(n, _ast.Name) and isinstance(n.ctx, _ast.Load)}
+    return sorted((used - bound) & set(sys.stdlib_module_names))
+
+
+def imported_names(head):
+    """What the head's import lines bind, parsed line by line so a fence-less head still counts."""
+    bound, unparsed = set(), []
+    for line in head.splitlines():
+        line = line.split("#")[0].strip()
+        if not (line.startswith("import ") or line.startswith("from ")):
+            continue
+        try:
+            node = _ast.parse(line).body[0]
+        except SyntaxError:
+            unparsed.append(line)
+            continue
+        if isinstance(node, _ast.Import):
+            bound.update((a.asname or a.name).split(".")[0] for a in node.names)
+        else:
+            bound.update(a.asname or a.name for a in node.names)
+    return sorted(bound), unparsed
+
+
+for _imports_path, _ in TAUGHT:
+    _head, _body = taught_head_and_body(_imports_path)
+    _bound, _unparsed = imported_names(_head)
+    check("%s/its import lines parse" % _imports_path, _unparsed, [])
+    # All four copies are the same pattern, so what they read is the same pair; pinning it keeps
+    # the missing-import check from passing vacuously if a copy ever stops using them.
+    check("%s/reads the same two stdlib names as the example" % _imports_path,
+          read_stdlib_names(_body), ["hashlib", "json"])
+    check("%s/imports every stdlib name its body reads" % _imports_path,
+          sorted(set(read_stdlib_names(_body)) - set(_bound)), [])
+
 
 # ------------------------------------------- what the cache example's own demo claims
 # The example closes by saying its two-state batch "is served", and nothing in its printed output
