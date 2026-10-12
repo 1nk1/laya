@@ -43,7 +43,7 @@ function makeRouter(extra: Record<string, unknown> = {}) {
       return { model: "laya-rl-agent", answers: {}, usage: { input_tokens: 5, output_tokens: 0 } };
     },
   });
-  const router = new Router({ loader, ...extra } as never);
+  const router = new Router({ default: "english", loader, ...extra } as never);
   return { router, calls };
 }
 

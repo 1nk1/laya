@@ -37,7 +37,7 @@ const makeRouter = (opts: Record<string, unknown> = {}) => {
       },
     };
   };
-  const router = new Router({ loader: loader as never, ...opts });
+  const router = new Router({ default: "english", loader: loader as never, ...opts });
   return { router, built, calls };
 };
 

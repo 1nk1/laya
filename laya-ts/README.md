@@ -16,7 +16,7 @@ python laya-ts/scripts/export_onnx.py --model-dir <ckpt> --out-dir ./model
 import { Agent, Router } from "laya-ts";
 
 const agent = await Agent.load("./model"); // local dir, or ("convaiinnovations/laya", { subfolder: "multilingual" })
-const router = new Router();
+const router = new Router({ default: "english" }); // this example attaches only the English checkpoint
 router.attach("english", agent);
 const out = await router.predict({ body: "charged twice, refund please" }, {
   intent: { type: "choice", instructions: "What does the customer want?", criteria: { refund: "money back", other: "anything else" } },
@@ -25,6 +25,12 @@ console.log(out.answers.intent);
 ```
 
 CUDA: `Agent.load("./model", { device: "cuda" })` (falls back to CPU with a warning).
+
+`new Router()` uses the multilingual checkpoint for text whose language the detector cannot
+identify, including text with no letters, matching Python 0.4.0. Identified English still routes
+to the English checkpoint, and detected non-Latin scripts route to multilingual. Set
+`new Router({ default: "english" })` to restore the earlier fallback; explicit `model` and `lang`
+options still take precedence.
 
 ## Browser (WebGPU → WASM fallback)
 

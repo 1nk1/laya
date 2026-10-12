@@ -3,6 +3,44 @@ import { Router, normaliseName } from "../src/router.js";
 describe("router", () => {
   it("normalises aliases", () => { expect(normaliseName("en")).toBe("english"); });
   it("rejects unknown model", () => { expect(() => normaliseName("jev-1")).toThrow(); });
+  it.each(["refund", "12345 ???", { body: "refund" }])("uses multilingual for unidentified state %j", (state) => {
+    const r = new Router();
+    const decision = r.route(state, {});
+    expect(r.default).toBe("multilingual");
+    expect(decision.detection?.languageUndecided).toBe(true);
+    expect(decision.model).toBe("multilingual");
+    expect(decision.reason).toContain("using default (multilingual)");
+    expect(r.loaded).toEqual([]);
+  });
+  it.each(["english", "multilingual"])("applies default %s only to unidentified text", (fallback) => {
+    const r = new Router({ default: fallback });
+    expect(r.route("refund", {}).model).toBe(fallback);
+    expect(r.route("Please refund the duplicate charge on the invoice", {}).model).toBe("english");
+    expect(r.route("मुझसे दो बार शुल्क लिया गया", {}).model).toBe("multilingual");
+    expect(r.route("refund", {}, { lang: "en" }).model).toBe("english");
+    expect(r.route("refund", {}, { model: "typed-decisions" }).model).toBe("typed-decisions");
+  });
+  it("uses the default in a mixed routing batch", () => {
+    const r = new Router();
+    const decisions = r.routeBatch([
+      { state: "refund", questions: {} },
+      { state: "Please refund the duplicate charge on the invoice", questions: {} },
+    ]);
+    expect(decisions.map((d) => d.model)).toEqual(["multilingual", "english"]);
+    expect(r.loaded).toEqual([]);
+  });
+  it("loads the multilingual checkpoint when predicting unidentified text", async () => {
+    const loader = vi.fn(async () => ({
+      async systemOne() {
+        return { model: "laya-rl-agent", answers: {}, usage: { input_tokens: 5, output_tokens: 0 } };
+      },
+    }));
+    const r = new Router({ loader });
+    const result = await r.predict("refund", { q: { type: "noul", instructions: "?" } });
+    expect(loader).toHaveBeenCalledWith("multilingual", r.models.multilingual);
+    expect(result.routing.model).toBe("multilingual");
+    expect(r.loaded).toEqual(["multilingual"]);
+  });
   it("routes hindi script to multilingual without loading", () => {
     const r = new Router();
     expect(r.route({ body: "मुझसे दो बार शुल्क लिया गया" }, {}).model).toBe("multilingual");
