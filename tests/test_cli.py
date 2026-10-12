@@ -130,6 +130,15 @@ class SecondRequestFails(AlwaysBrokenRouter):
         return StubDecision()
 
 
+class FirstRequestFails(SecondRequestFails):
+    def route(self, state, **kwargs):
+        if self.count:
+            self.count += 1
+            return StubDecision()
+        self.count += 1
+        raise OSError("connection failed")
+
+
 broken = AlwaysBrokenRouter()
 code, out, err, stub = run_session(["first request", "second request"], [], router=broken)
 check("interactive: a handled failure exits 2, not 0", code == 2, "got %r" % code)
@@ -145,6 +154,11 @@ check("interactive: a clean session routes both lines",
 mixed = SecondRequestFails()
 code, out, err, stub = run_session(["ok", "bad"], [], router=mixed)
 check("interactive: one failed request is enough for exit 2", code == 2, "got %r" % code)
+
+mixed = FirstRequestFails()
+code, out, err, stub = run_session(["bad", "ok"], [], router=mixed)
+check("interactive: a later success does not erase an earlier failure",
+      code == 2 and mixed.count == 2, "code %r, %d calls" % (code, mixed.count))
 
 code, out, err, stub = run_session(["quit"], [], router=AlwaysBrokenRouter())
 check("interactive: leaving the prompt before a request exits 0", code == 0, "got %r" % code)
