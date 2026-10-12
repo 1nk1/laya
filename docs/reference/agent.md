@@ -62,7 +62,11 @@ fbgemm was faster on that CPU (0.39 s) and still moved the score, to 0.15. Valid
 probabilities on your own data.
 
 Do not quantize the whole `agent.model`. That replaces the decision head's `nn.Linear` layers
-with dynamically quantized linears, whose `weight` is a method rather than a tensor. The head
-is an `nn.TransformerEncoderLayer`, and its fast path reads `.device` on those weights, so
-`predict` raises `AttributeError: 'function' object has no attribute 'device'`. Leave the
-head in fp32.
+with dynamically quantized linears, whose `weight` is a method rather than a tensor. `act_head[0]`
+is one of them, and `laya/common.py::DecisionModel.forward` reads `.dtype` off its `weight` whenever
+autocast is off, so `predict` raises
+`AttributeError: 'function' object has no attribute 'dtype'`. The stack above that Linear --
+`agent.model.head`, an `nn.TransformerEncoder` of `head_layers` `nn.TransformerEncoderLayer`s
+(`laya/common.py::DecisionModel.__init__`), and absent entirely when `head_layers` is 0 -- is what
+"the decision head" usually names, and it is not the module that fails. Either way,
+leave the head in fp32.
