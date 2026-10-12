@@ -329,10 +329,36 @@ export function resolveMinConfidence(
 }
 
 /**
+ * The number the abstention gate compares against the threshold, or null if there is none.
+ *
+ * Mirrors Python `laya.confidence._gate_confidence` exactly, including the two places it is
+ * easy to get wrong:
+ *
+ * - the fallback is taken whenever `answer_confidence` is not a usable number, not only when
+ *   it is absent or null. An `answer_confidence` of `NaN` beside a usable `confidence` is
+ *   gated on the `confidence`, because "unusable" and "missing" are the same case here;
+ * - a number outside [0, 1] is still a number. It is compared, not discarded: a negative
+ *   `answer_confidence` is below every threshold and so is flagged, and one above 1 clears
+ *   every threshold. Treating out-of-range as "nothing to gate on" would silently clear a
+ *   marker Python sets.
+ *
+ * null means no usable number, never an unusable one, which is what lets the caller tell
+ * "nothing to gate on" from "a gate ran".
+ */
+function gateConfidence(answer: Record<string, unknown>): number | null {
+  const primary = answer.answer_confidence;
+  if (typeof primary === "number" && Number.isFinite(primary)) return primary;
+  const fallback = answer.confidence;
+  if (typeof fallback === "number" && Number.isFinite(fallback)) return fallback;
+  return null;
+}
+
+/**
  * Opt-in abstention marker (#361, #394): flag answers whose confidence falls below `min_confidence`.
  *
  * Reads `answer_confidence` (the calibrated max(p) confidence, invariant to label count k),
- * falling back to `confidence` if `answer_confidence` is absent.
+ * falling back to `confidence` whenever `answer_confidence` is not a usable number -- see
+ * `gateConfidence`, which mirrors Python's `_gate_confidence`.
  * The raw answer and confidence stay intact; `low_confidence: true` is added when the answer
  * falls below the threshold, and removed if a previously-flagged answer now clears it (e.g.
  * when a result dict is reused or re-evaluated with a different threshold).
@@ -355,11 +381,8 @@ export function flagLowConfidence(
     for (const a of Object.values(answers as Record<string, unknown>)) {
       if (!a || typeof a !== "object") continue;
       const ansObj = a as Record<string, unknown>;
-      let conf = ansObj.answer_confidence;
-      if (conf === undefined || conf === null) {
-        conf = ansObj.confidence;
-      }
-      if (typeof conf !== "number" || !Number.isFinite(conf) || conf < 0 || conf > 1) {
+      const conf = gateConfidence(ansObj);
+      if (conf === null) {
         delete ansObj.low_confidence;
         continue;
       }

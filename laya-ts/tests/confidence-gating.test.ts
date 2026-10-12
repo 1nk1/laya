@@ -179,33 +179,50 @@ describe("flagLowConfidence", () => {
     expect(ans).not.toHaveProperty("low_confidence");
   });
 
-  it("clears stale low_confidence flag when confidence is missing, non-finite, or out of [0, 1] range", () => {
+  it("clears stale low_confidence flag when there is no usable confidence to gate on", () => {
     const sample = [
       {
         answers: {
           q_missing: { choice: "a", low_confidence: true },
           q_nan: { choice: "b", answer_confidence: NaN, low_confidence: true },
           q_inf: { choice: "c", answer_confidence: Infinity, low_confidence: true },
-          q_neg: { choice: "d", answer_confidence: -0.1, low_confidence: true },
-          q_over: { choice: "e", answer_confidence: 1.5, low_confidence: true },
+          q_bool: { choice: "d", answer_confidence: true, low_confidence: true },
+          q_str: { choice: "e", answer_confidence: "0.9", low_confidence: true },
         },
       },
     ];
     flagLowConfidence(sample as any, 0.5);
-    for (const key of ["q_missing", "q_nan", "q_inf", "q_neg", "q_over"]) {
+    for (const key of ["q_missing", "q_nan", "q_inf", "q_bool", "q_str"]) {
       expect((sample[0].answers as any)[key]).not.toHaveProperty("low_confidence");
     }
+  });
 
-    // Out-of-range confidence is also not flagged when minConfidence is 0.0
-    const sampleNeg = [
-      {
-        answers: {
-          q_neg: { choice: "d", answer_confidence: -0.1 },
-        },
-      },
+  // Python's `_gate_confidence` is the reference. Two rules there are easy to lose, and both
+  // were measured against `laya.confidence.flag_low_confidence` on the same inputs:
+  //
+  //   1. the fallback to `confidence` is taken whenever `answer_confidence` is not a usable
+  //      number, not only when it is absent or null. NaN, Infinity and a bool all take it.
+  //   2. a number outside [0, 1] is still a number, so it is compared rather than discarded.
+  //      A negative `answer_confidence` is below every threshold, 0.0 included, and one above
+  //      1 clears every threshold. Reading out-of-range as "nothing to gate on" would clear a
+  //      marker Python sets.
+  it("gates on the same number Python's _gate_confidence picks", () => {
+    const cases: Array<[string, Record<string, unknown>, number, boolean]> = [
+      ["unusable answer_confidence falls back to confidence", { answer_confidence: NaN, confidence: 0.3 }, 0.5, true],
+      ["and clears when that fallback passes", { answer_confidence: NaN, confidence: 0.9, low_confidence: true }, 0.5, false],
+      ["Infinity takes the fallback too", { answer_confidence: Infinity, confidence: 0.3 }, 0.5, true],
+      ["a bool is not a confidence, so it takes the fallback", { answer_confidence: true, confidence: 0.3 }, 0.5, true],
+      ["null still takes the fallback", { answer_confidence: null, confidence: 0.3 }, 0.5, true],
+      ["a negative confidence is below every threshold", { answer_confidence: -0.1 }, 0.5, true],
+      ["including exactly 0.0", { answer_confidence: -0.1 }, 0.0, true],
+      ["above 1 clears every threshold", { answer_confidence: 1.5, low_confidence: true }, 0.5, false],
+      ["no usable number anywhere clears", { answer_confidence: NaN, confidence: NaN, low_confidence: true }, 0.5, false],
     ];
-    flagLowConfidence(sampleNeg as any, 0.0);
-    expect((sampleNeg[0].answers as any).q_neg).not.toHaveProperty("low_confidence");
+    for (const [label, answer, threshold, flagged] of cases) {
+      const held = { ...answer };
+      flagLowConfidence([{ answers: { q: held } }] as any, threshold);
+      expect((held as any).low_confidence === true, label).toBe(flagged);
+    }
   });
 
   it("flags answers where answer_confidence falls below threshold", () => {
