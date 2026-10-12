@@ -174,11 +174,10 @@ def predict_tournament(
     come from the final call, so a tournament choice's probabilities are over its
     finalists only.
 
-    Every call's reply is checked against the same shape, the elimination rounds included: a
-    reply that is not a dict, one whose ``answers`` is not a dict, and a round whose answers
-    leave one of the numbered group questions out each raise that contract by name. The group
-    numbers are invented here, so an unanswered group would otherwise surface as a ``KeyError``
-    on a question id no request contains.
+    Every call's reply is checked against the same shape, the elimination rounds included: a reply
+    that is not a dict, and one whose ``answers`` is not a dict, each raise that contract by name
+    instead of an indexing error or a bare ``KeyError`` from inside the module. What an answer holds
+    is not checked: the final call's answers go to the caller as the agent wrote them.
 
     Extra keyword arguments are forwarded to every call (for example ``model=`` on a ``Router``).
     """
@@ -210,8 +209,7 @@ def predict_tournament(
         if not groups:
             break
         round_questions = {str(i): cut(qid, labels) for i, (qid, labels) in enumerate(groups)}
-        answers = _round_answers(_call_predict(agent, state, round_questions, **predict_kwargs),
-                                 len(groups))
+        answers = _round_answers(_call_predict(agent, state, round_questions, **predict_kwargs))
         winners: Dict[str, List[Any]] = {}
         for i, (qid, _labels) in enumerate(groups):
             winners.setdefault(qid, []).append(answers[str(i)]["choice"])
@@ -542,22 +540,20 @@ def _call_predict(agent, state, questions, **predict_kwargs):
     return result
 
 
-def _round_answers(result, n_groups):
-    """The answers of one elimination round, keyed by the group numbers this module invented.
+def _round_answers(result):
+    """The answers mapping of one elimination round, which this module indexes by group number.
 
-    ``predict_tournament`` numbers its own group questions, so the keys it indexes here are keys
-    the caller never wrote. An agent that answers fewer questions than it was handed would fail on
-    a ``KeyError`` naming a number no request contains; the omitted ids are named instead.
+    ``predict_tournament`` numbers its own group questions, so the keys it indexes here are keys the
+    caller never wrote. A group a reply leaves out still raises the plain ``KeyError`` for its
+    number: ``laya-java/fixtures/tournament.json`` records that as the cross-language contract, for
+    the Java and TypeScript ports read the same reply, so naming it here would move three ports
+    rather than one module.
     """
     answers = result.get("answers")
     if not isinstance(answers, dict):
         raise TypeError(
             "predict/system_one must return an answers dict, got %s" % type(answers).__name__
         )
-    missing = [str(i) for i in range(n_groups) if str(i) not in answers]
-    if missing:
-        raise ValueError("the round answered %d of %d group questions, omitting %s"
-                         % (n_groups - len(missing), n_groups, ", ".join(missing)))
     return answers
 
 

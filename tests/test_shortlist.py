@@ -973,10 +973,9 @@ check_raises("tournament/choice without criteria",
 
 # --------------------------------------------- every call's reply is held to the same contract
 # `predict_shortlist` and the tournament's final call both refused a non-dict reply by naming that
-# contract; the tournament's round call indexed the reply instead. The same agent fault therefore
-# raised Python's indexing error from inside the module, and a reply that skipped one of the
-# numbered group questions raised a `KeyError` on an id no request contains -- the groups are
-# numbered here, so the caller has nothing to match that number against.
+# contract; the tournament's round call indexed the reply instead, so the same agent fault raised
+# Python's indexing error from inside the module. These checks hold the shape guards that close
+# that gap, and pin the bare `KeyError`s the narrowing deliberately leaves where they are.
 class Reply:
     """Answers every call with ``shape``, so only the reply's shape varies between these stubs.
 
@@ -1037,9 +1036,18 @@ check("shortlist/reply must be a dict, said by name", _message(
 check("tournament/round reply without an answers mapping is named too",
       _message(_round({"model": "fake"})),
       "TypeError: predict/system_one must return an answers dict, got NoneType")
-check("tournament/a round that leaves groups out names the omitted ones",
+# What is deliberately not changed: an answer this module indexes is still looked up directly, so a
+# round that skips a group raises the bare `KeyError` for that group's number, and an answer with no
+# choice raises `KeyError: 'choice'`. `laya-java/fixtures/tournament.json` records both messages as
+# the contract the Java and TypeScript ports are tested against, so naming them here would move
+# three ports and their committed fixtures rather than one module.
+check("tournament/a round that leaves groups out keeps the bare KeyError",
       _message(_round(lambda q: {"model": "fake", "answers": {"0": {"choice": "l00"}}})),
-      "ValueError: the round answered 1 of 5 group questions, omitting 1, 2, 3, 4")
+      "KeyError: '1'")
+check("tournament/an answer with no choice keeps the bare KeyError",
+      _message(_round(lambda q: {"model": "fake",
+                                 "answers": {qid: {"score": 1.0} for qid in q}})),
+      "KeyError: 'choice'")
 # Each call site is guarded on its own: an agent can answer the caller's request and hand back a
 # list for the invented groups, or the other way round. Either way the round has already run, so a
 # guard only on the last call would not catch the first of these.
