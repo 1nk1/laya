@@ -314,9 +314,9 @@ The port is published on `127.0.0.1` only. The API has no authentication until
 working; with a key set it answers an unauthenticated caller `{"status": "ok"}` and withholds the
 checkpoint, revision and device fields, which need the bearer.
 
-The service has a healthcheck on `/health`. The server preloads before it starts
-listening, so with `LAYA_PRELOAD=1` a healthy container has its checkpoints loaded.
-`docker compose ... up -d --wait laya-serve` returns once it is healthy.
+The service has a healthcheck on `/health`. `docker compose ... up -d --wait laya-serve` waits for HTTP liveness. With the Compose default `LAYA_PRELOAD=0`, it can return with no checkpoint loaded; the first valid inference request loads the checkpoint it needs. With `LAYA_PRELOAD=1`, the server builds the selected checkpoints before listening, but preloading does not run a model forward.
+
+These are three separate checks: `/health` confirms the HTTP process responds, an authenticated `/health` response lists resident checkpoints, and a successful authenticated `POST /v1/systemone` confirms that the requested inference ran. A healthy container or a nonempty `loaded` list alone does not establish successful inference. The Docker workflow's HTTP job checks startup, loopback publication and authentication with preload disabled and invalid request bodies; it does not run a model forward.
 
 `/health` reports `device` as the device a resident checkpoint actually computes
 on, which is not always what `LAYA_DEVICE` asked for: a checkpoint that wants a
