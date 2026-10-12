@@ -200,13 +200,13 @@ def _spread_pool(width, scale, n, seed=0):
     return out
 
 
-def _mixed_rows(k, rng, acc, mag):
+def _mixed_rows(k, rng, acc, mag, n=400):
     """`k`-option rows that are right with probability `acc`, logits at +-mag."""
     out = []
-    for _ in range(400):
+    for _ in range(n):
         y = int(rng.randint(0, k))
         pred = y if rng.rand() < acc else int(rng.randint(0, k))
-        z, t = peaked(k, pred, mag)
+        z, _t = peaked(k, pred, mag)
         t = np.zeros(k, dtype=np.float32)
         t[y] = 1.0
         out.append((z, t))
@@ -278,6 +278,23 @@ check_true("band/search is bounded by LOG_T_MARGIN", "LOG_T_MARGIN" in src)
 check_true("band/the bound stops before float32 exp() underflows",
            float(np.log(TEMP_MIN)) - LOG_T_MARGIN > -80.0,
            "lower edge=%r" % (float(np.log(TEMP_MIN)) - LOG_T_MARGIN))
+
+# Grouping the rows must not turn the objective into an average of per-width averages: it
+# still averages over rows, so repeating one width's rows pulls the fit toward that width.
+wide12 = _mixed_rows(12, np.random.RandomState(11), 0.6, 1.0, 8)
+narrow2 = _mixed_rows(2, np.random.RandomState(12), 0.95, 4.0, 8)
+t_wide = fit_one_temperature(wide12, min_n=8)
+t_narrow = fit_one_temperature(narrow2, min_n=8)
+t_even = fit_one_temperature(wide12 + narrow2, min_n=8)
+t_heavy = fit_one_temperature(wide12 * 2 + narrow2, min_n=8)
+check_true("weight/the two widths want different scales", abs(t_wide - t_narrow) > 0.3,
+           "wide=%r narrow=%r" % (t_wide, t_narrow))
+check_true("weight/both fits are interior, not a bound",
+           all(TEMP_MIN < x < TEMP_MAX for x in (t_wide, t_narrow, t_even, t_heavy)),
+           "%r %r %r %r" % (t_wide, t_narrow, t_even, t_heavy))
+check_true("weight/doubling a width pulls the fit to that width",
+           abs(t_heavy - t_wide) < abs(t_even - t_wide) and abs(t_heavy - t_even) > 0.2,
+           "even=%r heavy=%r wide=%r" % (t_even, t_heavy, t_wide))
 
 
 # --------------------------------------------------------------- ECE on a held-out split, not the fit rows
