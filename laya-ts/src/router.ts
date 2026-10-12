@@ -157,7 +157,8 @@ export interface RouteOptions {
 /**
  * Per-call options for `Router.predictBatch` / `predictMany` / `routeBatch`.
  * `hooks`, `onPredictStart` and `onPredictEnd` are composed the same way as on `predict`:
- * installed hooks first, then this call. `null`, `undefined` and `[]` add nothing.
+ * `setDefaultHooks` defaults, then installed hooks, then this call's hooks.
+ * `null`, `undefined` and `[]` add nothing.
  * `hooksRaise` overrides the Router's policy for this call, including `onRoute`.
  * The start and end callables apply to each request's predict lifecycle, not to routing.
  */
@@ -748,7 +749,8 @@ export class Router extends HookRegistry {
    * carrying `decision`; `onPredictStart` may rewrite a request or `ctx.skip()` it, and
    * `onPredictEnd` runs once per started request even when the batch fails.
    * `opts.hooks`, `opts.onPredictStart` and `opts.onPredictEnd` are composed the way `predict`
-   * composes them: installed hooks first, then this call. `null` and `[]` add nothing. `hooks`
+   * composes them: `setDefaultHooks` defaults, then installed hooks, then this call's hooks.
+   * `null` and `[]` add nothing. `hooks`
    * also run `onRoute`. `opts.hooksRaise` overrides the Router's policy for this call, the way
    * `predict` uses `opts.hooksRaise ?? this.hooksRaise`.
    */
