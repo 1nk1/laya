@@ -902,7 +902,7 @@ def _takes_min_confidence(runner: Any, fn_name: str = "predict_batch") -> bool:
 def _takes_model(runner: Any, fn_name: str = "predict") -> bool:
     """Whether `runner`'s entry point accepts a per-example checkpoint on the call.
 
-    The same signature check `_takes_min_confidence` makes, applied to the `model` kwarg the
+    The same signature check `_batch_form` makes, applied to the `model` kwarg the
     single-row path forwards from `Example.model` (#1107). The batch half of this exact mistake
     was `_batch_form`'s founding bug -- every chunk raised ``TypeError: ... unexpected keyword
     argument 'model'``, which `on_error="skip"` turned into a zero-case report -- and
@@ -911,6 +911,16 @@ def _takes_model(runner: Any, fn_name: str = "predict") -> bool:
     an unsent `model` is no lie: a runner without the parameter answers from its own checkpoint.
     So the harness drops the kwarg when no example names one, and the pre-flight refusal in
     `evaluate` fires only when an example does.
+
+    Not introspectable (a C-level or hand-rolled ``__call__``): keep the call this harness makes,
+    the fallback `_batch_form` makes for the same kwarg on ``predict_batch`` -- deliberately not
+    `_takes_min_confidence`'s ``False``, which had the two guards disagreeing: on a runner whose
+    entry points are both C-level, `model` was sent on the batch path and dropped on the single
+    one, and a dataset naming an explicit checkpoint was refused even though the batch entry point
+    would have carried it (#1112 review). With no example naming a model the value is ``None``
+    either way, so the only run the ``True`` fallback changes is the one where sending it is the
+    point; a runner whose attribute is missing is the `fn is None` case, and a C-level runner that
+    refuses the kwarg fails loudly on the call -- the risk `_batch_form` already accepts.
     """
     fn = getattr(runner, fn_name, None)
     if fn is None:
@@ -918,7 +928,9 @@ def _takes_model(runner: Any, fn_name: str = "predict") -> bool:
     try:
         params = inspect.signature(fn).parameters.values()
     except (TypeError, ValueError):
-        return False
+        # Same fallback as `_batch_form` (its comment records why): keep the call this harness
+        # made before the shape was checked, rather than half-dropping the kwarg.
+        return True
     return any(p.name == "model" or p.kind is p.VAR_KEYWORD for p in params)
 
 
@@ -1005,16 +1017,20 @@ def evaluate(runner: Any, dataset: Dataset, evaluators: Optional[Sequence[Evalua
     # on every row, and `on_error="skip"` published a zero-case report. The batch half was already
     # gated by `_batch_form`; this is the single-row guard, computed once and reused at the call.
     takes_model = _takes_model(runner)
-    if not takes_model and any(e.model is not None for e in dataset.examples):
+    named = next(((i, e) for i, e in enumerate(dataset.examples) if e.model is not None), None)
+    if not takes_model and named is not None:
         # Dropping the kwarg here would score each row on whatever checkpoint the runner answers
         # with while the report's `model` slice labels it with the named one -- the same class of
         # lie the `min_confidence` guard exists to prevent. The kwarg is dropped only when no
         # example names a checkpoint, in which case scoring on the runner's own is what was asked.
+        # The refusal names the first offender: on a large dataset, "the dataset names a `model`"
+        # alone leaves the user grepping for the row (#1112 review).
+        first, offender = named
         raise EvalError(
-            "evaluate() refused: the dataset names an explicit per-example `model`, but this "
-            "runner's predict does not accept one. Either use a Router/ONNXAgent whose predict "
-            "forwards the checkpoint, or drop the per-example `model` -- the report would "
-            "otherwise name a checkpoint it never sent (#1107).")
+            "evaluate() refused: example %d names model %r, but this runner's predict does not "
+            "accept a `model` argument. Either use a Router/ONNXAgent whose predict forwards the "
+            "checkpoint, or drop the per-example `model` -- the report would otherwise name a "
+            "checkpoint it never sent (#1107)." % (first, offender.model))
     evaluators = list(evaluators) if evaluators is not None else default_evaluators()
     cases: List[Dict[str, Any]] = []
     waits: List[float] = []          # what each request actually waited: its chunk's whole call
@@ -1077,8 +1093,10 @@ def evaluate(runner: Any, dataset: Dataset, evaluators: Optional[Sequence[Evalua
             else:
                 # A chunk of one still sees the gate: the pre-flight refusal proved `predict`
                 # accepts it whenever `mc` is set, so nothing here has to re-check the signature.
-                # The `model` kwarg is the same honesty (#1107): sent only when `predict` accepts
-                # it, and the pre-flight already refused any run where an example needed it sent.
+                # The `model` kwarg is the same honesty (#1107): sent only when `predict` takes
+                # it -- kept as-is when the signature cannot be read, `_batch_form`'s fallback on
+                # the same kwarg -- and the pre-flight already refused any run where an example
+                # needed it sent and the guard said no.
                 single_kwargs = {"min_confidence": mc} if mc is not None else {}
                 if takes_model:
                     results = [runner.predict(chunk[0].state, chunk[0].questions,
