@@ -2157,8 +2157,9 @@ def test_the_fast_path_still_inlines_the_token_bucket_the_docstring_says_it_repe
     assert "bucket_tokens(" not in body, (
         "`_forward_unlocked` calls `bucket_tokens` directly now; then there is one policy rather "
         "than two copies, and both the docstring and this check need re-reading")
-    assert "_bucket_n(" in body, (
-        "the row pad no longer comes from `laya.backends.base.bucket_rows` through `_bucket_n`")
+    assert "_bucket_n(" in body or "bucket_rows(" in body, (
+        "the row pad no longer comes from `laya.backends.base.bucket_rows`, through `_bucket_n` or "
+        "directly, so the docstring's attribution needs re-reading")
 
 
 def test_the_two_bucket_policies_the_docstring_describes_are_still_the_same_numbers():
