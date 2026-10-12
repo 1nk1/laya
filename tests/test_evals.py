@@ -2215,6 +2215,47 @@ def test_questions_fingerprint_keeps_criteria_order():
         evals.questions_fingerprint(with_criteria({"b": "beta", "a": "alpha"}))
 
 
+def test_questions_fingerprint_covers_option_order():
+    """`option_order` moves what the model reads and re-maps the answer, so it is a fifth field.
+
+    `laya/agent.py::Agent._check_question` accepts only a permutation of the option indices,
+    `Agent._to_internal` copies it into the internal question, and from there it reaches
+    `laya/common.py::build_sequence` (the tokenized head) and `unpermute_probs` on the way back, so
+    a permuted question is a different question in exactly the sense this key exists to notice.
+    `research/eval/metamorphic.py::permute_options` is one of that harness's two transforms, and
+    this suite's own `test_questions_fingerprint_follows_the_question_not_the_row` states "option
+    order and label rename flip answers" while the hash looked past the first of the two.
+
+    The literal digest at the end is the other half of the contract: a question set that never names
+    the field keeps the digest its committed baseline already carries, so adding a field to the key
+    moves no existing report's identity.
+    """
+    def question(order=None):
+        q = {"type": "choice", "instructions": "Pick one", "criteria": {"a": "alpha", "b": "beta"}}
+        if order is not None:
+            q["option_order"] = order
+        return {"pick": q}
+
+    def with_order(order=None):
+        return Dataset([Example("s", question(order), {"pick": "a"})])
+
+    plain = evals.questions_fingerprint(with_order())
+    assert evals.questions_fingerprint(with_order([1, 0])) != plain, \
+        "a permutation of the options left the fingerprint unchanged"
+    assert evals.questions_fingerprint(with_order([0, 1])) != plain, \
+        "naming an identity permutation left the fingerprint unchanged"
+    assert evals.questions_fingerprint(with_order([0, 1])) != \
+           evals.questions_fingerprint(with_order([1, 0])), "two orders hashed alike"
+
+    # The field is real on the way in, not an artefact of the hash: the engine carries it.
+    from laya.agent import Agent
+    assert "option_order" not in Agent._to_internal(question()["pick"])
+    assert Agent._to_internal(question([1, 0])["pick"])["option_order"] == [1, 0]
+
+    # Measured on `main` before `option_order` joined the key.
+    assert plain == "8263dfd11d6593803f61d78fe6ccc629924f01e85e9e8a2bac5ce629ebb97ff4"
+
+
 def test_a_top_level_schema_on_the_candidate_still_refuses(tmp_path, capsys):
     """The identity fallback is two-sided.
 
