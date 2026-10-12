@@ -91,6 +91,20 @@ check_param("Router.__init__", Router.__init__, "sha256_digests", None)
 check_true("Router/resolve", callable(getattr(Router, "resolve", None)))
 check_param("Router.unregister", Router.unregister, "name", inspect.Parameter.empty)
 
+# The MCP batch tool's controls are public too, so they are pinned here rather than only in the
+# forwarding test: `min_confidence` is unset as None (not the old -1) so a value out of range
+# reaches the tools layer's validator instead of being folded into "unset" (#707), and
+# `hooks_timeout` keeps 0 as the unset marker an eager MCP client sends for the default.
+try:
+    from laya.mcp.server import laya_predict_batch_tool as _mcp_batch_tool
+except ImportError:                     # the mcp extra is optional; the core install skips this
+    _mcp_batch_tool = None
+if _mcp_batch_tool is not None:
+    check_param("laya_predict_batch_tool", _mcp_batch_tool, "batch_size", 0)
+    check_param("laya_predict_batch_tool", _mcp_batch_tool, "hooks_timeout", 0)
+    check_param("laya_predict_batch_tool", _mcp_batch_tool, "min_confidence", None)
+    check_param("laya_predict_batch_tool", _mcp_batch_tool, "sort_by_length", False)
+
 # What the constructor does NOT raise over is part of its contract too: a shared
 # `agent_kwargs["expected_sha256"]` overlapping a per-checkpoint `sha256_digests` entry on one file
 # name is the ordinary shape, not a contradiction -- `model.safetensors` is the one name every

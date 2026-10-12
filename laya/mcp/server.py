@@ -334,18 +334,29 @@ def laya_predict_tool(
         + _GUARDRAILS
     ),
 )
-def laya_predict_batch_tool(requests: list, batch_size: int = 0, hooks_timeout: float = 0,
-                             min_confidence: float = -1, sort_by_length: bool = False) -> str:
+def laya_predict_batch_tool(requests: list, batch_size: int = 0, hooks_timeout: float | None = 0,
+                            min_confidence: float | None = None,
+                            sort_by_length: bool = False) -> str:
     """Answer many typed-question requests in one batched call."""
     router = _router_or_error()
     # batch_size=0 means "unset": MCP clients send defaults eagerly, and
-    # None is what Router.predict_batch takes as "no forward-pass cap".
+    # None is what Router.predict_batch takes as "no forward-pass cap". hooks_timeout reads
+    # a numeric 0 the same way -- and deliberately only a numeric 0, because `False == 0`
+    # would otherwise fold a boolean, which `_validate_hooks_timeout` refuses by contract
+    # ("would silently turn True into a one-second deadline").
+    # Everything else -- negatives and booleans included -- goes to the tools layer, which
+    # owns validation and answers with a ToolError naming the value. Collapsing those here
+    # instead turned an invalid deadline into "no deadline" and an invalid gate into
+    # "no gate": the caller got a clean response and no way to tell the control it asked
+    # for had been dropped.
+    if not isinstance(hooks_timeout, bool) and hooks_timeout == 0:
+        hooks_timeout = None
     return _wrap(
         laya_predict_batch,
         requests=requests,
         batch_size=batch_size or None,
-        hooks_timeout=hooks_timeout if hooks_timeout > 0 else None,
-        min_confidence=min_confidence if min_confidence >= 0 else None,
+        hooks_timeout=hooks_timeout,
+        min_confidence=min_confidence,
         sort_by_length=sort_by_length,
         router=router,
     )
