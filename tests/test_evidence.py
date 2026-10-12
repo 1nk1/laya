@@ -107,6 +107,53 @@ toplevel = {"schema": "laya-evals-report/1", "dataset_sha256": "a", "questions_s
             "config": {}}
 check("identity at top level still read", evidence.inspect_report(toplevel)["state"], evidence.PRESENT)
 
+# ------------------------------------------------------ identity vocabulary pinned to laya.evals
+# `laya/evidence.py` copies the report-identity vocabulary instead of importing `laya.evals` (numpy at
+# module scope), and a copy is only safe while it is held against the original -- the same way
+# `tests/test_conformal_abstention.py` holds `confidence.BUCKET_QTYPES` against `common.temp_bucket`.
+# Unpinned, a key renamed upstream would make every report read as identity-incomplete here, and a key
+# added upstream would read as identity-complete; both silently, in the verdict this module exists to
+# give. These four checks fail in both directions, on either side of the copy.
+from laya import evals  # noqa: E402
+
+check("the copied identity vocabulary is evals' own, in order",
+      list(evidence._IDENTITY_KEYS), list(evals._IDENTITY_KEYS))
+check("the provenance key is recorded upstream but not compared there",
+      [k for k in evidence._PROVENANCE_KEYS if k not in evals._IDENTITY_KEYS],
+      list(evidence._PROVENANCE_KEYS))
+check("checkpoint <-> report conflicts are the identity vocabulary minus the report tag",
+      sorted(set(evals._IDENTITY_KEYS) - set(evidence._IDENTITY_CONFLICT_KEYS)), ["schema"])
+check("inspect_report reads exactly its declared vocabulary",
+      sorted(evidence.inspect_report({"config": {}})["fields"]),
+      sorted(evidence._IDENTITY_KEYS + evidence._PROVENANCE_KEYS))
+
+# ... and `schema` stays out of the conflict set on purpose: two artifacts that agree on the
+# deterministic digests but carry different report tags are still the same measurement.
+check("a differing schema is not a checkpoint <-> report conflict",
+      evidence.relate({"dataset_sha256": "a"},
+                      {"config": {"dataset_sha256": "a", "schema": "laya-evals-report/2"}})["state"],
+      evidence.UNKNOWN)
+
+# `docs/evals.md` carries the same vocabulary a third time -- it teaches that the identity fields
+# "are reported with the same semantics as `run`", and names the pair a conflict is claimed on -- so
+# the page is pinned to the code as well, the way `test_docs_and_the_cli_name_the_same_flags` pins
+# the flag list. A missing sentence reads as an empty list, which fails the check rather than
+# crashing the suite.
+import re  # noqa: E402
+
+_DOCS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "evals.md")
+with open(_DOCS, encoding="utf-8") as _handle:
+    _page = " ".join(_handle.read().split())
+_named = _page.split("identity fields (", 1)[1].split(")", 1)[0] if "identity fields (" in _page else ""
+check("the documented identity fields are the ones the code reads",
+      sorted(re.findall(r"`([^`]+)`", _named)),
+      sorted(evidence._IDENTITY_KEYS + evidence._PROVENANCE_KEYS))
+_claimed = (_page.split("both artifacts expose the same ", 1)[1].split("with different values", 1)[0]
+            if "both artifacts expose the same " in _page else "")
+check("the documented conflict pair is the one the code compares",
+      sorted(re.findall(r"`([^`]+)`", " ".join(_claimed.split("/")))),
+      sorted(evidence._IDENTITY_CONFLICT_KEYS))
+
 # ------------------------------------------------------ relationship
 config = {"training": {"laya_train": {"laya_version": "0.3.28"}}}
 match = evidence.relate(config, {"config": {"laya_version": "0.3.28"}})
