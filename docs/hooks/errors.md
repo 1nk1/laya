@@ -144,9 +144,12 @@ laya.load("convaiinnovations/laya", on_predict_end=metrics, hooks_timeout=2.0)
 It can be set per instance or overridden per call on every public per-call surface of the three
 agents: `Agent.predict_batch`, `Agent.system_one`, `Agent.predict_long`, `Router.route`,
 `Router.route_batch`, `Router.predict`, `Router.predict_batch`, `Router.predict_long`,
-`ONNXAgent.system_one`, `ONNXAgent.predict_batch` and `ONNXAgent.predict_long`. The value must
-be positive; `0` or a negative number raises `ValueError` at the point it is set, rather than
-racing on a zero-length `join`.
+`ONNXAgent.system_one`, `ONNXAgent.predict_batch` and `ONNXAgent.predict_long`. The value must be a
+positive finite number; `0`, a negative number, `inf` and `nan` each raise `ValueError` at the point
+it is set, rather than racing on a zero-length `join` -- passed straight to the underlying thread
+`join`, `nan` would raise `ValueError` and an infinite value `OverflowError`, so neither bounds the
+wait the way a limit is meant to. `None` is how to ask for no limit, not an arbitrarily large
+number.
 
 A timed hook runs on a worker thread in a copy of the caller's `contextvars` context, so a
 request id or tracing span set by the caller is visible to the hook.
