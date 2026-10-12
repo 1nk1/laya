@@ -361,10 +361,40 @@ work. What this does not bound is how long one request occupies the server; that
 `LAYA_MAX_CONCURRENT` and the single inference worker, and is already true of one `/v1/systemone`
 request over a 50,000-character state.
 
-The option caps are HTTP-only amplification guards; the model itself fits option tokens into a
-`head_max_len=192` window, so a question inside the HTTP caps can still be refused as a `422` when
-the option texts together exceed that budget. The [Evaluation harness](evals.md) runs the same
-requests in-process without the HTTP layer.
+The option caps are HTTP-only amplification guards -- `MAX_CHOICE_OPTIONS` per question (100, or
+`MAX_TOURNAMENT_CHOICE_OPTIONS` = 255 with `LAYA_TOURNAMENT_GROUP` set) and `MAX_TOTAL_OPTIONS`
+across the request (512). The model's own budget does not refuse a question that is inside them for
+having long option text; it truncates that text. Measured on the `laya` checkpoint (CPU, offline)
+with one choice question of 100 options, each one `opt<i>` plus the same 15-word description: at the
+default `head_max_len=192` the head caps every option at `tokens_per_option=4`, still keeps all 100
+markers in 411 tokens, and `max_len=512` answers it (`input_tokens=423`, the state's 11 tokens
+among them) -- while the response says nothing about the cap. `usage` gains an `options` entry only
+when the cap makes two options share a token span, and the truncation keys it does carry
+(`truncated`, `state_tokens_dropped`) are about the state. What the `422` reports is option *markers*
+running past `max_len`, and because `head_max_len` is spent *out of* `max_len` rather than on top of
+it, raising `head_max_len` is how a caller gets there: the same question at `head_max_len=1024` gives
+each option 10 tokens, the head grows to 1014, and `max_len=512` refuses it with `only 50 of its 100
+option markers fit in max_len=512 with head_max_len=1024 spent on the question; lower head_max_len,
+raise max_len, or use fewer options`, which `max_len=1024` then answers. The message names both
+levers because either can be the fix; `laya/agent.py::_encode_state` keeps a comment recording that
+naming only `head_max_len` "pointed at the wrong knob in both directions".
+
+How many options fit at all is set by that same pair *and* by their text. With no description on the
+options, at `max_len=512` and `head_max_len=192` the largest single choice question that is not
+refused carries 168 options when each label is `T <i>` and 126 when each is
+`Tickets routed to queue <i>`; at `max_len=1024` those become 338 and 254. Each of those four
+boundaries was met through the public call: it answers at the ceiling and refuses one option above
+it. Those 126 sentence labels carry a second lesson -- the answered call reports
+`options: {"q": {"total": 126, "distinct": 1, "tokens_per_option": 4}}`, because the 4-token cap left
+every option the same span, so the question could not tell its 126 choices apart, and only a
+collision like that puts `options` in the response. Both default ceilings sit above
+`MAX_CHOICE_OPTIONS=100`, so a one-pass caller meets the count cap first -- a `413`, never a budget
+refusal -- and reaches a budget refusal only by raising `max_len` or `head_max_len` itself, each of
+which is accepted up to `LAYA_MAX_TOKEN_BUDGET`, 8192 by default. (`LAYA_TOURNAMENT_GROUP` raises the
+count cap to 255 but narrows those choices into groups, so they never reach the one-pass budget.) A
+caller comparing this endpoint with another server's stated "maximum N options" therefore has to quote
+the budget it sent and the option text, not just N. The [Evaluation harness](evals.md) runs the same
+requests in-process without the HTTP layer, so there the 168/126 ceiling is the one that binds.
 
 ## Errors
 
