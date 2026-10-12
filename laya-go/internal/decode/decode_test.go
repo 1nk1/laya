@@ -1,12 +1,16 @@
 package decode
 
 import (
+	"encoding/json"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/NandhaKishorM/laya/laya-go/internal/fixtures"
 	"github.com/NandhaKishorM/laya/laya-go/internal/goldens"
+	"github.com/NandhaKishorM/laya/laya-go/internal/pyjson"
+	"github.com/NandhaKishorM/laya/laya-go/internal/pyvalue"
 	"github.com/NandhaKishorM/laya/laya-go/schema"
 )
 
@@ -139,6 +143,38 @@ func TestRound4Golden(t *testing.T) {
 	}
 	if bad > 5 {
 		t.Errorf("%d of %d values differ", bad, len(values))
+	}
+}
+
+// TestSum32Golden holds pairwiseSum32 to numpy's float32 sum, bit for bit, on rows from 1 to
+// 1,000 wide: below 8, the eight-lane block with and without a tail, and past 128 where numpy
+// splits the row.
+func TestSum32Golden(t *testing.T) {
+	cases := fixtures.List(t, fixtures.Obj(t, fixtures.Field(t, fixtures.Load(t, "go_extra.json"), "sum32")).Must("cases"))
+	parse := func(s string) float32 {
+		f, err := strconv.ParseFloat(s, 32)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return float32(f)
+	}
+	wide := 0
+	for _, c := range cases {
+		rec := fixtures.Obj(t, c)
+		var row []float32
+		for _, s := range fixtures.Strings(t, rec.Must("values")) {
+			row = append(row, parse(s))
+		}
+		if len(row) > 128 {
+			wide++
+		}
+		want := parse(fixtures.Str(t, rec.Must("sum")))
+		if got := pairwiseSum32(row); math.Float32bits(got) != math.Float32bits(want) {
+			t.Errorf("sum of %d values = %v, numpy has %v", len(row), got, want)
+		}
+	}
+	if len(cases) < 100 || wide < 20 {
+		t.Fatalf("the golden holds %d rows, %d of them wider than 128", len(cases), wide)
 	}
 }
 
@@ -299,7 +335,7 @@ func TestDecodeBranches(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := a.(*schema.ChoiceAnswer)
-		if c.Choice != "only" || c.Confidence != 1 || c.AnswerConfidence != 1 {
+		if c.Choice != schema.Text("only") || c.Confidence != 1 || c.AnswerConfidence != 1 {
 			t.Errorf("single option answer = %+v", c)
 		}
 	})
@@ -317,7 +353,7 @@ func TestDecodeBranches(t *testing.T) {
 
 	t.Run("first maximum wins a tie", func(t *testing.T) {
 		a, _ := Decode(two, Row{Logits: []float32{1, 1}, K: 2, Act: act}, "", temps)
-		if got := a.(*schema.ChoiceAnswer).Choice; got != "a" {
+		if got := a.(*schema.ChoiceAnswer).Choice; got != schema.Text("a") {
 			t.Errorf("tie chose %q", got)
 		}
 	})
@@ -329,7 +365,7 @@ func TestDecodeBranches(t *testing.T) {
 		}
 		// slot 0 shows option 2 and carries the largest logit, so option "c" wins
 		a, _ := Decode(q, Row{Logits: []float32{5, 0, 0}, K: 3, Act: act}, "", temps)
-		if got := a.(*schema.ChoiceAnswer).Choice; got != "c" {
+		if got := a.(*schema.ChoiceAnswer).Choice; got != schema.Text("c") {
 			t.Errorf("permuted decode chose %q, want c", got)
 		}
 	})
@@ -376,4 +412,242 @@ func TestActionProbabilities(t *testing.T) {
 			t.Errorf("%s row: no error", name)
 		}
 	}
+}
+
+func fixtureQuestion(t *testing.T, kind string, crit any, order []int) schema.Question {
+	t.Helper()
+	var (
+		q   schema.Question
+		err error
+	)
+	switch kind {
+	case "choice":
+		labels := []string{}
+		for _, l := range crit.([]any) {
+			labels = append(labels, l.(string))
+		}
+		q, err = schema.ChoiceOf("i", labels...)
+	case "score":
+		levels := crit.([]any)
+		q, err = schema.Score("i", levels...)
+	default:
+		q, err = schema.Noul("i")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order != nil {
+		if q, err = q.WithOptionOrder(order); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return q
+}
+
+func orderOf(t *testing.T, v any) []int {
+	t.Helper()
+	if v == nil {
+		return nil
+	}
+	var out []int
+	for _, i := range fixtures.Ints(t, v) {
+		out = append(out, int(i))
+	}
+	return out
+}
+
+// TestLabelAnswersGolden holds the answer JSON to the bytes Python writes for bool, int, float and
+// str labels: "choice": true, "choice": 1, the key "Infinity", the key "true". A label's type
+// survives the answer, and 1 and "1" stay two labels.
+func TestLabelAnswersGolden(t *testing.T) {
+	cases := fixtures.List(t, fixtures.Obj(t, fixtures.Field(t, fixtures.Load(t, "go_extra.json"), "label_answers")).Must("cases"))
+	if len(cases) < 400 {
+		t.Fatalf("the golden holds %d cases", len(cases))
+	}
+	typed := 0
+	for i, c := range cases {
+		rec := fixtures.Obj(t, c)
+		criteria := fixtures.Str(t, rec.Must("criteria_text"))
+		qs, err := schema.ParseQuestions([]byte(`{"q":{"type":"choice","instructions":"i","criteria":` + criteria + `}}`))
+		if err != nil {
+			t.Fatalf("case %d %s: %v", i, criteria, err)
+		}
+		q, _ := qs.Get("q")
+		if order := orderOf(t, rec.Must("option_order")); order != nil {
+			if q, err = q.WithOptionOrder(order); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got, want := q.RenderedOptions(), fixtures.Strings(t, rec.Must("options")); strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+			t.Errorf("case %d %s: options %q, want %q", i, criteria, got, want)
+		}
+		logits := floats32(t, rec.Must("logits"))
+		answer, err := Decode(q, Row{Logits: logits, K: len(logits), Act: []float32{0.25}}, "", &Temperatures{ByType: [3]float64{1, 1, 1}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := answer.(json.Marshaler).MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := fixtures.Str(t, rec.Must("answer_text")); string(got) != want {
+			t.Errorf("case %d %s\n got %s\nwant %s", i, criteria, got, want)
+		}
+		if !strings.HasPrefix(string(got), `{"type":"choice","choice":"`) {
+			typed++
+		}
+	}
+	if typed < 200 {
+		t.Errorf("only %d answers have a non-string choice", typed)
+	}
+}
+
+// TestDecodeFuzzGolden decodes 5,000 random, tied and near-tied rows and compares the marshaled
+// answer with Python's bytes. Two kinds of difference are tolerated and counted, because Decode
+// computes the reported numbers in float64 where numpy computes them in float32, and numpy's
+// float32 exp is a SIMD routine that is not correctly rounded:
+//
+//   - a number that differs by one unit in the fourth decimal (a value within 1e-4 sitting on a
+//     rounding boundary);
+//   - the choice among options whose exp(z - max) is within three float32 ulps of 1 (the argmax
+//     there is decided by exp(-2^-25) coming out 0.99999994, where the correctly rounded value is
+//     1.0). Everything else in such an answer must still be Python's.
+//
+// Anything else fails.
+func TestDecodeFuzzGolden(t *testing.T) {
+	cases := fixtures.List(t, fixtures.Obj(t, fixtures.Field(t, fixtures.Load(t, "go_extra.json"), "answers_fuzz")).Must("cases"))
+	if len(cases) != 5000 {
+		t.Fatalf("the golden holds %d cases", len(cases))
+	}
+	identical, nearTie, rounded, bad := 0, 0, 0, 0
+	for i, c := range cases {
+		rec := fixtures.Obj(t, c)
+		kind := fixtures.Str(t, rec.Must("type"))
+		order := orderOf(t, rec.Must("option_order"))
+		q := fixtureQuestion(t, kind, rec.Must("criteria"), order)
+		var logits []float32
+		for _, s := range fixtures.Strings(t, rec.Must("logits")) {
+			f, err := strconv.ParseFloat(s, 32)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logits = append(logits, float32(f))
+		}
+		temp := rec.Must("temperature")
+		temps, err := NewTemperatures([]any{temp, temp, temp}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		answer, err := Decode(q, Row{Logits: logits, K: len(logits), Act: []float32{0.25}}, "", temps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, _ := answer.(json.Marshaler).MarshalJSON()
+		want := fixtures.Str(t, rec.Must("answer_text"))
+		if string(out) == want {
+			identical++
+			continue
+		}
+		gotTree, _ := pyvalue.Parse(out)
+		wantTree, _ := pyvalue.Parse([]byte(want))
+		var diffs []jsonDiff
+		diffJSON("", gotTree, wantTree, &diffs)
+		ok, sawRound, sawChoice := true, false, false
+		for _, d := range diffs {
+			switch {
+			case d.path == "/choice" && kind == "choice":
+				goIdx, _ := strconv.Atoi(d.got[2:])
+				pyIdx, _ := strconv.Atoi(d.want[2:])
+				sawChoice = true
+				ok = ok && nearTied(logits, order, temps, kind, goIdx, pyIdx)
+			case d.delta > 0 && d.delta < 1.5e-4:
+				sawRound = true
+			default:
+				ok = false
+			}
+		}
+		switch {
+		case !ok:
+			if bad++; bad <= 5 {
+				t.Errorf("case %d (%s, k=%d, T=%v, logits %v)\n go: %s\n py: %s", i, kind, len(logits), temp, logits, out, want)
+			}
+		case sawChoice:
+			nearTie++
+		case sawRound:
+			rounded++
+		}
+	}
+	t.Logf("%d of %d decodes are Python's bytes; %d differ only in the choice among float32 near-ties; %d only by 1e-4 on a rounding boundary; %d differ otherwise",
+		identical, len(cases), nearTie, rounded, bad)
+	if bad > 0 {
+		t.Errorf("%d of %d decodes differ from Python beyond the tolerated float32 effects", bad, len(cases))
+	}
+	if nearTie > 250 || rounded > 25 {
+		t.Errorf("%d near-tie and %d rounding rows: the tolerance is hiding more than numpy's float32 arithmetic", nearTie, rounded)
+	}
+}
+
+type jsonDiff struct {
+	path, got, want string
+	delta           float64
+}
+
+// diffJSON lists where two decoded answers differ; numbers carry their distance.
+func diffJSON(path string, got, want any, out *[]jsonDiff) {
+	switch w := want.(type) {
+	case pyjson.Object:
+		g, ok := got.(pyjson.Object)
+		if !ok || len(g) != len(w) {
+			*out = append(*out, jsonDiff{path: path, got: pyvalue.Repr(got), want: pyvalue.Repr(want), delta: -1})
+			return
+		}
+		for i := range w {
+			if g[i].Key != w[i].Key {
+				*out = append(*out, jsonDiff{path: path, got: pyvalue.Repr(got), want: pyvalue.Repr(want), delta: -1})
+				return
+			}
+			diffJSON(path+"/"+w[i].Key.(string), g[i].Value, w[i].Value, out)
+		}
+	case json.Number:
+		g, ok := got.(json.Number)
+		if !ok {
+			*out = append(*out, jsonDiff{path: path, got: pyvalue.Repr(got), want: pyvalue.Repr(want), delta: -1})
+			return
+		}
+		if g != w {
+			a, _ := g.Float64()
+			b, _ := w.Float64()
+			*out = append(*out, jsonDiff{path: path, got: string(g), want: string(w), delta: math.Abs(a - b)})
+		}
+	default:
+		if pyvalue.Repr(got) != pyvalue.Repr(want) {
+			*out = append(*out, jsonDiff{path: path, got: pyvalue.Repr(got), want: pyvalue.Repr(want), delta: -1})
+		}
+	}
+}
+
+// nearTied reports whether the options Go and Python chose both have exp(z - max) within three
+// float32 ulps below 1 (z - max >= -1.8e-7), the band in which numpy's float32 exp can round either
+// way; z is the logit divided by the temperature, in float32.
+func nearTied(logits []float32, order []int, temps *Temperatures, kind string, goIdx, pyIdx int) bool {
+	t, _ := temps.For(schema.Type(kind), len(logits), "")
+	z := make([]float32, len(logits))
+	top := float32(math.Inf(-1))
+	for i, l := range logits {
+		z[i] = l / float32(t)
+		top = max(top, z[i])
+	}
+	if order != nil {
+		canonical := make([]float32, len(z))
+		for slot, option := range order {
+			canonical[option] = z[slot]
+		}
+		z = canonical
+	}
+	for _, i := range []int{goIdx, pyIdx} {
+		if i < 0 || i >= len(z) || top-z[i] > 1.8e-7 {
+			return false
+		}
+	}
+	return true
 }

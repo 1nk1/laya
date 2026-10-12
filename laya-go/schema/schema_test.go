@@ -266,15 +266,16 @@ func TestNewQuestionsRefuses(t *testing.T) {
 
 func TestParseQuestionsRefuses(t *testing.T) {
 	cases := map[string]struct{ in, want string }{
-		"repeated id":        {`{"a":{"type":"noul","instructions":"x"},"a":{"type":"noul","instructions":"y"}}`, "question 'a': id is given twice"},
-		"not an object":      {`[]`, "want a JSON object"},
-		"null":               {`null`, "want a JSON object"},
-		"trailing data":      {`{} {}`, "data after the JSON value"},
-		"truncated":          {`{"a":`, "EOF"},
-		"blank id":           {`{" ": {"type":"noul","instructions":"x"}}`, "got ' '"},
-		"first bad question": {`{"a":{"type":"noul","instructions":"x"},"b":{"type":"zzz"}}`, "question 'b': unknown type 'zzz'"},
-		"invalid UTF-8":      {"{\"a\":\"\xff\"}", "UTF-8"},
-		"too deep":           {`{"a":` + strings.Repeat("[", 600) + strings.Repeat("]", 600) + `}`, "nested deeper"},
+		"repeated id, last is null": {`{"a":{"type":"noul","instructions":"x"},"a":null}`, "question 'a': definition must be a dict, got NoneType"},
+		"not an object":             {`[]`, "must be a JSON object, got list"},
+		"null":                      {`null`, "must be a JSON object, got NoneType"},
+		"trailing data":             {`{} {}`, "data after the JSON value"},
+		"truncated":                 {`{"a":`, "unexpected end"},
+		"lone surrogate":            {`{"a\ud800":{}}`, "lone surrogate"},
+		"blank id":                  {`{" ": {"type":"noul","instructions":"x"}}`, "got ' '"},
+		"first bad question":        {`{"a":{"type":"noul","instructions":"x"},"b":{"type":"zzz"}}`, "question 'b': unknown type 'zzz'"},
+		"invalid UTF-8":             {"{\"a\":\"\xff\"}", "UTF-8"},
+		"too deep":                  {`{"a":` + strings.Repeat("[", 600) + strings.Repeat("]", 600) + `}`, "nested deeper"},
 	}
 	for name, c := range cases {
 		_, err := schema.ParseQuestions([]byte(c.in))
@@ -284,6 +285,38 @@ func TestParseQuestionsRefuses(t *testing.T) {
 	}
 	if qs, err := schema.ParseQuestions([]byte(` {} `)); err != nil || qs.Len() != 0 {
 		t.Errorf("an empty object = %v, %v", qs.Len(), err)
+	}
+}
+
+func TestParseQuestionsRepeatedIDTakesTheLast(t *testing.T) {
+	// json.loads keeps the first position and the last value; so do we, and Python validates what is left.
+	qs, err := schema.ParseQuestions([]byte(`{"a":{"type":"noul","instructions":"first"},"b":{"type":"noul","instructions":"b"},"a":{"type":"noul","instructions":"last"}}`))
+	if err != nil || !slices.Equal(qs.IDs(), []string{"a", "b"}) {
+		t.Fatalf("ids = %v, %v", qs.IDs(), err)
+	}
+	if q, _ := qs.Get("a"); q.Instructions() != "last" {
+		t.Errorf("a = %q, want the last value", q.Instructions())
+	}
+	if _, err := schema.ParseQuestions([]byte(`{"a":{"type":"noul"},"a":{"type":"noul","instructions":"ok"}}`)); err != nil {
+		t.Errorf("the first, invalid value was validated: %v", err)
+	}
+}
+
+func TestParseQuestionsAcceptsPythonConstants(t *testing.T) {
+	qs, err := schema.ParseQuestions([]byte(`{"q":{"type":"choice","instructions":"x","criteria":[Infinity,-Infinity,NaN,1e400]}}`))
+	if err == nil {
+		t.Fatalf("1e400 and Infinity are one key in Python; got %v", qs.IDs())
+	}
+	if !strings.Contains(err.Error(), "repeats label 0") {
+		t.Errorf("err = %v", err)
+	}
+	qs, err = schema.ParseQuestions([]byte(`{"q":{"type":"choice","instructions":"x","criteria":[Infinity,-Infinity,NaN]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, _ := qs.Get("q")
+	if got := q.Labels(); !slices.Equal(got, []string{"inf", "-inf", "nan"}) {
+		t.Errorf("Labels = %q", got)
 	}
 }
 
@@ -365,8 +398,8 @@ func mustOrder(t *testing.T, q schema.Question, order []int) schema.Question {
 
 func TestAnswersJSON(t *testing.T) {
 	common := schema.Common{Confidence: 0.5, AnswerConfidence: 1, Action: schema.Action{ActProbability: 0.0001}}
-	choice := &schema.ChoiceAnswer{Choice: "b", Probabilities: schema.Probabilities{{Label: "a", P: 0.25}, {Label: "b", P: 0.75}}, Common: common}
-	score := &schema.ScoreAnswer{Score: 1.5, Legend: []string{"lo", "hi"}, Probabilities: schema.Probabilities{{Label: "0", P: 0.5}, {Label: "1", P: 0.5}}, Common: common}
+	choice := &schema.ChoiceAnswer{Choice: schema.Text("b"), Probabilities: schema.Probabilities{{Label: schema.Text("a"), P: 0.25}, {Label: schema.Text("b"), P: 0.75}}, Common: common}
+	score := &schema.ScoreAnswer{Score: 1.5, Legend: []string{"lo", "hi"}, Probabilities: schema.Probabilities{{Label: schema.Text("0"), P: 0.5}, {Label: schema.Text("1"), P: 0.5}}, Common: common}
 	noul := &schema.NoulAnswer{Noul: 0.125, Common: schema.Common{Confidence: 0.875, AnswerConfidence: 0.875, Action: schema.Action{ActProbability: 1e-05}}}
 
 	want := map[string]string{
@@ -393,10 +426,10 @@ func TestAnswersJSON(t *testing.T) {
 			}
 		})
 	}
-	if v, ok := choice.Probabilities.Get("b"); !ok || v != 0.75 {
+	if v, ok := choice.Probabilities.Get(schema.Text("b")); !ok || v != 0.75 {
 		t.Errorf("Get(b) = %v, %v", v, ok)
 	}
-	if _, ok := choice.Probabilities.Get("z"); ok {
+	if _, ok := choice.Probabilities.Get(schema.Text("z")); ok {
 		t.Error("Get found a label that is not there")
 	}
 
@@ -412,7 +445,7 @@ func TestAnswersJSON(t *testing.T) {
 	if len(back) != 2 || back[0].ID != "z" || back[1].ID != "a<b" {
 		t.Errorf("answers lost their order: %+v", back)
 	}
-	if a, ok := back.Get("a<b"); !ok || a.(*schema.ChoiceAnswer).Choice != "b" {
+	if a, ok := back.Get("a<b"); !ok || a.(*schema.ChoiceAnswer).Choice != schema.Text("b") {
 		t.Errorf("Get = %v, %v", a, ok)
 	}
 	if _, ok := back.Get("nope"); ok {
@@ -424,12 +457,9 @@ func TestAnswerMarshalRefuses(t *testing.T) {
 	bad := map[string]json.Marshaler{
 		"NaN":       &schema.NoulAnswer{Noul: math.NaN()},
 		"Inf":       &schema.ScoreAnswer{Score: math.Inf(1)},
-		"nil":       (*schema.ChoiceAnswer)(nil),
-		"nil noul":  (*schema.NoulAnswer)(nil),
-		"nil score": (*schema.ScoreAnswer)(nil),
-		"bad UTF-8": &schema.ChoiceAnswer{Choice: "\xff"},
+		"bad UTF-8": &schema.ChoiceAnswer{Choice: schema.Text("\xff")},
 		"bad act":   &schema.NoulAnswer{Common: schema.Common{Action: schema.Action{ActProbability: math.NaN()}}},
-		"bad prob":  &schema.ChoiceAnswer{Choice: "a", Probabilities: schema.Probabilities{{Label: "a", P: math.Inf(-1)}}},
+		"bad prob":  &schema.ChoiceAnswer{Choice: schema.Text("a"), Probabilities: schema.Probabilities{{Label: schema.Text("a"), P: math.Inf(-1)}}},
 	}
 	for name, m := range bad {
 		if _, err := m.MarshalJSON(); err == nil {
@@ -475,7 +505,7 @@ func TestUnmarshalAnswerRefuses(t *testing.T) {
 		}
 	}
 	var ps schema.Probabilities
-	if err := json.Unmarshal([]byte(`{"b":0.25,"a":0.5}`), &ps); err != nil || ps[0].Label != "b" {
+	if err := json.Unmarshal([]byte(`{"b":0.25,"a":0.5}`), &ps); err != nil || ps[0].Label != schema.Text("b") {
 		t.Errorf("Probabilities = %v, %v", ps, err)
 	}
 	if err := json.Unmarshal([]byte(`[1]`), &ps); err == nil {

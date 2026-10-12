@@ -64,7 +64,7 @@ func (a Action) MarshalJSON() ([]byte, error) {
 
 // Probability is one option's probability, keyed by its label.
 type Probability struct {
-	Label string
+	Label Label
 	P     float64
 }
 
@@ -72,8 +72,9 @@ type Probability struct {
 // one JSON object in that order, as laya's dict does.
 type Probabilities []Probability
 
-// Get is the probability of label.
-func (ps Probabilities) Get(label string) (float64, bool) {
+// Get is the probability of label. Labels read back from JSON are text, as the keys of a JSON
+// object are: after a round trip, look an int, float or bool label up by Text(label.Key()).
+func (ps Probabilities) Get(label Label) (float64, bool) {
 	for _, p := range ps {
 		if p.Label == label {
 			return p.P, true
@@ -108,8 +109,8 @@ func (ps *Probabilities) UnmarshalJSON(data []byte) error {
 // ChoiceAnswer picks one labelled option.
 type ChoiceAnswer struct {
 	// Choice is the label with the highest probability; the first such label on a tie, as
-	// numpy.argmax breaks it.
-	Choice string
+	// numpy.argmax breaks it. It keeps its type: the int 1 is reported as 1, not "1".
+	Choice Label
 	// Probabilities has one entry per option, in label order whatever the option order was.
 	Probabilities Probabilities
 	// Common.Confidence is 1 - H(p)/log(k), clipped to [0, 1]; 1 for a single option.
@@ -146,15 +147,14 @@ func (*NoulAnswer) isAnswer()   {}
 
 // MarshalJSON writes laya's answer dict: type, choice, probabilities, confidence,
 // answer_confidence, action.
-func (a *ChoiceAnswer) MarshalJSON() ([]byte, error) {
-	if a == nil {
-		return nil, errNilAnswer
-	}
+func (a ChoiceAnswer) MarshalJSON() ([]byte, error) {
 	var b strings.Builder
 	b.WriteString(`{"type":"choice","choice":`)
-	if err := writeString(&b, a.Choice); err != nil {
+	choice, err := a.Choice.MarshalJSON()
+	if err != nil {
 		return nil, err
 	}
+	b.Write(choice)
 	b.WriteString(`,"probabilities":`)
 	if err := writeProbabilities(&b, a.Probabilities); err != nil {
 		return nil, err
@@ -164,10 +164,7 @@ func (a *ChoiceAnswer) MarshalJSON() ([]byte, error) {
 
 // MarshalJSON writes laya's answer dict: type, score, legend ({"0": text, ...}), probabilities,
 // confidence, answer_confidence, action.
-func (a *ScoreAnswer) MarshalJSON() ([]byte, error) {
-	if a == nil {
-		return nil, errNilAnswer
-	}
+func (a ScoreAnswer) MarshalJSON() ([]byte, error) {
 	var b strings.Builder
 	b.WriteString(`{"type":"score","score":`)
 	if err := writeFloat(&b, a.Score); err != nil {
@@ -191,10 +188,7 @@ func (a *ScoreAnswer) MarshalJSON() ([]byte, error) {
 }
 
 // MarshalJSON writes laya's answer dict: type, noul, confidence, answer_confidence, action.
-func (a *NoulAnswer) MarshalJSON() ([]byte, error) {
-	if a == nil {
-		return nil, errNilAnswer
-	}
+func (a NoulAnswer) MarshalJSON() ([]byte, error) {
 	var b strings.Builder
 	b.WriteString(`{"type":"noul","noul":`)
 	if err := writeFloat(&b, a.Noul); err != nil {
@@ -202,8 +196,6 @@ func (a *NoulAnswer) MarshalJSON() ([]byte, error) {
 	}
 	return finish(&b, a.Common)
 }
-
-var errNilAnswer = errors.New("schema: cannot marshal a nil answer")
 
 // finish appends the fields every answer ends with and closes the object.
 func finish(b *strings.Builder, c Common) ([]byte, error) {
@@ -250,7 +242,7 @@ func writeProbabilities(b *strings.Builder, ps Probabilities) error {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		if err := writeString(b, p.Label); err != nil {
+		if err := writeString(b, p.Label.Key()); err != nil {
 			return err
 		}
 		b.WriteByte(':')
@@ -301,8 +293,12 @@ func answerFrom(v any) (Answer, error) {
 	switch Type(typ) {
 	case TypeChoice:
 		a := &ChoiceAnswer{Common: common}
-		if a.Choice, err = fieldString(obj, "choice"); err != nil {
+		choice, err := field(obj, "choice")
+		if err != nil {
 			return nil, err
+		}
+		if a.Choice, err = LabelOf(choice); err != nil || choice == nil {
+			return nil, fmt.Errorf(`schema: answer "choice" must be a string, bool or number, got %s`, pyvalue.TypeName(choice))
 		}
 		if a.Probabilities, err = fieldProbabilities(obj); err != nil {
 			return nil, err
@@ -403,7 +399,7 @@ func probabilitiesFrom(v any) (Probabilities, error) {
 		if err != nil {
 			return nil, err
 		}
-		out[i] = Probability{Label: m.Key.(string), P: p}
+		out[i] = Probability{Label: Text(m.Key.(string)), P: p}
 	}
 	return out, nil
 }

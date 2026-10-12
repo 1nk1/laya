@@ -3,6 +3,7 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/NandhaKishorM/laya/laya-go/internal/pyjson"
@@ -48,6 +49,9 @@ func (as Answers) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		m, ok := a.Answer.(json.Marshaler)
+		if rv := reflect.ValueOf(a.Answer); ok && rv.Kind() == reflect.Pointer && rv.IsNil() {
+			return nil, fmt.Errorf("schema: answer %s is a nil %T", pyjson.Repr(a.ID), a.Answer)
+		}
 		if !ok {
 			return nil, fmt.Errorf("schema: answer %s is a %T, which cannot be marshaled", pyjson.Repr(a.ID), a.Answer)
 		}
@@ -118,14 +122,48 @@ type Usage struct {
 	CollapsedOptions CollapsedQuestions `json:"options,omitempty"`
 }
 
-// MarshalJSON writes laya's usage dict. truncated_questions is always a list, as Python's is,
-// never null.
+// MarshalJSON writes laya's usage dict by hand, so the bytes are Python's: truncated_questions is
+// always a list, never null, and the ids are not HTML-escaped.
 func (u Usage) MarshalJSON() ([]byte, error) {
-	type plain Usage // no methods, so no recursion
-	if u.TruncatedQuestions == nil {
-		u.TruncatedQuestions = []string{}
+	var b strings.Builder
+	fmt.Fprintf(&b, `{"input_tokens":%d,"output_tokens":%d,"state_tokens":%d,"state_tokens_dropped":%d,"truncated":%t,"truncated_questions":[`,
+		u.InputTokens, u.OutputTokens, u.StateTokens, u.StateTokensDropped, u.Truncated)
+	for i, id := range u.TruncatedQuestions {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		if err := writeString(&b, id); err != nil {
+			return nil, err
+		}
 	}
-	return json.Marshal(plain(u))
+	b.WriteByte(']')
+	if len(u.CollapsedOptions) > 0 {
+		opts, err := u.CollapsedOptions.MarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		b.WriteString(`,"options":`)
+		b.Write(opts)
+	}
+	b.WriteByte('}')
+	return []byte(b.String()), nil
+}
+
+// MarshalJSON writes laya's predict() result: model, answers, usage.
+func (p Prediction) MarshalJSON() ([]byte, error) {
+	model, err := pyjson.Dumps(p.Model)
+	if err != nil {
+		return nil, err
+	}
+	answers, err := p.Answers.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	usage, err := p.Usage.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return []byte(`{"model":` + model + `,"answers":` + string(answers) + `,"usage":` + string(usage) + `}`), nil
 }
 
 // CollapsedQuestion is one question's CollapsedOptions report, with the question id.
@@ -174,9 +212,13 @@ func (cs CollapsedQuestions) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON reads the object MarshalJSON writes, keeping its order.
 func (cs *CollapsedQuestions) UnmarshalJSON(data []byte) error {
-	members, err := pyvalue.ParseMembers(data)
+	v, err := pyvalue.Parse(data)
 	if err != nil {
 		return fmt.Errorf("schema: options: %w", err)
+	}
+	members, ok := v.(pyjson.Object)
+	if !ok {
+		return fmt.Errorf("schema: options is a JSON object, got %s", pyvalue.TypeName(v))
 	}
 	out := make(CollapsedQuestions, len(members))
 	for i, m := range members {

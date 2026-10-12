@@ -102,10 +102,13 @@ const (
 // which describes it to the model.
 type Option struct {
 	// Label names the option. It is rendered as option text and keys the answer's
-	// probabilities, and it must be unique within the question. Python also accepts number and
-	// bool labels and renders them with str(); spell them that way here ("True", "1.0"). An empty
-	// label is accepted, as it is in Python.
+	// probabilities, and it must be unique within the question. An empty label is accepted, as
+	// it is in Python.
 	Label string
+	// LabelValue, when not nil, is the label instead of Label (which must then be empty): a bool,
+	// an integer, a float or a json.Number, as Python allows. 1 and "1" are different labels, and
+	// 1, 1.0 and true are one (Python keys a dict that way, so Choice refuses the repeat).
+	LabelValue any
 	// Criterion describes the option: a string, or a structured value rendered as JSON. nil and
 	// "" mean "no description", and the option renders as its label alone.
 	Criterion any
@@ -131,7 +134,7 @@ type criterion struct {
 }
 
 type choiceOption struct {
-	label string
+	label Label
 	crit  criterion
 }
 
@@ -211,23 +214,35 @@ func Choice(instructions string, options ...Option) (Question, error) {
 	if len(options) == 0 {
 		return Question{}, &QuestionError{Reason: reasonChoiceEmpty}
 	}
+	labels := make([]Label, len(options))
 	for i, o := range options {
-		if !utf8.ValidString(o.Label) {
+		switch {
+		case o.LabelValue != nil && o.Label != "":
+			return Question{}, refuse("choice label %d sets both Label and LabelValue; set one", i)
+		case o.LabelValue != nil:
+			l, err := LabelOf(o.LabelValue)
+			if err != nil {
+				return Question{}, refuse("choice label %d: %v", i, err)
+			}
+			labels[i] = l
+		case !utf8.ValidString(o.Label):
 			return Question{}, refuse("choice label %d is not valid UTF-8; a Python str always is", i)
+		default:
+			labels[i] = Text(o.Label)
 		}
 	}
 	if r := checkLabelsDistinct(len(options),
-		func(i int) string { return options[i].Label },
-		func(i int) string { return pyjson.Repr(options[i].Label) }); r != "" {
+		func(i int) string { return labels[i].eqKey() },
+		func(i int) string { return labels[i].repr() }); r != "" {
 		return Question{}, &QuestionError{Reason: r}
 	}
 	opts := make([]choiceOption, len(options))
 	for i, o := range options {
 		c, err := newCriterion(o.Criterion)
 		if err != nil {
-			return Question{}, refuse("choice option %s: criterion cannot be rendered: %v", pyjson.Repr(o.Label), err)
+			return Question{}, refuse("choice option %s: criterion cannot be rendered: %v", labels[i].repr(), err)
 		}
-		opts[i] = choiceOption{label: o.Label, crit: c}
+		opts[i] = choiceOption{label: labels[i], crit: c}
 	}
 	return Question{typ: TypeChoice, instructions: instructions, options: opts}, nil
 }
@@ -374,14 +389,15 @@ func (q Question) OptionOrder() []int {
 	return append([]int(nil), q.order...)
 }
 
-// Labels are the answer keys in label-index order: the choice labels, the level indices "0",
-// "1", ..., or the noul's false and true labels.
+// Labels are the labels as text, str() of each, in label-index order: the choice labels, the
+// level indices "0", "1", ..., or the noul's false and true labels. This is the spelling in the
+// rendered prompt; AnswerLabels are the answer keys.
 func (q Question) Labels() []string {
 	switch q.typ {
 	case TypeChoice:
 		out := make([]string, len(q.options))
 		for i, o := range q.options {
-			out[i] = o.label
+			out[i] = o.label.String()
 		}
 		return out
 	case TypeScore:
@@ -396,6 +412,28 @@ func (q Question) Labels() []string {
 	return nil
 }
 
+// AnswerLabels are the labels an answer is keyed by, in label-index order, with their types: the
+// choice labels as given, the level indices "0", "1", ... as text, or the noul's two labels.
+func (q Question) AnswerLabels() []Label {
+	switch q.typ {
+	case TypeChoice:
+		out := make([]Label, len(q.options))
+		for i, o := range q.options {
+			out[i] = o.label
+		}
+		return out
+	case TypeScore:
+		out := make([]Label, len(q.levels))
+		for i := range out {
+			out[i] = Text(strconv.Itoa(i))
+		}
+		return out
+	case TypeNoul:
+		return []Label{Text(q.falseLabel), Text(q.trueLabel)}
+	}
+	return nil
+}
+
 // RenderedOptions are the option texts the model reads, in label-index order: laya's
 // render_options. Everything downstream is token ids derived from these strings, so this is
 // the text a port must match character for character. It does not apply OptionOrder.
@@ -405,9 +443,9 @@ func (q Question) RenderedOptions() []string {
 		out := make([]string, len(q.options))
 		for i, o := range q.options {
 			if o.crit.set {
-				out[i] = o.label + ": " + o.crit.text
+				out[i] = o.label.String() + ": " + o.crit.text
 			} else {
-				out[i] = o.label
+				out[i] = o.label.String()
 			}
 		}
 		return out
@@ -467,11 +505,11 @@ func (q Question) MarshalJSON() ([]byte, error) {
 				if i > 0 {
 					b.WriteByte(',')
 				}
-				label, err := pyjson.Dumps(o.label)
+				label, err := o.label.MarshalJSON()
 				if err != nil {
 					return nil, err
 				}
-				b.WriteString(label)
+				b.Write(label)
 			}
 			b.WriteByte(']')
 			break
@@ -481,7 +519,7 @@ func (q Question) MarshalJSON() ([]byte, error) {
 			if i > 0 {
 				b.WriteByte(',')
 			}
-			label, err := pyjson.Dumps(o.label)
+			label, err := pyjson.Dumps(o.label.Key())
 			if err != nil {
 				return nil, err
 			}
@@ -648,29 +686,33 @@ func wireInstructions(get func(string) (any, bool)) (string, *QuestionError) {
 }
 
 func wireChoice(crit any) ([]choiceOption, *QuestionError) {
-	var labels []string
+	var labels []Label
 	var values []any
-	var reprs []string
-	var keys []string
 	switch x := crit.(type) {
 	case pyjson.Object:
 		for _, m := range x {
-			labels = append(labels, m.Key.(string))
+			labels = append(labels, Text(m.Key.(string)))
 			values = append(values, m.Value)
 		}
 	case []any:
 		for i, label := range x {
 			switch label.(type) {
-			case string, bool, json.Number:
+			case string, bool, json.Number, float64:
 			case nil:
 				return nil, refuse(reasonLabelNullFormat, i)
 			default:
 				return nil, refuse(reasonLabelTypeFormat, i, pyvalue.TypeName(label), pyvalue.Repr(label))
 			}
-			labels = append(labels, pyvalue.Str(label))
+			l, err := LabelOf(label)
+			if err != nil {
+				return nil, refuse("choice label %d: %v", i, err)
+			}
+			labels = append(labels, l)
 			values = append(values, nil)
-			reprs = append(reprs, pyvalue.Repr(label))
-			keys = append(keys, pyvalue.KeyOf(label))
+		}
+		if r := checkLabelsDistinct(len(labels),
+			func(i int) string { return labels[i].eqKey() }, func(i int) string { return labels[i].repr() }); r != "" {
+			return nil, &QuestionError{Reason: r}
 		}
 	default:
 		return nil, &QuestionError{Reason: reasonChoiceShape}
@@ -678,27 +720,11 @@ func wireChoice(crit any) ([]choiceOption, *QuestionError) {
 	if len(labels) == 0 {
 		return nil, &QuestionError{Reason: reasonChoiceEmpty}
 	}
-	if keys != nil {
-		if r := checkLabelsDistinct(len(keys),
-			func(i int) string { return keys[i] }, func(i int) string { return reprs[i] }); r != "" {
-			return nil, &QuestionError{Reason: r}
-		}
-	}
-	// Python keeps 1 and "1" apart as keys; Go keys the answer by the label's text, where they
-	// are one. Refusing is the honest answer: the probabilities would have two entries named "1".
-	spelled := make(map[string]int, len(labels))
-	for i, label := range labels {
-		if j, dup := spelled[label]; dup {
-			return nil, refuse("choice label %d is spelled the same as label %d (%s) once rendered as text; "+
-				"laya-go keys an answer by that text, so every label needs its own spelling", i, j, pyjson.Repr(label))
-		}
-		spelled[label] = i
-	}
 	opts := make([]choiceOption, len(labels))
 	for i, label := range labels {
 		c, err := newCriterion(values[i])
 		if err != nil {
-			return nil, refuse("choice option %s: criterion cannot be rendered: %v", pyjson.Repr(label), err)
+			return nil, refuse("choice option %s: criterion cannot be rendered: %v", label.repr(), err)
 		}
 		opts[i] = choiceOption{label: label, crit: c}
 	}

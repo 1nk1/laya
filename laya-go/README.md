@@ -56,6 +56,10 @@ python laya-go/scripts/gen_tables.py --check    # fail if a committed table is s
 python laya-go/scripts/gen_go_fixtures.py       # regenerate laya-go/fixtures/go_extra.json
 ```
 
+Run them under Python 3.12, the version the lane pins. `go_extra.json` records the interpreter's
+Unicode version (15.0.0), and `--check` under an interpreter with another one (3.11 has 14.0.0)
+reports the Unicode-dependent families as stale.
+
 Tests read goldens from `$LAYA_GO_FIXTURES` (default: `laya-java/fixtures`, plus the committed
 `laya-go/fixtures/go_extra.json`), and the tokenizer tests need `$LAYA_CHECKPOINTS` to point at a
 directory holding the `english` and `multilingual` checkpoints. Without it they skip, and the CI

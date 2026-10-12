@@ -56,21 +56,24 @@ func NewQuestions(entries ...Entry) (Questions, error) {
 const repeatedID = "id is given twice; answers are keyed by id, so every question needs its own"
 
 // ParseQuestions reads a questions object in the Python wire form, {"id": {"type": ...}, ...},
-// keeping document order and validating every question as laya's _check_question does. A
-// repeated id is refused rather than resolved last-wins.
+// keeping document order and validating every question as laya's _check_question does. A repeated
+// id keeps its first position and takes its last value, as Python's json.loads resolves it, and
+// that value is then validated like any other (a null one is "definition must be a dict, got
+// NoneType"). NaN and Infinity are accepted as Python accepts them.
 func ParseQuestions(data []byte) (Questions, error) {
-	members, err := pyvalue.ParseMembers(data)
+	v, err := pyvalue.Parse(data)
 	if err != nil {
 		return Questions{}, fmt.Errorf("schema: questions: %w", err)
+	}
+	members, ok := v.(pyjson.Object)
+	if !ok {
+		return Questions{}, fmt.Errorf("schema: questions must be a JSON object, got %s", pyvalue.TypeName(v))
 	}
 	qs := Questions{entries: make([]Entry, 0, len(members)), index: make(map[string]int, len(members))}
 	for _, m := range members {
 		id := m.Key.(string)
 		if err := checkID(id); err != nil {
 			return Questions{}, err
-		}
-		if _, dup := qs.index[id]; dup {
-			return Questions{}, &QuestionError{ID: id, Reason: repeatedID}
 		}
 		q, qerr := fromWire(m.Value)
 		if qerr != nil {

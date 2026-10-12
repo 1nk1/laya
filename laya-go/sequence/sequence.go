@@ -1,6 +1,7 @@
 package sequence
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -13,16 +14,16 @@ import (
 	"github.com/NandhaKishorM/laya/laya-go/tokenizer"
 )
 
-// The head-budget constants of laya/common.py's build_head.
+// The head-budget literals of laya/common.py's build_head, which Python does not name.
 const (
-	// OptionTokenCap is the tokens one option keeps after its [MASK], before any budget.
-	OptionTokenCap = 48
-	// MinOptionBudget is the head room the options must leave before they are re-capped.
-	MinOptionBudget = 16
-	// MinTokensPerOption is the floor on a re-capped option, its [MASK] included.
-	MinTokensPerOption = 4
-	// MinInstructionTokens is the floor on the instruction, "<type> question: " included.
-	MinInstructionTokens = 8
+	// optionTokenCap is the tokens one option keeps after its [MASK], before any budget.
+	optionTokenCap = 48
+	// minOptionBudget is the head room the options must leave before they are re-capped.
+	minOptionBudget = 16
+	// minTokensPerOption is the floor on a re-capped option, its [MASK] included.
+	minTokensPerOption = 4
+	// minInstructionTokens is the floor on the instruction, "<type> question: " included.
+	minInstructionTokens = 8
 )
 
 // ErrMissingSpecialToken is wrapped when the tokenizer names no CLS, SEP or mask token, which a
@@ -67,19 +68,58 @@ type State struct {
 
 // SerializeState is laya's serialize_state: a string passes through, anything else becomes
 // json.dumps(state, ensure_ascii=False). nil is the text "null", as in Python. A Go map is
-// written in sorted key order; use lang.Object for an order-sensitive state.
+// written in sorted key order; use lang.Object (or ParseState) for an order-sensitive state. A
+// json.Number is written as Python's json.loads and json.dumps would write the literal: an int
+// literal stays an int of any size (up to Python's 4300 digits), and a float literal takes
+// Python's float repr (1e+16, 100.0, 1e-05), with an overflow written as Infinity.
 func SerializeState(state any) (string, error) {
 	if s, ok := state.(string); ok {
 		return s, nil
 	}
-	if rv := reflect.ValueOf(state); rv.IsValid() && rv.Kind() == reflect.String {
-		return rv.String(), nil // a named string type is still a str
+	if _, isNumber := state.(json.Number); !isNumber {
+		if rv := reflect.ValueOf(state); rv.IsValid() && rv.Kind() == reflect.String {
+			return rv.String(), nil // a named string type is still a str
+		}
 	}
 	text, err := pyvalue.Dumps(state)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrUnsupportedState, err)
 	}
 	return text, nil
+}
+
+// ParseState reads a JSON document as Python's json.loads reads it, for use as a state: objects
+// keep their key order (a repeated key keeps its first place and takes its last value) as
+// lang.Object, and numbers stay json.Number, so that 2 serializes as 2 and 2.0 as 2.0. NaN,
+// Infinity and -Infinity are accepted, as Python accepts them. A lone surrogate escape, a raw
+// control character in a string, invalid UTF-8 and an int literal of more than 4300 digits are
+// refused. data is the text json.loads would be given as a str, in UTF-8: a byte order mark is
+// refused as Python refuses one in a str, and UTF-16 or UTF-32 input must be decoded first.
+func ParseState(data []byte) (any, error) {
+	v, err := pyvalue.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("sequence: state: %w", err)
+	}
+	return public(v), nil
+}
+
+// public maps the decoder's pyjson.Object onto the exported lang.Object.
+func public(v any) any {
+	switch x := v.(type) {
+	case pyjson.Object:
+		out := make(lang.Object, len(x))
+		for i, m := range x {
+			out[i] = lang.Member{Key: m.Key.(string), Value: public(m.Value)}
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = public(item)
+		}
+		return out
+	}
+	return v
 }
 
 // EncodeState serializes state, scrubs the mask token from it and tokenizes it. Keep is KeepEnd
@@ -209,14 +249,14 @@ func BuildHead(tok *tokenizer.Tokenizer, q schema.Question, headMaxLen int) (Hea
 		// The cap is applied by the tokenizer, not after the fact, so a long description is
 		// not tokenized in full to keep 48 tokens of it.
 		text := " " + strings.ReplaceAll(opts[i], sp.maskToken, " ")
-		span := append(make([]int32, 0, OptionTokenCap+1), sp.mask)
-		spans[slot] = append(span, tok.EncodeLimit(text, OptionTokenCap)...)
+		span := append(make([]int32, 0, optionTokenCap+1), sp.mask)
+		spans[slot] = append(span, tok.EncodeLimit(text, optionTokenCap)...)
 		total += len(spans[slot])
 	}
 	budget := headMaxLen - total
 	var perOption *int
-	if budget < MinOptionBudget {
-		per := max(MinTokensPerOption, floorDiv(headMaxLen-MinOptionBudget, max(1, len(spans))))
+	if budget < minOptionBudget {
+		per := max(minTokensPerOption, floorDiv(headMaxLen-minOptionBudget, max(1, len(spans))))
 		perOption = &per
 		total = 0
 		for slot, span := range spans {
@@ -228,7 +268,7 @@ func BuildHead(tok *tokenizer.Tokenizer, q schema.Question, headMaxLen int) (Hea
 		}
 		budget = headMaxLen - total
 	}
-	if keep := max(MinInstructionTokens, budget); keep < len(headIDs) {
+	if keep := max(minInstructionTokens, budget); keep < len(headIDs) {
 		headIDs = headIDs[:keep]
 	}
 	ids := make([]int32, 0, 2+len(headIDs)+total+1)
@@ -273,8 +313,37 @@ func checkBudget(b Budget) error {
 	return nil
 }
 
+// MarkersError is returned by Build when the question's option markers do not all fit in
+// MaxLen: the head is clamped to MaxLen, so the model would be asked about fewer options than the
+// question defines. build_sequence drops them silently; the check that refuses is the agent's
+// (Agent._encode_state), and Build carries it so no caller can forget it. ID is empty as Build
+// returns it; set it to the question's id and Error is the agent's message, with its prefix.
+type MarkersError struct {
+	// ID is the question id, or "".
+	ID string
+	// Kept is how many markers fit below MaxLen, Total how many options the question defines.
+	Kept, Total int
+	// MaxLen and HeadMaxLen are the budget that was asked for.
+	MaxLen, HeadMaxLen int
+}
+
+// Error is laya's message: "question 'id': only 3 of its 5 option markers fit in max_len=24 with
+// head_max_len=16 spent on the question; lower head_max_len, raise max_len, or use fewer options".
+func (e *MarkersError) Error() string {
+	prefix := ""
+	if e.ID != "" {
+		prefix = "question " + pyjson.Repr(e.ID) + ": "
+	}
+	return fmt.Sprintf("%sonly %d of its %d option markers fit in max_len=%d with head_max_len=%d "+
+		"spent on the question; lower head_max_len, raise max_len, or use fewer options",
+		prefix, e.Kept, e.Total, e.MaxLen, e.HeadMaxLen)
+}
+
 // Build is laya's build_sequence: the head, then as much of state as the room after it allows,
-// then [SEP], clamped to b.MaxLen. Markers that fall past MaxLen are dropped.
+// then [SEP], clamped to b.MaxLen. It is also the agent's marker check: when an option's marker
+// falls past MaxLen it returns a *MarkersError instead of a sequence that asks about fewer
+// options than were defined. Memory is linear in the question's total option text, as it is in
+// Python: each option is tokenized to at most 48 tokens, but its rendered text is held whole.
 func Build(tok *tokenizer.Tokenizer, q schema.Question, state State, b Budget) (Sequence, error) {
 	if err := checkBudget(b); err != nil {
 		return Sequence{}, err
@@ -307,6 +376,9 @@ func Build(tok *tokenizer.Tokenizer, q schema.Question, state State, b Budget) (
 		if m < b.MaxLen {
 			markers = append(markers, m)
 		}
+	}
+	if len(markers) != len(head.Markers) {
+		return Sequence{}, &MarkersError{Kept: len(markers), Total: len(head.Markers), MaxLen: b.MaxLen, HeadMaxLen: b.HeadMaxLen}
 	}
 	return Sequence{IDs: ids, Markers: markers, Stats: head.Stats, Truncation: Truncation{
 		StateTokens:        len(state.IDs),

@@ -97,14 +97,28 @@ func TestSequencesGolden(t *testing.T) {
 				}
 				b := sequence.Budget{MaxLen: fixtures.Int(t, rec.Must("max_len")), HeadMaxLen: fixtures.Int(t, rec.Must("head_max_len"))}
 				seq, err := sequence.Build(tok, q, state, b)
+				wantMarkers := intsOf(t, rec.Must("markers"))
+				optionCount := fixtures.Int(t, fixtures.Obj(t, rec.Must("stats")).Must("options"))
+				var dropped *sequence.MarkersError
+				if errors.As(err, &dropped) {
+					// build_sequence returns the markers that fit and the agent refuses; Build does
+					// both, so the refusal must name exactly the markers Python kept.
+					if dropped.Kept != len(wantMarkers) || dropped.Total != optionCount || len(wantMarkers) >= optionCount {
+						t.Errorf("MarkersError = %+v; Python kept %d of %d", *dropped, len(wantMarkers), optionCount)
+					}
+					return
+				}
 				if err != nil {
 					t.Fatal(err)
+				}
+				if len(wantMarkers) != optionCount {
+					t.Fatalf("Python dropped markers (%d of %d) and Build did not refuse", len(wantMarkers), optionCount)
 				}
 				if want := fixtures.Ints(t, rec.Must("ids")); !slices.Equal(seq.IDs, want) {
 					t.Errorf("ids: %s", firstDifference(seq.IDs, want))
 				}
-				if want := intsOf(t, rec.Must("markers")); !slices.Equal(seq.Markers, want) {
-					t.Errorf("markers = %v, want %v", seq.Markers, want)
+				if !slices.Equal(seq.Markers, wantMarkers) {
+					t.Errorf("markers = %v, want %v", seq.Markers, wantMarkers)
 				}
 				stats := fixtures.Obj(t, rec.Must("stats"))
 				if got, want := seq.Stats.Options, fixtures.Int(t, stats.Must("options")); got != want {
@@ -270,12 +284,12 @@ func TestWindowPlanGolden(t *testing.T) {
 		if b := rec.Must("batch_size"); b != nil {
 			in[3] = fixtures.Int(t, b)
 		}
-		want := 0 // Python's None
+		want, wantOK := 0, false // Python's None
 		if c := rec.Must("cap"); c != nil {
-			want = fixtures.Int(t, c)
+			want, wantOK = fixtures.Int(t, c), true
 		}
-		if got := sequence.BatchCap(in[0], in[1], in[2], in[3]); got != want {
-			t.Errorf("BatchCap%v = %d, Python has %d", in, got, want)
+		if got, ok := sequence.BatchCap(in[0], in[1], in[2], in[3]); got != want || ok != wantOK {
+			t.Errorf("BatchCap%v = %d, %v; Python has %d, %v", in, got, ok, want, wantOK)
 		}
 		if want > 0 && in[3] <= 0 {
 			capped++

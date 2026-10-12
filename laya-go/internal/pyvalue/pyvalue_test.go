@@ -23,6 +23,15 @@ func TestParse(t *testing.T) {
 		{"float spelling", `[1e16, 1e-5, 0.1, 2.5e+300]`, `[1e+16, 1e-05, 0.1, 2.5e+300]`},
 		{"overflow is inf", `1e999`, `inf`},
 		{"white space", " \n[ ]\t", `[]`},
+		{"python constants", `[NaN, Infinity, -Infinity]`, `[nan, inf, -inf]`},
+		{"surrogate pair", `"\ud83d\ude00 \u00e9"`, `'😀 é'`},
+		{"escapes", `"a\"b\\c\/d\n"`, `'a"b\\c/d\n'`},
+		{"4300 digits is fine", strings.Repeat("9", 4300), strings.Repeat("9", 4300)},
+		{"the sign is not a digit", "-" + strings.Repeat("9", 4300), "-" + strings.Repeat("9", 4300)},
+		{"a float has no digit limit", strings.Repeat("1", 4301) + ".0", "inf"},
+		{"U+007F is not a control character", "\"\x7f\"", `'\x7f'`},
+		{"nested to the limit", strings.Repeat("[", MaxDepth+1) + strings.Repeat("]", MaxDepth+1),
+			strings.Repeat("[", MaxDepth+1) + strings.Repeat("]", MaxDepth+1)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -36,25 +45,16 @@ func TestParse(t *testing.T) {
 		})
 	}
 	for name, in := range map[string]string{
-		"empty": ``, "trailing": `1 2`, "bad UTF-8": "\"\xff\"", "NaN": `NaN`, "Infinity": `Infinity`,
+		"empty": ``, "trailing": `1 2`, "bad UTF-8": "\"\xff\"", "leading zero": `01`, "trailing comma": `[1,]`,
+		"lone high surrogate": `"\ud800"`, "lone low surrogate": `"\udc00x"`, "high then text": `"\ud800a"`,
+		"high then non-low": `"\ud800\u0041"`, "raw control": "\"a\tb\"", "bad escape": `"\q"`, "short unicode": `"\u12"`,
+		"bare minus": `-`, "dangling dot": `1.`, "single quotes": `'a'`, "int over 4300 digits": strings.Repeat("9", 4301),
+		"negative int over 4300 digits": "-" + strings.Repeat("9", 4301), "raw U+001F": "\"\x1f\"",
 		"deep": strings.Repeat("[", MaxDepth+2) + strings.Repeat("]", MaxDepth+2), "unterminated": `{"a":[`,
 	} {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
-	}
-}
-
-func TestParseMembersKeepsRepeats(t *testing.T) {
-	m, err := ParseMembers([]byte(`{"a":{"x":1,"x":2},"b":1,"a":3}`))
-	if err != nil || len(m) != 3 || m[0].Key != "a" || m[2].Key != "a" {
-		t.Errorf("members = %v, %v", m, err)
-	}
-	if got := Repr(m[0].Value); got != `{'x': 2}` {
-		t.Errorf("a nested object is decoded as Python decodes it: %s", got)
-	}
-	if _, err := ParseMembers([]byte(`[]`)); err == nil {
-		t.Error("a list is not members")
 	}
 }
 
@@ -161,5 +161,24 @@ func TestReprStrTypeNameKeyOf(t *testing.T) {
 		if got := Str(in); got != want {
 			t.Errorf("Str(%s) = %s, want %s", in, got, want)
 		}
+	}
+}
+
+// TestNumberHoldsTheGrammar: a json.Number a caller builds is held to the spellings json.loads
+// reads, and to the same digit limit, which counts digits and not the sign.
+func TestNumberHoldsTheGrammar(t *testing.T) {
+	for _, s := range []string{"", "-", "+1", ".5", "5.", "1_0.0", "0x1.8p1", "01", "1e", "1 ", "NaN", "Infinity"} {
+		if v, err := Number(json.Number(s)); err == nil {
+			t.Errorf("Number(%q) = %v, want an error", s, v)
+		}
+	}
+	if _, err := Number(json.Number("-" + strings.Repeat("9", 4300))); err != nil {
+		t.Errorf("a negative int of 4300 digits: %v", err)
+	}
+	if _, err := Number(json.Number("-" + strings.Repeat("9", 4301))); err == nil {
+		t.Error("a negative int of 4301 digits was accepted")
+	}
+	if v, err := Number(json.Number(strings.Repeat("9", 4301) + "e0")); err != nil || !math.IsInf(v.(float64), 1) {
+		t.Errorf("a float of 4301 digits = %v, %v", v, err)
 	}
 }

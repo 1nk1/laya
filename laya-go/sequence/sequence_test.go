@@ -3,7 +3,9 @@ package sequence_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"math/big"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +16,12 @@ import (
 	"github.com/NandhaKishorM/laya/laya-go/schema"
 	"github.com/NandhaKishorM/laya/laya-go/sequence"
 	"github.com/NandhaKishorM/laya/laya-go/tokenizer"
+)
+
+// Python's literals, which the package does not export.
+const (
+	optionTokenCap       = 48
+	minInstructionTokens = 8
 )
 
 func toy(tb testing.TB) *tokenizer.Tokenizer {
@@ -228,8 +236,8 @@ func TestBuildHeadBudgets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if span := head.IDs[head.Markers[1] : len(head.IDs)-1]; len(span) != 1+sequence.OptionTokenCap {
-			t.Errorf("long option span = %d ids, want %d", len(span), 1+sequence.OptionTokenCap)
+		if span := head.IDs[head.Markers[1] : len(head.IDs)-1]; len(span) != 1+optionTokenCap {
+			t.Errorf("long option span = %d ids, want %d", len(span), 1+optionTokenCap)
 		}
 		if head.Stats.TokensPerOption != nil {
 			t.Errorf("no cap was needed, got %d", *head.Stats.TokensPerOption)
@@ -257,8 +265,8 @@ func TestBuildHeadBudgets(t *testing.T) {
 			t.Errorf("options sharing a 3-token prefix must collapse: %+v", head.Stats)
 		}
 		// the instruction keeps at least 8 ids however the options crowd it
-		if first := head.Markers[0]; first < 1+sequence.MinInstructionTokens+1 {
-			t.Errorf("the instruction kept %d ids, want at least %d", first-2, sequence.MinInstructionTokens)
+		if first := head.Markers[0]; first < 1+minInstructionTokens+1 {
+			t.Errorf("the instruction kept %d ids, want at least %d", first-2, minInstructionTokens)
 		}
 	})
 	t.Run("cap is floor((head-16)/k)", func(t *testing.T) {
@@ -350,26 +358,25 @@ func TestBuildTruncation(t *testing.T) {
 			t.Errorf("seq = %+v", seq.Truncation)
 		}
 	})
-	t.Run("markers past MaxLen are dropped", func(t *testing.T) {
+	t.Run("markers past MaxLen are refused, as the agent refuses them", func(t *testing.T) {
 		labels := make([]string, 10)
 		for i := range labels {
 			labels[i] = strings.Repeat("o", 30) + string(rune('a'+i))
 		}
 		many := schema.MustQuestion(schema.ChoiceOf("p", labels...))
-		seq, err := sequence.Build(tok, many, sequence.State{}, sequence.Budget{MaxLen: 100, HeadMaxLen: 192})
-		if err != nil {
-			t.Fatal(err)
+		_, err := sequence.Build(tok, many, sequence.State{}, sequence.Budget{MaxLen: 100, HeadMaxLen: 192})
+		var me *sequence.MarkersError
+		if !errors.As(err, &me) || me.Total != 10 || me.Kept >= 10 || me.MaxLen != 100 || me.HeadMaxLen != 192 {
+			t.Fatalf("err = %v", err)
 		}
-		if len(seq.IDs) != 100 || len(seq.Markers) >= 10 {
-			t.Errorf("%d ids, %d markers", len(seq.IDs), len(seq.Markers))
+		want := fmt.Sprintf("only %d of its 10 option markers fit in max_len=100 with head_max_len=192 spent on the question; "+
+			"lower head_max_len, raise max_len, or use fewer options", me.Kept)
+		if err.Error() != want {
+			t.Errorf("text\n got %q\nwant %q", err.Error(), want)
 		}
-		for _, m := range seq.Markers {
-			if m >= 100 {
-				t.Errorf("marker %d is past MaxLen", m)
-			}
-		}
-		if seq.Stats.Options != 10 {
-			t.Errorf("Stats.Options = %d, want the 10 defined, not the survivors", seq.Stats.Options)
+		me.ID = "it's"
+		if got := me.Error(); !strings.HasPrefix(got, `question "it's": only `) {
+			t.Errorf("with an id: %q", got)
 		}
 	})
 }
@@ -488,10 +495,30 @@ func TestBatchCap(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := sequence.BatchCap(c.windows, c.window, c.config, c.size); got != c.want {
-				t.Errorf("BatchCap(%d, %d, %d, %d) = %d, want %d", c.windows, c.window, c.config, c.size, got, c.want)
+			got, ok := sequence.BatchCap(c.windows, c.window, c.config, c.size)
+			if got != c.want || ok != (c.want > 0) {
+				t.Errorf("BatchCap(%d, %d, %d, %d) = %d, %v; want %d", c.windows, c.window, c.config, c.size, got, ok, c.want)
 			}
 		})
+	}
+}
+
+func TestBatchCapDoesNotOverflow(t *testing.T) {
+	// 2^62 windows of 23 tokens against a 312-token default: n*11 overflows int64, and Python's
+	// integers do not, so the answer is the exact ceiling, not a wrapped 1 or a None.
+	n := 1 << 62
+	got, ok := sequence.BatchCap(n, 23, 312, 0)
+	want := new(big.Int).Mul(big.NewInt(int64(n)), big.NewInt(11))
+	want.Add(want, big.NewInt(155)).Div(want, big.NewInt(156)) // ceil(n*11/156)
+	if !ok || big.NewInt(int64(got)).Cmp(want) != 0 {
+		t.Errorf("BatchCap(2^62, 23, 312) = %d, %v; want %v", got, ok, want)
+	}
+	// a mild clamp at that scale is still Python's None, not a wrapped number
+	if got, ok := sequence.BatchCap(n, 300, 312, 0); ok {
+		t.Errorf("BatchCap(2^62, 300, 312) = %d, want none", got)
+	}
+	if got, ok := sequence.BatchCap(math.MaxInt, 1, 1<<40, 0); !ok || got <= 0 {
+		t.Errorf("BatchCap(MaxInt, 1, 2^40) = %d, %v", got, ok)
 	}
 }
 

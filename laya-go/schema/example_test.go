@@ -110,8 +110,8 @@ func ExampleAnswer() {
 		Model: schema.Model,
 		Answers: schema.Answers{
 			{ID: "team", Answer: &schema.ChoiceAnswer{
-				Choice:        "billing",
-				Probabilities: schema.Probabilities{{Label: "billing", P: 0.8123}, {Label: "technical", P: 0.1877}},
+				Choice:        schema.Text("billing"),
+				Probabilities: schema.Probabilities{{Label: schema.Text("billing"), P: 0.8123}, {Label: schema.Text("technical"), P: 0.1877}},
 				Common:        schema.Common{Confidence: 0.3, AnswerConfidence: 0.8123, Action: schema.Action{ActProbability: 0.5}},
 			}},
 			{ID: "refund", Answer: &schema.NoulAnswer{Noul: 0.9, Common: schema.Common{Confidence: 0.9, AnswerConfidence: 0.9}}},
@@ -121,7 +121,7 @@ func ExampleAnswer() {
 	for _, a := range p.Answers {
 		switch ans := a.Answer.(type) {
 		case *schema.ChoiceAnswer:
-			fmt.Println(a.ID, ans.Choice, ans.AnswerConfidence)
+			fmt.Println(a.ID, ans.Choice.String(), ans.AnswerConfidence)
 		case *schema.ScoreAnswer:
 			fmt.Println(a.ID, ans.Score)
 		case *schema.NoulAnswer:

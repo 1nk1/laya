@@ -6,9 +6,13 @@
 // back in label order (undo OptionOrder), derive the type's fields, and round every number to
 // four decimals as Python's round(x, 4) does.
 //
-// The softmax runs in float64 on float32 logits; Python runs it in float32. The two differ by at
-// most one unit in the fourth decimal on a few rows in 200,000, the line laya-ts, laya-dotnet
-// and laya-java hold.
+// Python divides the float32 logits by the temperature in float32, and so does Decode (the quotient
+// is rounded to float32 first). The reported probabilities are then computed in float64 from those
+// float32 quotients, where Python computes exp and the sum in float32. The choice, an argmax, is
+// taken on float32 exp values divided by their float32 sum, as Python takes it on its float32
+// probabilities. That narrows a near-tie but cannot settle it: numpy's float32 exp is a SIMD
+// routine that is not correctly rounded, so options whose quotients are within a few float32 ulps
+// can fall either way. The fuzz in the golden (go_extra.json, answers_fuzz) counts those rows.
 package decode
 
 import (
@@ -63,28 +67,32 @@ func Decode(q schema.Question, row Row, lang string, t *Temperatures) (schema.An
 	temperature, override := t.For(typ, k, lang)
 
 	// softmax(logits[:k] / temperature), the maximum subtracted so a large logit cannot overflow.
-	z := make([]float64, k)
-	peak := math.Inf(-1)
+	z := make([]float32, k)
+	peak := float32(math.Inf(-1))
 	for i := range z {
-		z[i] = float64(row.Logits[i]) / temperature
-		peak = math.Max(peak, z[i])
+		z[i] = row.Logits[i] / float32(temperature) // float32 division, as numpy does it
+		peak = max(peak, z[i])
 	}
 	p := make([]float64, k)
+	rank := make([]float32, k) // float32 exp(z - max) / sum, what Python's argmax compares
 	sum := 0.0
 	for i := range z {
-		p[i] = math.Exp(z[i] - peak)
+		rank[i] = float32(math.Exp(float64(z[i] - peak)))
+		p[i] = math.Exp(float64(z[i]) - float64(peak))
 		sum += p[i]
 	}
+	sum32 := pairwiseSum32(rank)
 	for i := range p {
 		p[i] /= sum
+		rank[i] /= sum32 // two near-equal exp values can divide to one float32: a tie, first index wins
 	}
 	// The row is in slot order; everything below indexes by option.
 	if order := q.OptionOrder(); len(order) == len(p) {
-		canonical := make([]float64, k)
+		canonical, canonicalRank := make([]float64, k), make([]float32, k)
 		for slot, option := range order {
-			canonical[option] = p[slot]
+			canonical[option], canonicalRank[option] = p[slot], rank[slot]
 		}
-		p = canonical
+		p, rank = canonical, canonicalRank
 	}
 
 	common := schema.Common{
@@ -94,10 +102,10 @@ func Decode(q schema.Question, row Row, lang string, t *Temperatures) (schema.An
 	switch typ {
 	case schema.TypeChoice:
 		common.Confidence = Round4(entropyConfidence(p))
-		labels := q.Labels()
+		labels := q.AnswerLabels()
 		best := 0
-		for i := range p {
-			if p[i] > p[best] { // strict: the first maximum wins, as numpy.argmax breaks a tie
+		for i := range rank {
+			if rank[i] > rank[best] { // strict: the first maximum wins, as numpy.argmax breaks a tie
 				best = i
 			}
 		}
@@ -108,7 +116,7 @@ func Decode(q schema.Question, row Row, lang string, t *Temperatures) (schema.An
 		for i, v := range p {
 			expected += float64(i) * v
 		}
-		labels := q.Labels()
+		labels := q.AnswerLabels()
 		return &schema.ScoreAnswer{Score: Round4(expected), Legend: q.Legend(),
 			Probabilities: probabilities(labels, p), Common: common}, nil
 	}
@@ -120,7 +128,39 @@ func Decode(q schema.Question, row Row, lang string, t *Temperatures) (schema.An
 	return &schema.NoulAnswer{Noul: Round4(yes), Common: common}, nil
 }
 
-func probabilities(labels []string, p []float64) schema.Probabilities {
+// pairwiseSum32 is numpy's float32 add.reduce over a contiguous array: a plain loop below 8,
+// eight interleaved partial sums combined as a tree and then the tail up to 128, and above that
+// the two halves summed separately, the first a multiple of 8 long.
+func pairwiseSum32(a []float32) float32 {
+	n := len(a)
+	if n > 128 {
+		half := n / 2
+		half -= half % 8
+		return pairwiseSum32(a[:half]) + pairwiseSum32(a[half:])
+	}
+	if n < 8 {
+		var res float32
+		for _, v := range a {
+			res += v
+		}
+		return res
+	}
+	var r [8]float32
+	copy(r[:], a[:8])
+	i := 8
+	for ; i < n-n%8; i += 8 {
+		for j := range r {
+			r[j] += a[i+j]
+		}
+	}
+	res := ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]))
+	for ; i < n; i++ {
+		res += a[i]
+	}
+	return res
+}
+
+func probabilities(labels []schema.Label, p []float64) schema.Probabilities {
 	out := make(schema.Probabilities, len(p))
 	for i, v := range p {
 		out[i] = schema.Probability{Label: labels[i], P: Round4(v)}

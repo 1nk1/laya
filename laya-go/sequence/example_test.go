@@ -99,7 +99,7 @@ func ExamplePlanWindows() {
 	fmt.Println(plan.Window, plan.Warnings[0])
 	// Output:
 	// 312 156 383 false
-	// 0
+	// 0 false
 	// 383 laya: predict_long: window=10000 is wider than the 383 state tokens these questions leave inside max_len=512, so every window would be truncated to 383 on the way to the model; scanning with window=383 instead
 }
 
@@ -107,9 +107,11 @@ func ExampleBatchCap() {
 	// 413 windows of 23 tokens, where the default 312-token window would have made 29.
 	fmt.Println(sequence.BatchCap(413, 23, 312, 0))
 	fmt.Println(sequence.BatchCap(413, 23, 312, 8)) // an explicit batch size always wins
+	fmt.Println(sequence.BatchCap(20, 312, 312, 0)) // not clamped: Python's None, one pass
 	// Output:
-	// 30
-	// 8
+	// 30 true
+	// 8 true
+	// 0 false
 }
 
 // ExampleEncodeState_checkpoint is compiled and not run: it needs a checkpoint directory.

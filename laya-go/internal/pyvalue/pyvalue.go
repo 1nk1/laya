@@ -9,11 +9,9 @@
 package pyvalue
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"math/big"
 	"reflect"
@@ -26,138 +24,325 @@ import (
 	"github.com/NandhaKishorM/laya/laya-go/lang"
 )
 
-// MaxDepth bounds the nesting of a decoded or normalized value, as Python's recursion limit
-// does, so a hostile document or a self-referential pointer ends in an error.
+// MaxDepth bounds the nesting of a decoded or normalized value, so a hostile document or a
+// self-referential pointer ends in an error. Python has a bound too, its recursion limit, but a
+// deeper one: json.loads reads about 1,500 levels at the default limit.
 const MaxDepth = 512
 
 // ErrUnsupported is wrapped when a Go value has no Python equivalent json.dumps would write.
 var ErrUnsupported = errors.New("value has no JSON equivalent in Python")
 
+// MaxIntDigits is CPython's limit on the digits of an int literal (sys.int_info
+// .default_max_str_digits): json.loads raises ValueError beyond it.
+const MaxIntDigits = 4300
+
 // Parse decodes one JSON document as json.loads does: an object is a pyjson.Object with string
 // keys in document order (a repeated key keeps its first position and takes its last value),
 // numbers are json.Number so that 2 stays an int and 2.0 a float, and anything after the value
-// is an error. NaN, Infinity and invalid UTF-8 are refused.
+// is an error. The literals NaN, Infinity and -Infinity are accepted, as Python accepts them, and
+// become float64. Invalid UTF-8, a lone surrogate escape, a raw control character in a string and
+// an int literal of more than 4300 digits are refused.
 func Parse(data []byte) (any, error) {
-	dec, err := newDecoder(data)
-	if err != nil {
-		return nil, err
-	}
-	v, err := decodeValue(dec, 0, false)
-	if err != nil {
-		return nil, err
-	}
-	return v, endOfDocument(dec)
-}
-
-// ParseMembers decodes a document whose top level is an object and returns its members as
-// written, repeated keys included, so a caller that refuses a repeat can see it. Nested objects
-// are decoded as Parse does.
-func ParseMembers(data []byte) ([]pyjson.Member, error) {
-	dec, err := newDecoder(data)
-	if err != nil {
-		return nil, err
-	}
-	tok, err := dec.Token()
-	if err != nil {
-		return nil, err
-	}
-	if tok != json.Delim('{') {
-		return nil, fmt.Errorf("want a JSON object, got %s", describeToken(tok))
-	}
-	members, err := decodeMembers(dec, 1, true)
-	if err != nil {
-		return nil, err
-	}
-	return members, endOfDocument(dec)
-}
-
-func newDecoder(data []byte) (*json.Decoder, error) {
 	if !utf8.Valid(data) {
 		return nil, errors.New("JSON text is not valid UTF-8")
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	return dec, nil
-}
-
-func endOfDocument(dec *json.Decoder) error {
-	if _, err := dec.Token(); err != io.EOF {
-		return errors.New("data after the JSON value")
-	}
-	return nil
-}
-
-func describeToken(tok json.Token) string {
-	if d, ok := tok.(json.Delim); ok {
-		return string(d)
-	}
-	return fmt.Sprintf("%v", tok)
-}
-
-func decodeValue(dec *json.Decoder, depth int, keepRepeats bool) (any, error) {
-	if depth > MaxDepth {
-		return nil, fmt.Errorf("JSON nested deeper than %d levels", MaxDepth)
-	}
-	tok, err := dec.Token()
+	p := &parser{s: string(data)}
+	p.space()
+	v, err := p.value(0)
 	if err != nil {
 		return nil, err
 	}
-	delim, ok := tok.(json.Delim)
-	if !ok {
-		return tok, nil
+	p.space()
+	if p.i < len(p.s) {
+		return nil, p.fail("data after the JSON value")
 	}
-	if delim == '{' {
-		members, err := decodeMembers(dec, depth+1, keepRepeats)
-		if err != nil {
-			return nil, err
-		}
-		return pyjson.Object(members), nil
+	return v, nil
+}
+
+type parser struct {
+	s string
+	i int
+}
+
+func (p *parser) fail(msg string) error { return fmt.Errorf("JSON: %s at offset %d", msg, p.i) }
+
+func (p *parser) space() {
+	for p.i < len(p.s) && (p.s[p.i] == ' ' || p.s[p.i] == '\t' || p.s[p.i] == '\n' || p.s[p.i] == '\r') {
+		p.i++
 	}
+}
+
+func (p *parser) literal(word string) bool {
+	if strings.HasPrefix(p.s[p.i:], word) {
+		p.i += len(word)
+		return true
+	}
+	return false
+}
+
+func (p *parser) value(depth int) (any, error) {
+	if depth > MaxDepth {
+		return nil, fmt.Errorf("JSON nested deeper than %d levels", MaxDepth)
+	}
+	if p.i >= len(p.s) {
+		return nil, p.fail("unexpected end of text")
+	}
+	switch c := p.s[p.i]; {
+	case c == '{':
+		p.i++
+		return p.object(depth + 1)
+	case c == '[':
+		p.i++
+		return p.array(depth + 1)
+	case c == '"':
+		p.i++
+		return p.str()
+	case p.literal("true"):
+		return true, nil
+	case p.literal("false"):
+		return false, nil
+	case p.literal("null"):
+		return nil, nil
+	case p.literal("NaN"):
+		return math.NaN(), nil
+	case p.literal("Infinity"):
+		return math.Inf(1), nil
+	case p.literal("-Infinity"):
+		return math.Inf(-1), nil
+	case c == '-' || (c >= '0' && c <= '9'):
+		return p.number()
+	}
+	return nil, p.fail("unexpected character")
+}
+
+func (p *parser) array(depth int) (any, error) {
 	list := []any{}
-	for dec.More() {
-		v, err := decodeValue(dec, depth+1, keepRepeats)
+	p.space()
+	if p.i < len(p.s) && p.s[p.i] == ']' {
+		p.i++
+		return list, nil
+	}
+	for {
+		p.space()
+		v, err := p.value(depth)
 		if err != nil {
 			return nil, err
 		}
 		list = append(list, v)
+		p.space()
+		if p.i >= len(p.s) {
+			return nil, p.fail("unterminated array")
+		}
+		switch p.s[p.i] {
+		case ',':
+			p.i++
+		case ']':
+			p.i++
+			return list, nil
+		default:
+			return nil, p.fail("expected , or ]")
+		}
 	}
-	_, err = dec.Token()
-	return list, err
 }
 
-// decodeMembers reads members up to the closing brace of an object whose opening brace was read.
-func decodeMembers(dec *json.Decoder, depth int, keepRepeats bool) ([]pyjson.Member, error) {
-	if depth > MaxDepth {
-		return nil, fmt.Errorf("JSON nested deeper than %d levels", MaxDepth)
-	}
-	members := []pyjson.Member{}
+func (p *parser) object(depth int) (any, error) {
+	members := pyjson.Object{}
 	at := map[string]int{}
-	for dec.More() {
-		keyTok, err := dec.Token()
+	p.space()
+	if p.i < len(p.s) && p.s[p.i] == '}' {
+		p.i++
+		return members, nil
+	}
+	for {
+		p.space()
+		if p.i >= len(p.s) || p.s[p.i] != '"' {
+			return nil, p.fail("expected a string key")
+		}
+		p.i++
+		key, err := p.str()
 		if err != nil {
 			return nil, err
 		}
-		key := keyTok.(string)
-		value, err := decodeValue(dec, depth, false)
+		p.space()
+		if p.i >= len(p.s) || p.s[p.i] != ':' {
+			return nil, p.fail("expected :")
+		}
+		p.i++
+		p.space()
+		v, err := p.value(depth)
 		if err != nil {
 			return nil, err
 		}
-		if i, seen := at[key]; seen && !keepRepeats {
-			members[i].Value = value
+		if j, seen := at[key.(string)]; seen {
+			members[j].Value = v // Python's dict: first position, last value
+		} else {
+			at[key.(string)] = len(members)
+			members = append(members, pyjson.Member{Key: key, Value: v})
+		}
+		p.space()
+		if p.i >= len(p.s) {
+			return nil, p.fail("unterminated object")
+		}
+		switch p.s[p.i] {
+		case ',':
+			p.i++
+		case '}':
+			p.i++
+			return members, nil
+		default:
+			return nil, p.fail("expected , or }")
+		}
+	}
+}
+
+// str reads a string whose opening quote was consumed.
+func (p *parser) str() (any, error) {
+	var b strings.Builder
+	for p.i < len(p.s) {
+		c := p.s[p.i]
+		switch {
+		case c == '"':
+			p.i++
+			return b.String(), nil
+		case c < 0x20:
+			return nil, p.fail("control character in a string")
+		case c != '\\':
+			b.WriteByte(c)
+			p.i++
 			continue
 		}
-		at[key] = len(members)
-		members = append(members, pyjson.Member{Key: key, Value: value})
+		p.i++
+		if p.i >= len(p.s) {
+			break
+		}
+		esc := p.s[p.i]
+		p.i++
+		switch esc {
+		case '"', '\\', '/':
+			b.WriteByte(esc)
+		case 'b':
+			b.WriteByte('\b')
+		case 'f':
+			b.WriteByte('\f')
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case 't':
+			b.WriteByte('\t')
+		case 'u':
+			r, err := p.hex4()
+			if err != nil {
+				return nil, err
+			}
+			if r >= 0xD800 && r < 0xDC00 { // a high surrogate needs its low half
+				if !strings.HasPrefix(p.s[p.i:], "\\u") {
+					return nil, p.fail("lone surrogate escape")
+				}
+				p.i += 2
+				lo, err := p.hex4()
+				if err != nil {
+					return nil, err
+				}
+				if lo < 0xDC00 || lo >= 0xE000 {
+					return nil, p.fail("lone surrogate escape")
+				}
+				r = 0x10000 + (r-0xD800)<<10 + (lo - 0xDC00)
+			} else if r >= 0xDC00 && r < 0xE000 {
+				return nil, p.fail("lone surrogate escape")
+			}
+			b.WriteRune(r)
+		default:
+			return nil, p.fail("invalid escape")
+		}
 	}
-	_, err := dec.Token()
-	return members, err
+	return nil, p.fail("unterminated string")
+}
+
+func (p *parser) hex4() (rune, error) {
+	if p.i+4 > len(p.s) {
+		return 0, p.fail("truncated \\u escape")
+	}
+	n, err := strconv.ParseUint(p.s[p.i:p.i+4], 16, 32)
+	if err != nil || strings.ContainsAny(p.s[p.i:p.i+4], "+-_") {
+		return 0, p.fail("invalid \\u escape")
+	}
+	p.i += 4
+	return rune(n), nil
+}
+
+// scanNumber consumes one JSON number and reports whether it was an int literal and how many
+// digits that int has; ok is false when the text at p.i is not a number.
+func (p *parser) scanNumber() (isInt bool, intDigits int, ok bool) {
+	if p.i < len(p.s) && p.s[p.i] == '-' {
+		p.i++
+	}
+	digits := func() int {
+		n := 0
+		for p.i < len(p.s) && p.s[p.i] >= '0' && p.s[p.i] <= '9' {
+			p.i++
+			n++
+		}
+		return n
+	}
+	intStart := p.i
+	if p.i < len(p.s) && p.s[p.i] == '0' {
+		p.i++
+	} else if digits() == 0 {
+		return false, 0, false
+	}
+	intDigits = p.i - intStart
+	isInt = true
+	if p.i < len(p.s) && p.s[p.i] == '.' {
+		p.i++
+		if digits() == 0 {
+			return false, 0, false
+		}
+		isInt = false
+	}
+	if p.i < len(p.s) && (p.s[p.i] == 'e' || p.s[p.i] == 'E') {
+		p.i++
+		if p.i < len(p.s) && (p.s[p.i] == '+' || p.s[p.i] == '-') {
+			p.i++
+		}
+		if digits() == 0 {
+			return false, 0, false
+		}
+		isInt = false
+	}
+	return isInt, intDigits, true
+}
+
+func (p *parser) number() (any, error) {
+	start := p.i
+	isInt, intDigits, ok := p.scanNumber()
+	if !ok {
+		return nil, p.fail("invalid number")
+	}
+	if isInt && intDigits > MaxIntDigits {
+		return nil, p.fail("int literal exceeds the limit of 4300 digits")
+	}
+	return json.Number(p.s[start:p.i]), nil
+}
+
+// validNumber reports whether text is one JSON number, whatever its length.
+func validNumber(text string) bool {
+	p := &parser{s: text}
+	_, _, ok := p.scanNumber()
+	return ok && p.i == len(text)
 }
 
 // Number converts a json.Number to what json.loads would have produced: an int (int64, or
 // *big.Int when it does not fit) when the text has no fraction or exponent, else a float64.
 func Number(n json.Number) (any, error) {
 	text := string(n)
+	if !validNumber(text) {
+		return nil, fmt.Errorf("%q is not a JSON number", text)
+	}
 	if !strings.ContainsAny(text, ".eE") {
+		if len(strings.TrimPrefix(text, "-")) > MaxIntDigits {
+			return nil, fmt.Errorf("int literal exceeds the limit of %d digits", MaxIntDigits)
+		}
 		if i, err := strconv.ParseInt(text, 10, 64); err == nil {
 			return i, nil
 		}
@@ -304,6 +489,8 @@ func TypeName(v any) string {
 		return "bool"
 	case string:
 		return "str"
+	case float64:
+		return "float"
 	case json.Number:
 		if strings.ContainsAny(string(x), ".eE") {
 			return "float"
@@ -336,7 +523,7 @@ func writeRepr(b *strings.Builder, v any) {
 		}
 	case string:
 		b.WriteString(pyjson.Repr(x))
-	case json.Number:
+	case json.Number, float64:
 		b.WriteString(Str(x))
 	case []any:
 		b.WriteByte('[')

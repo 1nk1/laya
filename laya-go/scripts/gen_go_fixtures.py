@@ -21,12 +21,23 @@ reference over far more input than a hand-written corpus, from a fixed seed:
   * decode_fuzz     decode of random id lists, which produce the invalid UTF-8 a real decode of
                     a truncated slice does
   * round4          Python's round(x, 4) over exact binary ties, random doubles and the edges
+  * states          json.loads then serialize_state over 2,000 random JSON texts (int and float
+                    spellings, NaN, dups, escapes), the texts Python rejects, and the lone
+                    surrogates it accepts and laya-go refuses
+  * label_answers   Agent._decode_answers with bool, int, float and str labels, as the JSON
+                    bytes Python writes
+  * answers_fuzz    5,000 Agent._decode_answers calls on random, tied and near-tied logit rows
+  * marker_refusals Agent._encode_state's "only N of its M option markers fit" refusal
+  * sum32           numpy's float32 sum of rows of values in [0, 1) from 1 to 1,000 wide, the sum
+                    Agent._decode_answers divides by, which changes shape at 8 and past 128
   * questions       Agent._check_question over question definitions, every refusal with its text,
                     and for the accepted ones render_options, the labels, the legend and the
                     normalized instructions and option order
 
     python laya-go/scripts/gen_go_fixtures.py --out DIR      # needs LAYA_FIXTURE_CHECKPOINTS
     python laya-go/scripts/gen_go_fixtures.py --check        # fail if laya-go/fixtures differs
+                                                             # (answers that depend on numpy's
+                                                             # float32 exp are not compared)
 
 A checkpoint that cannot be found is an error, never a skip marker.
 """
@@ -540,6 +551,247 @@ def round4_family(rng):
     return {"values": values, "rounded": [round(v, 4) for v in values]}
 
 
+# --- states: json.loads + serialize_state -----------------------------------------------------
+_STR_POOL = ["a", "b", "z", " ", "\"", "\\", "/", "\n", "\t", "\x01", "\x7f", "é", "ü", "中", "あ",
+             "\u2028", "\u00a0", "😀", "\U0010ffff", "\ufeff", "<", ">", "&", "0", "1e5"]
+_NUM_INTS = ["0", "-0", "7", "-7", "42", "123456789012345678901234567890", "-98765432109876543210",
+             "9007199254740993", "10000000000000000"]
+_NUM_FLOATS = ["0.0", "-0.0", "1.0", "2.5", "-2.5", "0.1", "1e16", "1E16", "1e+16", "1e22", "1e23",
+               "1e-5", "1E-05", "1e-4", "0.0001", "0.00001", "123456789.123456789", "5e-324",
+               "1.7976931348623157e308", "1e308", "1e309", "-1e400", "1e400", "100E-2", "2.5E+3",
+               "0e0", "0.30000000000000004", "1e15", "1e17", "12345678901234567.0"]
+
+
+def _json_string(rng):
+    text = "".join(rng.choice(_STR_POOL) for _ in range(rng.randrange(0, 6)))
+    return json.dumps(text, ensure_ascii=rng.random() < 0.5)
+
+
+def _json_number(rng):
+    kind = rng.random()
+    if kind < 0.3:
+        return rng.choice(_NUM_INTS)
+    if kind < 0.6:
+        return rng.choice(_NUM_FLOATS)
+    if kind < 0.8:
+        return str(rng.randint(-10 ** rng.randrange(1, 25), 10 ** rng.randrange(1, 25)))
+    if kind < 0.9:
+        return repr(rng.uniform(-1, 1) * 10 ** rng.randrange(-20, 25))
+    return "%d%s%d" % (rng.randrange(1, 10), rng.choice(["e", "E", "e+", "e-"]), rng.randrange(0, 30))
+
+
+def _json_text(rng, depth=0):
+    ws = lambda: rng.choice(["", "", " ", "\n", "\t ", "\r\n"])
+    kind = rng.random()
+    if depth >= 4 or kind < 0.35:
+        k = rng.random()
+        if k < 0.08:
+            return rng.choice(["null", "true", "false", "NaN", "Infinity", "-Infinity"])
+        if k < 0.4:
+            return _json_string(rng)
+        return _json_number(rng)
+    if kind < 0.65:
+        items = [_json_text(rng, depth + 1) for _ in range(rng.randrange(0, 5))]
+        return "[" + ws() + ("," + ws()).join(i + ws() for i in items) + "]"
+    keys = ["a", "b", "é", "k1", "k2", "中", "a"]       # a repeats, so duplicates occur
+    pairs = []
+    for _ in range(rng.randrange(0, 5)):
+        pairs.append(json.dumps(rng.choice(keys), ensure_ascii=rng.random() < 0.5) + ws() + ":" + ws() + _json_text(rng, depth + 1))
+    return "{" + ws() + ("," + ws()).join(p + ws() for p in pairs) + "}"
+
+
+_BAD_JSON = ["", " ", "01", "-", "+1", ".5", "1.", "1e", "[1,]", "[,1]", "{\"a\":1,}", "{'a':1}", "[", "]", "{",
+             "{\"a\"}", "{\"a\":}", "[1 2]", "1 2", "nul", "True", "NaN1", "Infinit", "- Infinity", "\"\t\"", "\"\\q\"",
+             "\"\\u12\"", "\"\\u12G4\"", "\"abc", "\"\x00\"", "[1]]", "{}{}", "9" * 4301, "-" + "9" * 4301,
+             "[" * 5000 + "]" * 5000]
+_LONE_SURROGATES = ["\"\\ud800\"", "\"\\udc00\"", "[\"\\ud800x\"]", "{\"\\udfff\":1}", "\"\\ud800\\u0041\"", "\"\\ud83d\"",
+                    "\"a\\ud800\\ud800\""]
+
+
+def states_family(rng):
+    from laya.common import serialize_state
+
+    cases = []
+    for _ in range(2000):
+        text = _json_text(rng)
+        value = json.loads(text)
+        cases.append({"text": text, "serialized": serialize_state(value), "list": isinstance(value, list)})
+    bad = []
+    for text in _BAD_JSON:
+        try:
+            json.loads(text)
+        except (ValueError, RecursionError):
+            bad.append(text)
+        else:
+            raise AssertionError("Python parses %r, so it is not a refusal case" % text[:40])
+    for text in _LONE_SURROGATES:
+        json.loads(text)              # Python accepts these; laya-go refuses
+    return {"cases": cases, "python_rejects": bad, "go_refuses": _LONE_SURROGATES}
+
+
+# --- label_answers and decode_fuzz: the real _decode_answers ----------------------------------
+def _shim(temperature, by_options=None):
+    from laya.agent import Agent
+
+    shim = Agent.__new__(Agent)
+    shim.temperature = temperature
+    shim.temperature_by_options = by_options or {}
+    shim.lang_temperatures = {}
+    shim.binning_map = None
+    return shim
+
+
+def _answer_text(shim, internal, logits, order, lang=None):
+    import numpy as np
+
+    from laya.agent import Agent
+
+    k = len(logits)
+    q = dict(internal)
+    if order is not None:
+        q["option_order"] = order
+    row = np.asarray(list(logits) + [99.0] * 3, dtype=np.float32).reshape(1, k + 3)
+    act = np.asarray([0.25, -0.5], dtype=np.float32).reshape(1, 2)
+    out = Agent._decode_answers(shim, row, act, [{"markers": list(range(k))}], ["x"], {"x": q}, 0, lang)
+    return json.dumps(out["x"], ensure_ascii=False, separators=(",", ":"))
+
+
+def _random_labels(rng, n):
+    seen, labels = set(), []
+    while len(labels) < n:
+        kind = rng.random()
+        if kind < 0.3:
+            label = rng.choice(["a", "b", "billing", "1", "True", "1.0", "é", "", "x y", "it's", "<b>"]) + str(rng.randrange(0, 3) if rng.random() < 0.3 else "")
+        elif kind < 0.45:
+            label = rng.choice([True, False])
+        elif kind < 0.7:
+            label = rng.choice([0, 1, 2, -3, 7, 10 ** 20, 2 ** 53 + 1, 12])
+        elif kind < 0.9:
+            label = rng.choice([0.5, 1.5, -2.25, 1e16, 1e-05, 1e22, 0.1, 100.0, 2.0, 1e308])
+        else:
+            label = rng.choice([float("inf"), float("-inf"), 1e400])
+        key = ("n", label) if not isinstance(label, str) else ("s", label)
+        if key in seen or (not isinstance(label, str) and any(not isinstance(x, str) and x == label for x in labels)):
+            continue
+        seen.add(key)
+        labels.append(label)
+    return labels
+
+
+def label_answers_family(rng):
+    from laya.common import render_options
+
+    shim = _shim([1.0, 1.0, 1.0])
+    cases = []
+    for _ in range(500):
+        k = rng.randrange(1, 9)
+        labels = _random_labels(rng, k)
+        internal = {"t": "choice", "ins": "i", "crit": {c: None for c in labels}}
+        if len(internal["crit"]) != k:          # 1 and True and 1.0 are one dict key
+            continue
+        order = rng.sample(range(k), k) if rng.random() < 0.3 else None
+        logits = [round(rng.uniform(-4, 4), rng.choice([1, 3, 6])) for _ in range(k)]
+        cases.append({"criteria_text": json.dumps(labels), "logits": logits, "option_order": order,
+                      "options": render_options(internal),
+                      "answer_text": _answer_text(shim, internal, logits, order)})
+    return {"cases": cases}
+
+
+def _fuzz_logits(rng, k):
+    import numpy as np
+
+    kind = rng.random()
+    if kind < 0.25:
+        return [round(rng.gauss(0, 1), rng.choice([0, 1, 2])) for _ in range(k)]          # many exact ties
+    if kind < 0.5:                                                                          # near ties, a few ulps apart
+        base = np.float32(rng.uniform(-3, 3))
+        out = []
+        for _ in range(k):
+            v = base
+            for _ in range(rng.randrange(0, 4)):
+                v = np.nextafter(v, np.float32(np.inf))
+            out.append(float(v))
+        return out
+    if kind < 0.6:
+        return [float(np.float32(1.168331) + np.float32(rng.randrange(0, 3)) * np.float32(1.2e-7)) for _ in range(k)]
+    scale = rng.choice([0.01, 0.5, 3, 12, 60])
+    return [rng.gauss(0, 1) * scale for _ in range(k)]
+
+
+def decode_fuzz_family(rng):
+    from laya.common import clamp_temperature
+
+    cases = []
+    for _ in range(5000):
+        kind = rng.choice(["choice", "choice", "score", "noul"])
+        k = 2 if kind == "noul" else rng.randrange(1, 31) if kind == "choice" else rng.randrange(1, 9)
+        if kind == "choice":
+            internal = {"t": "choice", "ins": "i", "crit": {"o%d" % i: None for i in range(k)}}
+            crit_json = ["o%d" % i for i in range(k)]
+        elif kind == "score":
+            internal = {"t": "score", "ins": "i", "crit": ["l%d" % i for i in range(k)]}
+            crit_json = internal["crit"]
+        else:
+            internal, crit_json = {"t": "noul", "ins": "i"}, None
+        temperature = rng.choice([5.0, 1.0, 0.5, 2.0, rng.uniform(0.3, 6), rng.uniform(0.9, 1.1)])
+        order = rng.sample(range(k), k) if rng.random() < 0.3 else None
+        logits = _fuzz_logits(rng, k)
+        shim = _shim([clamp_temperature(temperature)] * 3)
+        import numpy as np
+
+        text = _answer_text(shim, internal, logits, order)
+        cases.append({"type": kind, "criteria": crit_json, "temperature": temperature,
+                      "logits": [str(np.float32(v)) for v in logits],   # shortest text of the float32 itself
+                      "option_order": order, "answer_text": text})
+    return {"cases": cases}
+
+
+def marker_refusals_family(rng):
+    """Agent._encode_state's refusal, on real tokenizers: the text, or None when every marker fits."""
+    from transformers import AutoTokenizer
+
+    from laya.agent import Agent
+
+    root = os.environ.get("LAYA_FIXTURE_CHECKPOINTS")
+    out = {}
+    for name in ("english", "multilingual"):
+        tok = AutoTokenizer.from_pretrained(os.path.join(root, name, "tokenizer"))
+        shim = Agent.__new__(Agent)
+        shim.tok, shim.parallel_options = tok, False
+        shim.cfg = {"max_len": 512, "head_max_len": 192}
+        cases = []
+        for options, words in ((2, 1), (10, 6), (10, 30), (40, 6), (120, 4), (3, 40)):
+            for max_len, head in ((24, 16), (64, 32), (100, 192), (160, 192), (512, 192), (1024, 256), (12, 192)):
+                crit = {"opt%03d" % i: " ".join("w%d_%d" % (i, j) for j in range(words)) for i in range(options)}
+                internal = {"t": "choice", "ins": "Pick one.", "crit": crit}
+                record = {"options": options, "words": words, "max_len": max_len, "head_max_len": head}
+                try:
+                    shim._encode_state("state text", ["it's"], {"it's": internal}, max_len, head)
+                    record["error"] = None
+                except ValueError as refused:
+                    record["error"] = str(refused)
+                cases.append(record)
+        refused = sum(1 for c in cases if c["error"])
+        if not 5 <= refused < len(cases) - 5:
+            raise AssertionError("the %s marker cases stopped covering both outcomes (%d refused)" % (name, refused))
+        out[name] = {"cases": cases}
+    return out
+
+
+def sum32_family(rng):
+    import numpy as np
+
+    sizes = list(range(1, 20)) + [63, 64, 65, 120, 127, 128, 129, 130, 135, 136, 137, 200, 255, 256, 257, 300, 511, 1000]
+    cases = []
+    for n in sizes:
+        for _ in range(4):
+            # No exp here: numpy's float32 exp differs between CPU architectures, and this file is
+            # compared byte for byte. A double rounded to float32 is the same everywhere.
+            row = np.asarray([rng.uniform(0, 1) for _ in range(n)], dtype=np.float32)
+            cases.append({"values": [str(v) for v in row], "sum": str(row.sum())})
+    return {"cases": cases}
+
+
 def build():
     import tokenizers
 
@@ -559,7 +811,26 @@ def build():
         "invalid_utf8": invalid_utf8_family(rng),
         "round4": round4_family(rng),
         "questions": questions_family(rng),
+        "states": states_family(rng),
+        "label_answers": label_answers_family(rng),
+        "answers_fuzz": decode_fuzz_family(rng),
+        "marker_refusals": marker_refusals_family(rng),
+        "sum32": sum32_family(rng),
     }
+
+
+# The two families whose answers pass through numpy's float32 exp, a SIMD routine whose last bit
+# depends on the CPU. --check compares their inputs and leaves the answers to the tests, which
+# read a golden recorded on the machine they run on.
+EXP_DEPENDENT = ("label_answers", "answers_fuzz")
+
+
+def portable(payload):
+    out = dict(payload)
+    for name in EXP_DEPENDENT:
+        out[name] = {"cases": [{k: v for k, v in case.items() if k != "answer_text"}
+                               for case in payload[name]["cases"]]}
+    return out
 
 
 def render(payload):
@@ -574,14 +845,15 @@ def main(argv=None):
                         help="do not write; exit 1 if the file in --out differs")
     args = parser.parse_args(argv)
     path = os.path.join(os.path.abspath(args.out), NAME)
-    fresh = render(build())
+    payload = build()
+    fresh = render(payload)
     if args.check:
         try:
             with open(path, encoding="utf-8") as handle:
-                current = handle.read()
-        except OSError:
+                current = render(portable(json.load(handle)))
+        except (OSError, ValueError, KeyError, TypeError):
             current = None
-        if current != fresh:
+        if current != render(portable(payload)):
             print("gen_go_fixtures: %s is stale or missing; run laya-go/scripts/gen_go_fixtures.py"
                   % path, file=sys.stderr)
             return 1

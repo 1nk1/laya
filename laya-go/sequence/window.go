@@ -3,6 +3,8 @@ package sequence
 import (
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"slices"
 
 	"github.com/NandhaKishorM/laya/laya-go/schema"
@@ -144,24 +146,35 @@ type windowError struct {
 func (e *windowError) Error() string { return e.msg }
 func (e *windowError) Unwrap() error { return e.kind }
 
-// BatchCap is laya's window_batch_cap: how many windows one forward pass may carry, or 0 for
-// "every window in one pass".
+// BatchCap is laya's window_batch_cap: how many windows one forward pass may carry. ok is false
+// where Python returns None, "every window in one pass".
 //
 // An explicit batchSize > 0 is always returned. Otherwise there is no cap unless clamping the
 // window to window (from configWindow, the Budget.DefaultWindow) multiplied the window count by
 // more than 2x; then the pass is bounded at the count the unclamped window would have produced,
-// ceil(nWindows*max(1, window/2) / max(1, configWindow/2)).
-func BatchCap(nWindows, window, configWindow, batchSize int) int {
+// ceil(nWindows*max(1, window/2) / max(1, configWindow/2)). The arithmetic does not overflow:
+// Python's integers do not, and a product of two large int values is computed exactly.
+func BatchCap(nWindows, window, configWindow, batchSize int) (cap int, ok bool) {
 	if batchSize > 0 {
-		return batchSize
+		return batchSize, true
 	}
 	if window >= configWindow {
-		return 0 // not capped: one pass, exactly as before
+		return 0, false // not capped: one pass, exactly as before
 	}
-	num, den := nWindows*max(1, floorDiv(window, 2)), max(1, floorDiv(configWindow, 2))
-	unclamped := max(1, -floorDiv(-num, den)) // ceiling division
-	if nWindows <= unclamped*windowBatchBlowup {
-		return 0 // a mild cap: keep the single shared pass
+	num := new(big.Int).Mul(big.NewInt(int64(nWindows)), big.NewInt(int64(max(1, floorDiv(window, 2)))))
+	den := big.NewInt(int64(max(1, floorDiv(configWindow, 2))))
+	// ceil(num/den) == -floor(-num/den); big.Int.Div is floor for a positive divisor.
+	unclamped := new(big.Int).Neg(new(big.Int).Div(new(big.Int).Neg(num), den))
+	if unclamped.Sign() < 1 {
+		unclamped.SetInt64(1)
 	}
-	return unclamped
+	// nWindows <= 2*unclamped
+	limit := new(big.Int).Mul(unclamped, big.NewInt(windowBatchBlowup))
+	if big.NewInt(int64(nWindows)).Cmp(limit) <= 0 {
+		return 0, false // a mild cap: keep the single shared pass
+	}
+	if !unclamped.IsInt64() || unclamped.Int64() > int64(math.MaxInt) {
+		return math.MaxInt, true // unreachable: the cap is below nWindows
+	}
+	return int(unclamped.Int64()), true
 }

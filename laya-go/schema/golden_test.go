@@ -30,10 +30,7 @@ func questionCases(t *testing.T) []fixtures.Object {
 // a refusal must carry Python's exact text, and an accepted question must render what
 // render_options renders, with the same labels, legend, instructions and option order.
 func TestQuestionsGolden(t *testing.T) {
-	// Python accepts these and laya-go refuses them, on purpose; the value is the text the refusal
-	// must contain.
-	divergent := map[string]string{"choice-list-str-and-int-ok": "spelled the same as label 0"}
-	refused, accepted, diverged := 0, 0, 0
+	refused, accepted := 0, 0
 	for _, rec := range questionCases(t) {
 		t.Run(fixtures.Str(t, rec.Must("case")), func(t *testing.T) {
 			id := fixtures.Str(t, rec.Must("id"))
@@ -55,13 +52,6 @@ func TestQuestionsGolden(t *testing.T) {
 				}
 				if reason := strings.TrimPrefix(text, "question "); qe.ID != "" && !strings.HasSuffix(text, qe.Reason) {
 					t.Errorf("Reason %q is not the tail of %q", qe.Reason, reason)
-				}
-				return
-			}
-			if why, ok := divergent[fixtures.Str(t, rec.Must("case"))]; ok {
-				diverged++
-				if err == nil || !strings.Contains(err.Error(), why) {
-					t.Errorf("err = %v, want a refusal mentioning %q", err, why)
 				}
 				return
 			}
@@ -96,8 +86,8 @@ func TestQuestionsGolden(t *testing.T) {
 			}
 		})
 	}
-	if refused != 93 || accepted != 46 || diverged != 1 {
-		t.Errorf("%d refusals, %d acceptances, %d divergences; the golden was 93, 46 and 1", refused, accepted, diverged)
+	if refused != 93 || accepted != 47 {
+		t.Errorf("%d refusals and %d acceptances; the golden was 93 and 47", refused, accepted)
 	}
 }
 
@@ -153,14 +143,6 @@ func viaConstructors(t *testing.T, rec fixtures.Object) (schema.Question, bool) 
 	)
 	switch fixtures.Str(t, rec.Must("type")) {
 	case "choice":
-		labels := fixtures.Strings(t, rec.Must("labels"))
-		seen := map[string]bool{}
-		for _, l := range labels {
-			seen[l] = true
-		}
-		if len(seen) != len(labels) {
-			return schema.Question{}, false // 1 and "1" are two Python keys, and one Go string
-		}
 		var opts []schema.Option
 		switch c := crit.(type) {
 		case fixtures.Object:
@@ -168,8 +150,12 @@ func viaConstructors(t *testing.T, rec fixtures.Object) (schema.Question, bool) 
 				opts = append(opts, schema.Option{Label: m.Key, Criterion: goldens.Value(m.Value)})
 			}
 		case []any:
-			for _, l := range labels {
-				opts = append(opts, schema.Option{Label: l})
+			for _, l := range c {
+				if text, ok := l.(string); ok {
+					opts = append(opts, schema.Option{Label: text})
+				} else {
+					opts = append(opts, schema.Option{LabelValue: l}) // a bool or a json.Number
+				}
 			}
 		}
 		q, err = schema.Choice(ins, opts...)
