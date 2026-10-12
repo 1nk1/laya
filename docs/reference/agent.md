@@ -1,8 +1,11 @@
 # Agent
 
 `laya.Agent` loads one checkpoint and answers typed questions about a state. `laya.load` is
-a shortcut for `Agent(...)`, and `laya.RLAgent` is an alias of `Agent`. `ONNXAgent` runs an
-exported ONNX model on CPU; import it from `laya.onnx_agent`.
+a shortcut for `Agent(...)` for every backend except `backend="onnx"`, which returns an
+`ONNXAgent` instead, and `laya.RLAgent` is an alias of `Agent`. `ONNXAgent` runs an
+exported ONNX model on CPU; import it from `laya.onnx_agent`. It is not an `Agent` subclass --
+both are `HookRegistry`s, but only `Agent` holds a PyTorch model, so
+`isinstance(laya.load(..., backend="onnx"), laya.Agent)` is `False`.
 
 ::: laya.agent.Agent
 
