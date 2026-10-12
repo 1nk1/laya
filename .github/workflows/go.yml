@@ -1,0 +1,206 @@
+name: Go
+
+# Parity lane for laya-go. Like the .NET and Java lanes, this runs on every push and pull request
+# with no path filter, and re-records the goldens from the Python `laya` package at THAT commit
+# before the Go tests read them. The goldens are never taken from disk:
+#
+#   * laya-java/scripts/gen_fixtures.py records the families laya-go shares with the other ports
+#     (language tables, language detection, python_json, tokenizer ids, decode text) into a
+#     scratch directory with --strict, so a checkpoint that failed to download is an error and not
+#     a skip marker;
+#   * laya-go/scripts/gen_go_fixtures.py records the one family only this port needs, which
+#     holds what the reference answers over every code point and over seeded random strings;
+#   * LAYA_GO_FIXTURES points the tests at that scratch directory, so the committed copies are
+#     never read.
+#
+# The parity jobs are ADVISORY (`continue-on-error`) for the reason the other ports are: the
+# Python package is the product and laya-go follows it, so a Python-side improvement must not be
+# blocked on a port catching up. When this lane goes red the fix is a follow-up port.
+#
+# Three things hold the lane honest, each there because a green run could otherwise mean nothing:
+#
+#   * CI on every push: no `paths:` filter, so a change to laya/ that moves a golden shows up here
+#     and not as silent drift.
+#   * Goldens regenerated per commit: see above.
+#   * Fail on skip: `go test` reports a skipped test as success, so a run with no checkpoints is
+#     green. The suite is run with -json and scripts/check_test_json.py counts instead of trusting
+#     the exit status: any skip, any failure and any shortfall below the floor fails the step.
+#
+# The security job is NOT advisory, as the JVM one is not: it is about what this module hands to
+# whoever imports it, and it runs govulncheck, which reports only vulnerabilities in code the
+# module can actually reach.
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # transformers probes for TensorFlow at import; when TF is present its abseil runtime can
+  # deadlock model construction. Laya is torch-only.
+  USE_TF: "0"
+  USE_TORCH: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  # Pinned, and fetched through the Go checksum database, which refuses a module whose hash is
+  # not the one first recorded for that version.
+  STATICCHECK_VERSION: v0.8.1
+  GOVULNCHECK_VERSION: v1.9.0
+  # Every setup-go below pins Go 1.27.1 and NOT `stable`: staticcheck reads the toolchain's
+  # export data, so a Go release newer than the pinned staticcheck knows ("export data version
+  # 5 is greater than maximum supported version 4") breaks the job on a day nothing in this repo
+  # changed. Bump Go, staticcheck and govulncheck together.
+  GOLDENS: ${{ github.workspace }}/.go-goldens
+
+jobs:
+  parity:
+    name: go parity
+    runs-on: ubuntu-latest
+    continue-on-error: true   # advisory: see the header
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: laya-dotnet/tools/requirements-regen.txt
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.1"
+          cache: false
+      - name: Install the Python toolchain the goldens are recorded with
+        run: |
+          python -m pip install --upgrade pip
+          pip install "torch==2.14.0" --index-url https://download.pytorch.org/whl/cpu
+          pip install -r laya-dotnet/tools/requirements-regen.txt
+      - name: The test-result checker can fail
+        run: python laya-go/scripts/test_check_test_json.py
+
+      # Tokenizers and configs only, no weights. Serialised with the other lanes' fetches by the
+      # same retry and completeness checks `prepare_checkpoint.py` carries for the throttled hub.
+      - name: Fetch the tokenizers the goldens are recorded against
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          for c in english multilingual; do
+            python laya-java/scripts/prepare_checkpoint.py --checkpoint "$c" --no-graph
+          done
+
+      - name: Regenerate the shared goldens from Python
+        env:
+          LAYA_FIXTURE_CHECKPOINTS: ${{ github.workspace }}/laya-java/.work/checkpoints
+          PYTHONPATH: ${{ github.workspace }}
+        run: >
+          python laya-java/scripts/gen_fixtures.py --strict --out "$GOLDENS"
+          --only lang_tables.json --only lang_detect.json --only python_json.json
+          --only tokenizer_ids.json --only decode_text.json
+      - name: Regenerate laya-go's own golden from Python
+        env:
+          LAYA_FIXTURE_CHECKPOINTS: ${{ github.workspace }}/laya-java/.work/checkpoints
+          PYTHONPATH: ${{ github.workspace }}
+        run: python laya-go/scripts/gen_go_fixtures.py --out "$GOLDENS"
+
+      - name: Compiled tables match their sources
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python laya-go/scripts/gen_tables.py --check
+      - name: The committed go_extra.json is what Python records now
+        if: ${{ !cancelled() }}
+        env:
+          LAYA_FIXTURE_CHECKPOINTS: ${{ github.workspace }}/laya-java/.work/checkpoints
+          PYTHONPATH: ${{ github.workspace }}
+        run: python laya-go/scripts/gen_go_fixtures.py --check
+
+      - name: Run the tests against the fresh goldens
+        working-directory: laya-go
+        env:
+          LAYA_GO_FIXTURES: ${{ github.workspace }}/.go-goldens
+          LAYA_CHECKPOINTS: ${{ github.workspace }}/laya-java/.work/checkpoints
+        run: go test -race -count=1 -json ./... > "$RUNNER_TEMP/go-test.json"
+      # Exactly the measured count (528 tests and subtests, on both Go versions): dropping a
+      # case fails here, and adding one means raising this number.
+      - name: No test was skipped
+        if: ${{ !cancelled() }}
+        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test.json" --min-tests 530
+
+      # go.mod declares go 1.22, so that is what a consumer may build with.
+      - name: Run the tests on the oldest supported Go
+        working-directory: laya-go
+        env:
+          GOTOOLCHAIN: go1.22.12
+          LAYA_GO_FIXTURES: ${{ github.workspace }}/.go-goldens
+          LAYA_CHECKPOINTS: ${{ github.workspace }}/laya-java/.work/checkpoints
+        run: go test -count=1 -json ./... > "$RUNNER_TEMP/go-test-oldest.json"
+      - name: No test was skipped on the oldest Go either
+        if: ${{ !cancelled() }}
+        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test-oldest.json" --min-tests 530
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ failure() }}
+        with:
+          name: go-parity-diagnostics
+          path: |
+            .go-goldens
+            ${{ runner.temp }}/go-test.json
+            ${{ runner.temp }}/go-test-oldest.json
+
+  static:
+    name: go static checks
+    runs-on: ubuntu-latest
+    continue-on-error: true   # advisory: see the header
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.1"
+          cache: false
+      - name: gofmt
+        working-directory: laya-go
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would change:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+      - name: go vet
+        working-directory: laya-go
+        run: go vet ./...
+      - name: staticcheck
+        working-directory: laya-go
+        run: |
+          go install "honnef.co/go/tools/cmd/staticcheck@$STATICCHECK_VERSION"
+          "$(go env GOPATH)/bin/staticcheck" ./...
+
+  security:
+    name: go security scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.1"
+          cache: false
+
+      # Standard library only, so no install step.
+      - name: No workflow folds a comment into a run block
+        run: python laya-java/scripts/check_workflow_folding.py
+
+      - name: govulncheck
+        working-directory: laya-go
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION"
+          "$(go env GOPATH)/bin/govulncheck" ./...
