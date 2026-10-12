@@ -42,9 +42,9 @@ type Object []Member
 // UnmarshalJSON decodes a JSON object keeping its key order, as Python's json.loads does: a
 // repeated key keeps its first position and takes its last value. Nested objects become Objects
 // and arrays become []any; numbers become float64, which a state ignores anyway. JSON null leaves
-// the Object unchanged, as encoding/json does for its own types.
+// the Object unchanged, the encoding/json convention for an Unmarshaler.
 func (o *Object) UnmarshalJSON(data []byte) error {
-	if string(bytes.TrimSpace(data)) == "null" {
+	if string(bytes.Trim(data, " \t\r\n")) == "null" { // JSON white space only
 		return nil
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))

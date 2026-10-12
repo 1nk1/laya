@@ -80,7 +80,7 @@ func TestObjectUnmarshalJSONNullAndTrailingData(t *testing.T) {
 		t.Errorf("null field: err %v, state %v", err, holder.State)
 	}
 	var direct Object
-	for _, doc := range []string{`{} x`, `{"a":[1}`, `{"a":"b"} {}`} {
+	for _, doc := range []string{`{} x`, `{"a":[1}`, `{"a":"b"} {}`, "\u00a0null"} {
 		if err := direct.UnmarshalJSON([]byte(doc)); err == nil {
 			t.Errorf("%s must be refused", doc)
 		}
