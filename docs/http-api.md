@@ -382,7 +382,7 @@ naming only `head_max_len` "pointed at the wrong knob in both directions".
 How many options fit at all is set by that same pair *and* by their text. With no description on the
 options, at `max_len=512` and `head_max_len=192` the largest single choice question that is not
 refused carries 168 options when each label is `T <i>` and 126 when each is
-`Tickets routed to queue <i>`; at `max_len=1024` those become 338 and 254. Each of those four
+`Tickets routed to queue <i>`; at `max_len=1024` those become 339 and 254. Each of those four
 boundaries was met through the public call: it answers at the ceiling and refuses one option above
 it. Those 126 sentence labels carry a second lesson -- the answered call reports
 `options: {"q": {"total": 126, "distinct": 1, "tokens_per_option": 4}}`, because the 4-token cap left
