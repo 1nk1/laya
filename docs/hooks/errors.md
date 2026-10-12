@@ -139,8 +139,9 @@ noisy under load.
 What counts as distinct is the message text, and that text names the hook's *type* and the event. So two
 different hook classes failing in the same call are two lines, and one hook failing on both events is two
 lines -- but two instances of the *same* class failing the same way are one line, because they produce the
-same string. A single hook failing from two different call sites is two lines as well; the call site is the
-other half of the key.
+same string. The warning's recorded location is the other half of the key, and each entry point calls
+`dispatch` from its own line: the same hook failing from an `Agent` call and from a `Router` call is the
+same text at two different locations, and prints twice.
 
 So the warning stream is not a failure counter. If the rate matters, count inside the hook, or set
 `hooks_raise=True` and handle the exception. To make the repeats print, a caller has to widen the

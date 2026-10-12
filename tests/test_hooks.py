@@ -296,6 +296,37 @@ check("warnings/one hook failing on both events is two lines",
       ["laya: hook WarnBothEvents.on_predict_start failed",
        "laya: hook WarnBothEvents.on_predict_end failed"])
 
+# And the call site is the other half of the key: the same hook failing from two different dispatch
+# lines -- an Agent call and a Router call -- has byte-identical text and still prints twice.
+class WarnTwoSites:
+    def on_predict_start(self, ctx):
+        raise ValueError("same text")
+
+
+class WarnRouteFake:
+    """The smallest thing a Router will attach: a `predict_batch` that answers."""
+
+    def predict_batch(self, states, questions, batch_size=None, **overrides):
+        return [{"model": "fake", "answers": {"seen": s},
+                 "usage": {"input_tokens": len(s), "output_tokens": 0}} for s in states]
+
+    def system_one(self, state, questions, **overrides):
+        return self.predict_batch([state], questions, **overrides)[0]
+
+
+two_sites = WarnTwoSites()
+f = make_fake()
+with warnings.catch_warnings(record=True) as sites:
+    warnings.simplefilter("default")
+    f.predict_batch(["s0"], QUESTIONS, hooks=[two_sites], hooks_raise=False)
+    rr = Router()
+    rr.attach("english", WarnRouteFake())
+    rr.predict_batch([{"state": "a", "questions": QUESTIONS, "model": "english"}],
+                     hooks=[two_sites], hooks_raise=False)
+check("warnings/the same text from two call sites prints twice", len(sites), 2)
+check("warnings/and the identical texts come from different sites",
+      len({(os.path.basename(w.filename), w.lineno) for w in sites}), 2)
+
 
 class ErrHook:
     def __init__(self):
