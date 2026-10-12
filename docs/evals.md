@@ -460,7 +460,7 @@ is reviewable on its own:
 | `coverage_metric_definition` | which definition of `aurc` / `selective_accuracy@*` produced this report (see [coverage cuts](#coverage-cuts-and-ties)). A relative gate rule on either refuses a baseline recorded under a different one, rather than subtracting numbers that do not mean the same thing |
 | `thresholds` | the gate this run applied: `min`, `max` and `baseline_tolerance` |
 | `gate_policy` | the optional slice gate policy applied by `run --gate-policy` |
-| `revisions` | the commit each checkpoint that answered was loaded from (see [below](#baseline-and-ci-gate)) |
+| `revisions` | the commit each checkpoint that answered was loaded from: a torch run reports one entry per checkpoint it loaded, an `--onnx` run one entry keyed by the `--model` value that names the export's source, and a checkpoint given as a local directory is recorded as `null` (see [below](#baseline-and-ci-gate)) |
 
 `dataset` is a path, and a path is not an identity: a dataset can be edited in place, moved, or
 refetched under the same name, and a CI cache can hand two runs the same filename and different
@@ -537,6 +537,14 @@ them. Left unpinned, the run takes the checkpoint's default branch and the repor
 commit answered, so a baseline drift can be attributed to the weights or to the code.
 `laya/revisions.py` publishes reviewed commit SHAs in `PINNED_REVISIONS` for callers who want to
 opt in. With `--onnx`, only a bare `--revision <SHA>` applies, to the config and tokenizer download.
+
+Both routes write the `revisions` block. A torch run reports one entry per checkpoint the Router
+loaded; an `--onnx` run answers from one export, so it reports a single entry keyed by the `--model`
+value that names that export's source — which is an assumption when `--model` is left out, since the
+key then reads the default `convaiinnovations/laya` while `model` itself is `null`. Neither route can
+name a commit for a checkpoint given as a local directory: `Agent.revision` and `ONNXAgent.revision`
+both stay `None` when nothing was downloaded (`laya/agent.py:574`, `laya/onnx_agent.py:107`), so that
+entry is recorded as `null` rather than dropped.
 
 ## Adding the real labelled set
 
