@@ -4,6 +4,7 @@ A stdlib HTTP server stands in for laya-serve, so these tests need no checkpoint
 and no external network. Run: python -m pytest tests/test_mcp_remote.py
 """
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -129,9 +130,19 @@ def test_http_errors_map_to_tool_error_codes(serve, status, code):
 
 
 def test_unreachable_server_is_a_clean_error():
+    # 127.0.0.1:9 has no listener. POSIX refuses the connect immediately, which
+    # `RemoteRouter._request` classifies as "unreachable"; on Windows a loopback connect to a
+    # dead port retries instead of resetting, so the deadline can fire first and the same
+    # failure arrives as `URLError(TimeoutError)` and is classified "timeout". Both are the
+    # clean-error path this test exists to pin: a `RemoteError` carrying a known code, never a
+    # leaked urllib exception. Which of the two you get is the platform's answer, not laya's, so
+    # the exact code is asserted only where the refusal is guaranteed. Surfaced when #1156 put
+    # this suite in the Windows lane, where it failed on `assert 'timeout' == 'unreachable'`.
     with pytest.raises(RemoteError) as info:
         RemoteRouter("http://127.0.0.1:9", timeout=2).predict("x", _questions())
-    assert info.value.code == "unreachable"
+    assert info.value.code in ("unreachable", "timeout"), info.value.code
+    if not sys.platform.startswith("win"):
+        assert info.value.code == "unreachable"
 
 
 def test_loaded_and_revisions_come_from_health(serve):
