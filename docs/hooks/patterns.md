@@ -38,7 +38,7 @@ Record every decision with enough to reconstruct it: the state, the questions, t
 model, the routing decision, usage and latency.
 
 ```python
-import json
+import json, sys
 
 def audit(ctx):
     for state, result in zip(ctx.states, ctx.results or []):
