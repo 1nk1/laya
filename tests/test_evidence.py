@@ -107,13 +107,36 @@ toplevel = {"schema": "laya-evals-report/1", "dataset_sha256": "a", "questions_s
             "config": {}}
 check("identity at top level still read", evidence.inspect_report(toplevel)["state"], evidence.PRESENT)
 
+# ... and with no `config` block at all, which is the shape that used to answer differently.
+# `research/evals/act_head_eval.py` tags its document at the top level and writes no `config` key;
+# bailing on the missing block made one document read as PRESENT once an empty `config` was added
+# beside the same identity, and left a caller to branch on two different result shapes.
+_noblock = {"schema": "laya-evals-report/1", "dataset_sha256": "a", "questions_sha256": "b"}
+rep3 = evidence.inspect_report(_noblock)
+check("identity at top level, no config block -> PRESENT", rep3["state"], evidence.PRESENT)
+check("and it reads field for field like the same identity under config",
+      rep3["fields"], evidence.inspect_report({"config": _noblock})["fields"])
+check("no identity anywhere still reports its whole vocabulary",
+      sorted(evidence.inspect_report({"overall": {}})["fields"]),
+      sorted(evidence._IDENTITY_KEYS + evidence._PROVENANCE_KEYS))
+# Provenance rides through the same read as identity (see `_report_identity`), so a document that
+# records its version at the top level is not read as recording nothing.
+check("provenance at the top level is read too",
+      evidence.inspect_report({"config": {}, "laya_version": "0.3.28"})["fields"]
+      ["laya_version"]["state"], evidence.PRESENT)
+# ... by copying, not by writing into the caller's `config`: this inspection is read-only, and a
+# view that aliased the report would leave the fallback values in the document it was handed.
+_untouched = {"config": {}, "schema": "laya-evals-report/1"}
+evidence.inspect_report(_untouched)
+check("the report document is not mutated", _untouched, {"config": {}, "schema": "laya-evals-report/1"})
+
 # ------------------------------------------------------ identity vocabulary pinned to laya.evals
 # `laya/evidence.py` copies the report-identity vocabulary instead of importing `laya.evals` (numpy at
 # module scope), and a copy is only safe while it is held against the original -- the same way
 # `tests/test_conformal_abstention.py` holds `confidence.BUCKET_QTYPES` against `common.temp_bucket`.
 # Unpinned, a key renamed upstream would make every report read as identity-incomplete here, and a key
 # added upstream would read as identity-complete; both silently, in the verdict this module exists to
-# give. These four checks fail in both directions, on either side of the copy.
+# give. These checks fail in both directions, on either side of the copy.
 from laya import evals  # noqa: E402
 
 check("the copied identity vocabulary is evals' own, in order",
@@ -127,10 +150,31 @@ check("inspect_report reads exactly its declared vocabulary",
       sorted(evidence.inspect_report({"config": {}})["fields"]),
       sorted(evidence._IDENTITY_KEYS + evidence._PROVENANCE_KEYS))
 
+# The copy has to hold for the *read* as well, or the two halves of the toolchain disagree about
+# which document says what: `_cmd_compare` only began refusing a candidate whose top-level `schema`
+# differed from its baseline once it started reading through `evals._identity_of`. Same documents,
+# same answer. `laya_version` is excluded because this module reports it and `evals` never looks
+# for it.
+_shadow = {"config": {"schema": "in config"}, "schema": "at the top level"}
+for _doc in (_noblock, {"config": _noblock}, toplevel, full_report, {"overall": {}},
+             {"config": {"dataset_sha256": "a"}, "schema": "laya-evals-report/1"}, _shadow):
+    _here = {k: v for k, v in evidence._report_identity(_doc).items() if k in evidence._IDENTITY_KEYS}
+    _there = {k: v for k, v in evals._identity_of(_doc).items() if k in evidence._IDENTITY_KEYS}
+    check("the identity read is evals' own for %s" % json.dumps(_doc, sort_keys=True), _here, _there)
+# Equality alone would still pass if both sides started preferring the document over `config`: the
+# fallback is for a key `config` does not carry, not a way to shadow one it does.
+check("config still outranks the top level", evidence._report_identity(_shadow)["schema"], "in config")
+
 # ... and `schema` stays out of the conflict set on purpose: two artifacts that agree on the
-# deterministic digests but carry different report tags are still the same measurement.
+# deterministic digests but carry different report tags are still the same measurement. Both sides
+# have to expose the tag for the check to say anything: with the checkpoint silent, the pair is
+# skipped as "one side missing" whatever the conflict set holds.
 check("a differing schema is not a checkpoint <-> report conflict",
       evidence.relate({"dataset_sha256": "a"},
+                      {"config": {"dataset_sha256": "a", "schema": "laya-evals-report/2"}})["state"],
+      evidence.UNKNOWN)
+check("not even when both artifacts expose it",
+      evidence.relate({"dataset_sha256": "a", "schema": "laya-evals-report/1"},
                       {"config": {"dataset_sha256": "a", "schema": "laya-evals-report/2"}})["state"],
       evidence.UNKNOWN)
 
@@ -165,6 +209,18 @@ check("deterministic identity conflict -> INCOMPARABLE", conflict_ds["state"], e
 unknown = evidence.relate(config, {"config": {}})
 check("no shared identity field -> UNKNOWN", unknown["state"], evidence.UNKNOWN)
 
+# The conflict is the disagreement, not the place it was written. `relate` used to read the report's
+# `config` block only, so this document -- the shape `act_head_eval.py` writes -- stated a digest the
+# checkpoint contradicts and still answered "no immutable shared checkpoint identity".
+check("deterministic identity conflict at the top level -> INCOMPARABLE",
+      evidence.relate({"dataset_sha256": "a"}, {"dataset_sha256": "b"})["state"], evidence.INCOMPARABLE)
+check("top-level agreement is still never a claimed match",
+      evidence.relate({"dataset_sha256": "a"}, {"dataset_sha256": "a"})["state"], evidence.UNKNOWN)
+# Provenance rides through the same read because `inspect_report` reports it; it must not widen what
+# `relate` can conflict on.
+check("a differing laya_version at the top level is still not a conflict",
+      evidence.relate({"laya_version": "0.3.28"}, {"laya_version": "0.3.20"})["state"], evidence.UNKNOWN)
+
 # ------------------------------------------------------ CLI on a realistic artifact pair
 tmp = tempfile.mkdtemp()
 ckpt = os.path.join(tmp, "ckpt")
@@ -183,6 +239,24 @@ check("evidence CLI returns 0 on realistic pair", rc, 0)
 
 rc_bad = evals_cli.main(["evidence", "--checkpoint", os.path.join(tmp, "nope")])
 check("missing checkpoint dir -> usage error 2", rc_bad, 2)
+
+# ... and on the artifact the research harness actually writes: identity at the document's top
+# level, no `config` key. Read through `inspect_checkpoint`/`format_summary`, which is the whole of
+# what `evidence` prints, so this covers the summary's own shape as well as the verdicts.
+_digest_ckpt = os.path.join(tmp, "ckpt-digests")
+os.makedirs(_digest_ckpt)
+with open(os.path.join(_digest_ckpt, "rl_agent_config.json"), "w", encoding="utf-8") as f:
+    json.dump({"training": {"laya_train": {"dataset_sha256": "a"}}}, f)
+_toplevel_report = os.path.join(tmp, "act-head-style.json")
+with open(_toplevel_report, "w", encoding="utf-8") as f:
+    json.dump({"schema": "laya-evals-report/1", "dataset_sha256": "b", "questions_sha256": "c"}, f)
+_summary = evidence.format_summary(evidence.inspect_checkpoint(_digest_ckpt, _toplevel_report))
+check_true("a top-level report identity reaches the summary as PRESENT",
+           "eval report identity: PRESENT" in _summary)
+check_true("and its differing digest reaches it as the conflict it names",
+           "checkpoint<->report: INCOMPARABLE" in _summary)
+check_true("every identity field is printed for a report with no config block",
+           all(("  %-18s" % key) in _summary for key in evidence._IDENTITY_KEYS))
 
 # ------------------------------------------------------ no torch required
 import subprocess
