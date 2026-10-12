@@ -8,9 +8,14 @@ This first slice is the foundation the rest of the port stands on. The routing a
 | Package | What it is |
 | --- | --- |
 | `lang` | Script and language detection, the port of `laya/lang.py`: `DetectScript`, `ScriptProfile`, `LatinProfileOf`, `GuessLatinLanguage`, `Analyze`, `DetectLanguage`, `IsEnglish`. |
-| `internal/tokenizer` | A reader and runner for Hugging Face `tokenizer.json` (BPE): normalizer, pre-tokenizer, added tokens, byte fallback, decoder. |
+| `schema` | Questions (`Choice`, `ChoiceOf`, `Score`, `Noul`, `NoulWith`, `Questions`) and results (`Answer`, `Prediction`, `Usage`) every other package shares. Questions are refused with laya's own wording and read or written in the Python wire form. |
+| `sequence` | `build_sequence`, `build_head`, `state_room`, `window_budget` and `window_batch_cap`: `EncodeState`, `Build`, `StateRoom`, `PlanWindows`, `BatchCap`. |
+| `tokenizer` | A reader and runner for Hugging Face `tokenizer.json` (BPE): normalizer, pre-tokenizer, added tokens, byte fallback, decoder. |
 | `internal/unicodedata` | The character predicates `laya/lang.py` leans on, recorded from CPython. |
 | `internal/pyjson` | `json.dumps` and `repr` spelled as CPython spells them. |
+| `internal/pyvalue` | `json.loads` with order and number spelling kept, and the Go shapes a state or criterion can take, mapped onto `pyjson`. |
+| `internal/decode` | Logit rows to typed answers: `Agent._decode_answers`, its temperatures, binning and `round(x, 4)`. |
+| `internal/collate` | Sequences to the five flattened tensors the graph takes. |
 
 ## Quickstart
 
@@ -35,8 +40,8 @@ order-sensitive state. `Analyze` reads every leaf, so its cost grows with the nu
 - Pure-Go packages are `lang` now and `router`, `presets` and `shortlist` later.
 - cgo, if ever needed, lives only in a future `onnx` package, with a `//go:build !cgo` stub.
   Importing `lang` never compiles cgo.
-- The tokenizer goes public in the next change; `internal/unicodedata` and `internal/pyjson`
-  stay internal.
+- `tokenizer` is public (`LoadFS`, `Parse`); `internal/unicodedata`, `internal/pyjson`,
+  `internal/decode` and `internal/collate` stay internal.
 
 ## Parity
 ## Parity
@@ -59,7 +64,7 @@ lane fails a run in which anything skipped.
 ```sh
 cd laya-go
 LAYA_CHECKPOINTS=/path/to/checkpoints go test ./...
-LAYA_CHECKPOINTS=/path/to/checkpoints go test -bench Encode -run '^$' ./internal/tokenizer
+LAYA_CHECKPOINTS=/path/to/checkpoints go test -bench Encode -run '^$' ./tokenizer
 ```
 
 CI (`.github/workflows/go.yml`) regenerates every golden from Python at the commit under test into

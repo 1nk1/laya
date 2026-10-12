@@ -21,7 +21,7 @@ func benchEncode(b *testing.B, name, text string) {
 }
 
 // BenchmarkEncode measures the whole path: added-token split, normalization, pre-tokenization
-// and BPE. Run with LAYA_CHECKPOINTS set: go test -bench Encode -run '^$' ./internal/tokenizer
+// and BPE. Run with LAYA_CHECKPOINTS set: go test -bench Encode -run '^$' ./tokenizer
 func BenchmarkEncode(b *testing.B) {
 	b.Run("english/sentence", func(b *testing.B) { benchEncode(b, "english", benchSentence) })
 	b.Run("english/4KB", func(b *testing.B) { benchEncode(b, "english", strings.Repeat(benchSentence, 26)) })

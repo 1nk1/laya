@@ -20,6 +20,10 @@ reference over far more input than a hand-written corpus, from a fixed seed:
                     path, added tokens, byte fallback and the unknown token
   * decode_fuzz     decode of random id lists, which produce the invalid UTF-8 a real decode of
                     a truncated slice does
+  * round4          Python's round(x, 4) over exact binary ties, random doubles and the edges
+  * questions       Agent._check_question over question definitions, every refusal with its text,
+                    and for the accepted ones render_options, the labels, the legend and the
+                    normalized instructions and option order
 
     python laya-go/scripts/gen_go_fixtures.py --out DIR      # needs LAYA_FIXTURE_CHECKPOINTS
     python laya-go/scripts/gen_go_fixtures.py --check        # fail if laya-go/fixtures differs
@@ -331,6 +335,211 @@ def invalid_utf8_family(rng):
                     for n, t in toks.items()}}
 
 
+# --- questions ---------------------------------------------------------------------------------
+# (case id, question id, definition). Chosen to reach every branch of Agent._check_question, in the
+# order it checks them, and every rendering rule of render_options. A definition holds only what
+# JSON can hold, because the Go side reads it from the golden as text.
+CH2 = {"type": "choice", "instructions": "Pick.", "criteria": {"a": "x", "b": "y"}}
+SC3 = {"type": "score", "instructions": "Rate.", "criteria": ["bad", "ok", "good"]}
+NL = {"type": "noul", "instructions": "Holds?"}
+
+
+def _with(base, **changes):
+    out = dict(base)
+    for key, value in changes.items():
+        if value is _DROP:
+            out.pop(key, None)
+        else:
+            out[key] = value
+    return out
+
+
+_DROP = object()
+
+QUESTION_CASES = [
+    # the definition itself
+    ("def-list", "q", [1, 2]), ("def-str", "q", "choice"), ("def-int", "q", 5),
+    ("def-null", "q", None), ("def-bool", "q", True), ("def-float", "q", 2.5),
+    # ids
+    ("id-empty", "", CH2), ("id-blank", "  \t", CH2), ("id-nbsp", " ", CH2),
+    ("id-apostrophe", "it's", _with(CH2, instructions="")),
+    ("id-both-quotes", "a'b\"c", _with(CH2, instructions="")),
+    ("id-unicode", "café", _with(CH2, instructions="")),
+    ("id-control", "a\tb\x01", _with(CH2, instructions="")),
+    ("id-astral", "\U0001f600", _with(CH2, instructions="")),
+    ("id-ok", "team", CH2),
+    # type
+    ("type-missing", "q", _with(CH2, type=_DROP)), ("type-null", "q", _with(CH2, type=None)),
+    ("type-number", "q", _with(CH2, type=5)), ("type-typo", "q", _with(CH2, type="chioce")),
+    ("type-case", "q", _with(CH2, type="Choice")), ("type-list", "q", _with(CH2, type=["choice"])),
+    ("type-dict", "q", _with(CH2, type={"a": [1, 2.5, None, True]})),
+    ("type-float", "q", _with(CH2, type=1e16)),
+    # instructions
+    ("ins-missing", "q", _with(CH2, instructions=_DROP)),
+    ("ins-null", "q", _with(CH2, instructions=None)),
+    ("ins-empty", "q", _with(CH2, instructions="")),
+    ("ins-blank", "q", _with(CH2, instructions=" \t\n")),
+    ("ins-nbsp", "q", _with(CH2, instructions=" \u0085")),
+    ("ins-ideographic-space", "q", _with(CH2, instructions="　")),
+    ("ins-zero-width-is-text", "q", _with(CH2, instructions="​")),
+    ("ins-empty-list", "q", _with(CH2, instructions=[])),
+    ("ins-empty-dict", "q", _with(CH2, instructions={})),
+    ("ins-zero", "q", _with(CH2, instructions=0)),
+    ("ins-float", "q", _with(CH2, instructions=2.5)),
+    ("ins-true", "q", _with(CH2, instructions=True)),
+    ("ins-list", "q", _with(CH2, instructions=[1, "a", None, {"k": 1.0}])),
+    ("ins-dict", "q", _with(CH2, instructions={"k": "v", "café": [1, 2], "n": 1e16})),
+    ("ins-whitespace-kept", "q", _with(CH2, instructions="  padded  ")),
+    # choice criteria
+    ("choice-missing", "q", _with(CH2, criteria=_DROP)), ("choice-null", "q", _with(CH2, criteria=None)),
+    ("choice-int", "q", _with(CH2, criteria=5)), ("choice-str", "q", _with(CH2, criteria="a")),
+    ("choice-empty-dict", "q", _with(CH2, criteria={})), ("choice-empty-list", "q", _with(CH2, criteria=[])),
+    ("choice-dict", "q", CH2),
+    ("choice-list", "q", _with(CH2, criteria=["x", "y", "z"])),
+    ("choice-list-null", "q", _with(CH2, criteria=["a", None])),
+    ("choice-list-first-null", "q", _with(CH2, criteria=[None, ["x"]])),
+    ("choice-list-list", "q", _with(CH2, criteria=["a", ["b"]])),
+    ("choice-list-dict", "q", _with(CH2, criteria=["a", "b", {"k": 1}])),
+    ("choice-list-repeat", "q", _with(CH2, criteria=["a", "b", "a"])),
+    ("choice-list-int-float-repeat", "q", _with(CH2, criteria=[1, 1.0])),
+    ("choice-list-bool-int-repeat", "q", _with(CH2, criteria=["x", True, 1])),
+    ("choice-list-false-zero-repeat", "q", _with(CH2, criteria=[False, 0.0])),
+    ("choice-list-big-repeat", "q", _with(CH2, criteria=[10 ** 30, float(10 ** 30)])),
+    ("choice-list-near-big-ok", "q", _with(CH2, criteria=[2 ** 53 + 1, float(2 ** 53)])),
+    ("choice-list-str-and-int-ok", "q", _with(CH2, criteria=[1, "1"])),
+    ("choice-list-numbers", "q", _with(CH2, criteria=[2, 2.5, True, "x", "", 1e16, 1e-05, -0.0, 7])),
+    ("choice-empty-label", "q", _with(CH2, criteria={"": "nothing", "b": None})),
+    ("choice-falsy-criteria", "q", _with(CH2, criteria={"zero": 0, "no": False, "nul": None, "e": "", "l": [], "d": {}})),
+    ("choice-structured", "q", _with(CH2, criteria={
+        "a": {"desc": "café", "n": 1.0, "big": 123456789012345678901234567890, "neg": -0.0,
+              "small": 1e-07, "huge": 1e16, "flag": True, "none": None},
+        "b": [1, 2.5, "x", [], {}], "c": 2.5, "d": 7, "e": True})),
+    ("choice-unicode", "q", _with(CH2, criteria={"退款": "こんにちは", "\U0001f600": "ل"})),
+    ("choice-mask-text", "q", _with(CH2, criteria={"a": "x [MASK] y", "b": "<mask>"})),
+    ("choice-control-text", "q", _with(CH2, criteria={"a": "line\nbreak\ttab \"q\" back\\slash", "b": "\x01"})),
+    ("choice-dict-order", "q", _with(CH2, criteria={"z": "1", "a": "2", "m": "3"})),
+    ("choice-many", "q", _with(CH2, criteria={"o%02d" % i: "c%d" % i for i in range(30)})),
+    # score criteria
+    ("score-missing", "q", _with(SC3, criteria=_DROP)), ("score-null", "q", _with(SC3, criteria=None)),
+    ("score-dict", "q", _with(SC3, criteria={"0": "a"})), ("score-str", "q", _with(SC3, criteria="abc")),
+    ("score-empty", "q", _with(SC3, criteria=[])), ("score-only-null", "q", _with(SC3, criteria=[None])),
+    ("score-null-second", "q", _with(SC3, criteria=["a", None, "c", None])),
+    ("score-ok", "q", SC3),
+    ("score-mixed", "q", _with(SC3, criteria=["a", {"d": 1}, 3, 2.5, True, "", [1, [2]], 1e16])),
+    ("score-one", "q", _with(SC3, criteria=["only"])),
+    ("score-unicode", "q", _with(SC3, criteria=["悪い", "良い"])),
+    # noul criteria
+    ("noul-plain", "q", NL), ("noul-null-criteria", "q", _with(NL, criteria=None)),
+    ("noul-int", "q", _with(NL, criteria=5)), ("noul-list", "q", _with(NL, criteria=[])),
+    ("noul-str", "q", _with(NL, criteria="x")),
+    ("noul-bad-key", "q", _with(NL, criteria={"maybe": "x"})),
+    ("noul-bad-keys-sorted", "q", _with(NL, criteria={"true": "y", "maybe": 1, "Z": 2, "a": 3})),
+    ("noul-empty-criteria", "q", _with(NL, criteria={})),
+    ("noul-case-keys", "q", _with(NL, criteria={"True": "a", "FALSE": "b"})),
+    ("noul-key-collision", "q", _with(NL, criteria={"true": "first", "TRUE": "second"})),
+    ("noul-zero-is-description", "q", _with(NL, criteria={"true": 0, "false": False})),
+    ("noul-empty-is-default", "q", _with(NL, criteria={"true": "", "false": None})),
+    ("noul-structured", "q", _with(NL, criteria={"true": {"k": [1, 2.0]}, "false": "no"})),
+    ("noul-only-true", "q", _with(NL, criteria={"true": "yes it does"})),
+    ("noul-only-false", "q", _with(NL, criteria={"false": "no it does not"})),
+    # option_order
+    ("order-ok-choice", "q", _with(CH2, option_order=[1, 0])),
+    ("order-ok-identity", "q", _with(CH2, option_order=[0, 1])),
+    ("order-ok-score", "q", _with(SC3, option_order=[2, 0, 1])),
+    ("order-ok-noul", "q", _with(NL, option_order=[1, 0])),
+    ("order-short", "q", _with(CH2, option_order=[0])), ("order-long", "q", _with(CH2, option_order=[0, 1, 2])),
+    ("order-repeat", "q", _with(CH2, option_order=[0, 0])), ("order-range", "q", _with(CH2, option_order=[0, 2])),
+    ("order-negative", "q", _with(CH2, option_order=[-1, 0])),
+    ("order-str", "q", _with(CH2, option_order="01")), ("order-null", "q", _with(CH2, option_order=None)),
+    ("order-dict", "q", _with(CH2, option_order={})), ("order-int", "q", _with(CH2, option_order=1)),
+    ("order-float", "q", _with(CH2, option_order=[0, 1.0])), ("order-float-whole", "q", _with(CH2, option_order=[1.0])),
+    ("order-bool", "q", _with(CH2, option_order=[True, 0])),
+    ("order-str-element", "q", _with(CH2, option_order=[0, "1"])),
+    ("order-nested", "q", _with(CH2, option_order=[[0], [1]])),
+    ("order-empty", "q", _with(CH2, option_order=[])),
+    ("order-noul-wrong-size", "q", _with(NL, option_order=[0, 1, 2])),
+    ("order-repr-mixed", "q", _with(CH2, option_order=[0, None, 2.5, "x", True, [1], {"a": 1.0}])),
+    # labels
+    ("labels-on-choice", "q", _with(CH2, labels={"false": "a", "true": "b"})),
+    ("labels-on-score", "q", _with(SC3, labels=None)),
+    ("labels-ok", "q", _with(NL, labels={"false": "nope", "true": "yep"})),
+    ("labels-reversed-keys", "q", _with(NL, labels={"true": "yep", "false": "nope"})),
+    ("labels-stripped", "q", _with(NL, labels={"false": " no\t", "true": " yes "})),
+    ("labels-null", "q", _with(NL, labels=None)),
+    ("labels-default-pair", "q", _with(NL, labels={"false": "false", "true": "true"})),
+    ("labels-list", "q", _with(NL, labels=[])), ("labels-empty", "q", _with(NL, labels={})),
+    ("labels-str", "q", _with(NL, labels="x")),
+    ("labels-missing-true", "q", _with(NL, labels={"false": "a"})),
+    ("labels-same", "q", _with(NL, labels={"false": "a", "true": "a"})),
+    ("labels-same-after-strip", "q", _with(NL, labels={"false": "a", "true": " a "})),
+    ("labels-empty-value", "q", _with(NL, labels={"false": "a", "true": ""})),
+    ("labels-blank-value", "q", _with(NL, labels={"false": " ", "true": "x"})),
+    ("labels-int-value", "q", _with(NL, labels={"false": 1, "true": "x"})),
+    ("labels-capital-keys", "q", _with(NL, labels={"False": "a", "True": "b"})),
+    ("labels-extra-key", "q", _with(NL, labels={"false": "a", "true": "b", "x": "c"})),
+    ("labels-with-criteria", "q", _with(NL, labels={"false": "nope", "true": "yep"},
+                                       criteria={"true": "it holds", "false": "it does not"})),
+    ("labels-unicode", "q", _with(NL, labels={"false": "いいえ", "true": "はい"})),
+    # precedence: the first fault Python finds is the one it reports
+    ("order-blank-instructions-first", "q", _with(CH2, instructions="", criteria=[])),
+    ("order-type-before-instructions", "q", _with(CH2, type="x", instructions="")),
+    ("order-criteria-before-order", "q", _with(CH2, criteria=[], option_order=[5])),
+    ("order-order-before-labels", "q", _with(CH2, option_order=[5], labels={})),
+    ("order-label-type-before-repeat", "q", _with(CH2, criteria=["a", "a", None])),
+    ("order-first-bad-label-wins", "q", _with(CH2, criteria=[None, ["x"]])),
+    ("order-labels-before-noul-labels", "q", _with(SC3, labels={"x": 1})),
+]
+
+
+def questions_family(rng):
+    """Python's verdict on each definition: the refusal text, or what the accepted one renders to."""
+    import copy
+
+    from laya.agent import Agent
+    from laya.common import _resolve_noul_labels, render_criterion, render_options
+
+    cases = []
+    for cid, qid, definition in QUESTION_CASES:
+        record = {"case": cid, "id": qid, "definition": definition}
+        try:
+            Agent._check_question(qid, copy.deepcopy(definition))
+        except ValueError as refused:
+            record["error"] = str(refused)
+            cases.append(record)
+            continue
+        internal = Agent._to_internal(copy.deepcopy(definition))
+        record["type"] = internal["t"]
+        record["instructions"] = internal["ins"]
+        record["options"] = render_options(internal)
+        if internal["t"] == "choice":
+            record["labels"] = [str(k) for k in internal["crit"]]
+        elif internal["t"] == "score":
+            record["labels"] = [str(i) for i in range(len(internal["crit"]))]
+            record["legend"] = [render_criterion(c) for c in internal["crit"]]
+        else:
+            record["labels"] = list(_resolve_noul_labels(internal.get("labels")))
+        record["option_order"] = internal.get("option_order")
+        cases.append(record)
+    refused = sum(1 for c in cases if "error" in c)
+    if refused < 80 or len(cases) - refused < 30:
+        raise AssertionError("the question cases stopped covering both refusals (%d) and "
+                             "acceptances (%d)" % (refused, len(cases) - refused))
+    return {"cases": cases}
+
+
+def round4_family(rng):
+    """round(x, 4): half to even on the exact binary value, which no scaled-integer trick matches."""
+    ties = [k / 2 ** n for n in range(5, 14) for k in range(1, 2 ** n, max(1, 2 ** n // 40))]
+    steps = [(2 * j + 1) / 20000.0 for j in range(0, 400)]          # decimal halves, binary inexact
+    values = ties + steps + [-v for v in ties[:200]]
+    values += [rng.random() for _ in range(2500)]
+    values += [rng.uniform(-3, 3) for _ in range(1500)]
+    values += [round(rng.random(), 5) + 0.00005 for _ in range(600)]
+    values += [0.0, -0.0, 1e-5, -1e-5, 4.9999e-5, 5e-5, 5.0000001e-5, 1.0, 0.99995, 0.99994999,
+               1e16, 123456.78905, 1e-300, 5e-324, 1.7976931348623157e308, 0.5, 2.5, 1e22]
+    return {"values": values, "rounded": [round(v, 4) for v in values]}
+
+
 def build():
     import tokenizers
 
@@ -348,6 +557,8 @@ def build():
         "decode_fuzz": decode_family(rng),
         "state_shapes": state_family(rng),
         "invalid_utf8": invalid_utf8_family(rng),
+        "round4": round4_family(rng),
+        "questions": questions_family(rng),
     }
 
 

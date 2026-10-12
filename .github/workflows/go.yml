@@ -5,11 +5,12 @@ name: Go
 # before the Go tests read them. The goldens are never taken from disk:
 #
 #   * laya-java/scripts/gen_fixtures.py records the families laya-go shares with the other ports
-#     (language tables, language detection, python_json, tokenizer ids, decode text) into a
-#     scratch directory with --strict, so a checkpoint that failed to download is an error and not
-#     a skip marker;
-#   * laya-go/scripts/gen_go_fixtures.py records the one family only this port needs, which
-#     holds what the reference answers over every code point and over seeded random strings;
+#     (language tables, language detection, python_json, tokenizer ids, decode text, sequences,
+#     decoded answers, window plans) into a scratch directory with --strict, so a checkpoint that
+#     failed to download is an error and not a skip marker;
+#   * laya-go/scripts/gen_go_fixtures.py records the family only this port needs, which holds
+#     what the reference answers over every code point and over seeded random strings, every
+#     question refusal with its text, and round(x, 4);
 #   * LAYA_GO_FIXTURES points the tests at that scratch directory, so the committed copies are
 #     never read.
 #
@@ -101,6 +102,7 @@ jobs:
           python laya-java/scripts/gen_fixtures.py --strict --out "$GOLDENS"
           --only lang_tables.json --only lang_detect.json --only python_json.json
           --only tokenizer_ids.json --only decode_text.json
+          --only sequences.json --only decode.json --only window_plan.json
       - name: Regenerate laya-go's own golden from Python
         env:
           LAYA_FIXTURE_CHECKPOINTS: ${{ github.workspace }}/laya-java/.work/checkpoints
@@ -125,11 +127,11 @@ jobs:
           LAYA_GO_FIXTURES: ${{ github.workspace }}/.go-goldens
           LAYA_CHECKPOINTS: ${{ github.workspace }}/laya-java/.work/checkpoints
         run: go test -race -count=1 -json ./... > "$RUNNER_TEMP/go-test.json"
-      # Exactly the measured count (528 tests and subtests, on both Go versions): dropping a
+      # Exactly the measured count (1060 tests and subtests, on both Go versions): dropping a
       # case fails here, and adding one means raising this number.
       - name: No test was skipped
         if: ${{ !cancelled() }}
-        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test.json" --min-tests 530
+        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test.json" --min-tests 1060
 
       # go.mod declares go 1.22, so that is what a consumer may build with.
       - name: Run the tests on the oldest supported Go
@@ -141,7 +143,7 @@ jobs:
         run: go test -count=1 -json ./... > "$RUNNER_TEMP/go-test-oldest.json"
       - name: No test was skipped on the oldest Go either
         if: ${{ !cancelled() }}
-        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test-oldest.json" --min-tests 530
+        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test-oldest.json" --min-tests 1060
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ failure() }}

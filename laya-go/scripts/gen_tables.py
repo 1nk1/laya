@@ -11,7 +11,7 @@ Three files, three sources, and the split is the point:
     package follows whichever Unicode the Go toolchain ships (it moves between releases).
   * lang/tables_gen.go -- read straight from `laya.lang`: the script ranges, the per-language
     function words and the thresholds.
-  * internal/tokenizer/tables_gen.go -- probed from the `tokenizers` crate (the reference the
+  * tokenizer/tables_gen.go -- probed from the `tokenizers` crate (the reference the
     Python package tokenizes with), whose Unicode is NOT CPython's: it classifies Unicode 15.1/16
     additions as letters and decomposes 135 code points CPython does not.
 
@@ -34,7 +34,7 @@ SURROGATES = range(0xD800, 0xE000)
 HANGUL = range(0xAC00, 0xD7A4)
 OUT_UNICODE = os.path.join(GO, "internal", "unicodedata", "tables_gen.go")
 OUT_LANG = os.path.join(GO, "lang", "tables_gen.go")
-OUT_TOKENIZER = os.path.join(GO, "internal", "tokenizer", "tables_gen.go")
+OUT_TOKENIZER = os.path.join(GO, "tokenizer", "tables_gen.go")
 
 
 def wrap(values, indent="\t", width=100):
