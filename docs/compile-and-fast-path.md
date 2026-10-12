@@ -100,12 +100,32 @@ warm-up shapes do not pre-record every request shape. Repeated shapes can benefi
 shapes can pay extra latency and retain graph pools. PyTorch may skip CUDA graphs for unsupported
 operations or configurations; setting this mode is not a guarantee of capture.
 
-Laya marks each compiled CUDA forward as a new step, serializes these forwards across its agents,
-and clones both output tensors outside the compiled graph before releasing the lock. This keeps
-retained outputs valid across replays, at the cost of two copies and serialized forward execution.
-The lock does not coordinate unrelated application-owned compiled models; callers sharing CUDA
-graph iterations or using custom streams must manage their own coordination. Disk caches reuse
-compiled code, not live CUDA graph recordings or their device memory, across processes.
+On `compile=True` with `compile_mode="reduce-overhead"`, Laya marks each compiled CUDA forward as
+a new step, serializes these forwards across its agents, and clones both output tensors outside
+the compiled graph before releasing the lock. `Agent._infer` enters `laya._compile.cuda_graph_step`
+only when `_reduce_overhead` is set (`laya/agent.py:700`, read at `:1237`, entered at `:1238`), and
+nothing outside this branch sets it; the clone of every output is at `:1250`. The lock
+`cuda_graph_step` takes is a module-level `threading.Lock` (`laya/_compile.py:39`, taken at `:63`),
+so every agent in the process shares it: that is what "across its agents" means. Together these
+keep retained outputs valid across replays, at the cost of two copies and serialized forward
+execution.
+
+`backend="compile"` is a different route. It still copies its outputs out before releasing its
+lock, but it marks no step and locks per agent rather than across agents. `CompileBackend.forward`
+holds an `RLock` built per instance (`laya/backends/compile.py:79`, taken at `:114`) and clones the
+sliced outputs inside it (`:117`); it does not import `cuda_graph_step`, so it makes no
+`torch.compiler.cudagraph_mark_step_begin` call, and it never raises on a torch build without that
+API. Two agents on `backend="compile"` therefore replay their graphs concurrently, with no step
+marked between their forwards. The backend's default mode is `"reduce-overhead"`
+(`laya/backends/compile.py:70`) and `backend="auto"` resolves to it on a CUDA machine without
+tilelang (`laya.backends.auto_policy`), so this is the CUDA graph path that runs by default, not
+the opt-in one. `agent.backend` names the route a load took; `agent.backend_object._lock` is the
+specific lock a second `backend="compile"` agent would not be sharing.
+
+In both routes the lock does not coordinate unrelated application-owned compiled models; callers
+sharing CUDA graph iterations or using custom streams must manage their own coordination. Disk
+caches reuse compiled code, not live CUDA graph recordings or their device memory, across
+processes.
 
 Reproduce cold/restart timings, memory, and cache counters with
 `benchmarks/bench_compile_defaults.py`; see
