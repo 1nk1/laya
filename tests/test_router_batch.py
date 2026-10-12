@@ -82,6 +82,7 @@ def test_mixed_groups_keep_order_and_lru(fake_agent, capacity, expected):
     ("text", TypeError, "requests must be a sequence"),
     ([None], TypeError, "request 0"),
     ([{"questions": Q}], ValueError, "request 0 is missing required key 'state'"),
+    ([{"state": None, "questions": Q}], TypeError, "request 0 'state' must not be None"),
     ([{"state": "x"}], ValueError, "request 0 is missing required key 'questions'"),
     ([request("x"), {"state": "y", "questions": None}], TypeError, "request 1 'questions'"),
     ([request("x"), request("y", model="invalid")], ValueError, "unknown model"),

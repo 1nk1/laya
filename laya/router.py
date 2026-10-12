@@ -1561,6 +1561,8 @@ class Router(HookRegistry):
                 raise TypeError("request %d must be a dict, got %s" % (i, type(request).__name__))
             if "state" not in request:
                 raise ValueError("request %d is missing required key 'state'" % i)
+            if request["state"] is None:
+                raise TypeError("request %d 'state' must not be None; pass a string, dict, or list" % i)
             if "questions" not in request:
                 raise ValueError("request %d is missing required key 'questions'" % i)
 
