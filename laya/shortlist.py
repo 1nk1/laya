@@ -131,10 +131,6 @@ def predict_shortlist(
         reduced[qid] = _drop_stale_order(qid, updated, len(labels), warned)
 
     result = _call_predict(agent, state, reduced, **predict_kwargs)
-    if not isinstance(result, dict):
-        raise TypeError(
-            "predict/system_one must return a dict, got %s" % type(result).__name__
-        )
     out = dict(result)
     out["shortlist"] = meta
     return out
@@ -178,6 +174,12 @@ def predict_tournament(
     come from the final call, so a tournament choice's probabilities are over its
     finalists only.
 
+    Every call's reply is checked against the same shape, the elimination rounds included: a
+    reply that is not a dict, one whose ``answers`` is not a dict, and a round whose answers
+    leave one of the numbered group questions out each raise that contract by name. The group
+    numbers are invented here, so an unanswered group would otherwise surface as a ``KeyError``
+    on a question id no request contains.
+
     Extra keyword arguments are forwarded to every call (for example ``model=`` on a ``Router``).
     """
     if not isinstance(questions, dict):
@@ -208,7 +210,8 @@ def predict_tournament(
         if not groups:
             break
         round_questions = {str(i): cut(qid, labels) for i, (qid, labels) in enumerate(groups)}
-        answers = _call_predict(agent, state, round_questions, **predict_kwargs)["answers"]
+        answers = _round_answers(_call_predict(agent, state, round_questions, **predict_kwargs),
+                                 len(groups))
         winners: Dict[str, List[Any]] = {}
         for i, (qid, _labels) in enumerate(groups):
             winners.setdefault(qid, []).append(answers[str(i)]["choice"])
@@ -221,10 +224,6 @@ def predict_tournament(
         if entry["rounds"]:
             final[qid] = cut(qid, entry["labels"])
     result = _call_predict(agent, state, final, **predict_kwargs)
-    if not isinstance(result, dict):
-        raise TypeError(
-            "predict/system_one must return a dict, got %s" % type(result).__name__
-        )
     out = dict(result)
     out["tournament"] = meta
     return out
@@ -523,12 +522,43 @@ def _cosine(query: np.ndarray, docs: np.ndarray) -> np.ndarray:
 
 
 def _call_predict(agent, state, questions, **predict_kwargs):
+    """One ``predict``/``system_one`` call, checked against the shape every caller here reads.
+
+    Both public functions return that reply to their caller, and ``predict_tournament`` indexes
+    into it between rounds, so the check belongs to the call rather than to a call site: an agent
+    that answers with a list or ``None`` fails here, naming the contract, instead of raising a
+    bare indexing error from inside the module.
+    """
     fn = getattr(agent, "predict", None)
     if fn is None:
         fn = getattr(agent, "system_one", None)
     if fn is None:
         raise TypeError("agent must provide predict or system_one")
-    return fn(state, questions, **predict_kwargs)
+    result = fn(state, questions, **predict_kwargs)
+    if not isinstance(result, dict):
+        raise TypeError(
+            "predict/system_one must return a dict, got %s" % type(result).__name__
+        )
+    return result
+
+
+def _round_answers(result, n_groups):
+    """The answers of one elimination round, keyed by the group numbers this module invented.
+
+    ``predict_tournament`` numbers its own group questions, so the keys it indexes here are keys
+    the caller never wrote. An agent that answers fewer questions than it was handed would fail on
+    a ``KeyError`` naming a number no request contains; the omitted ids are named instead.
+    """
+    answers = result.get("answers")
+    if not isinstance(answers, dict):
+        raise TypeError(
+            "predict/system_one must return an answers dict, got %s" % type(answers).__name__
+        )
+    missing = [str(i) for i in range(n_groups) if str(i) not in answers]
+    if missing:
+        raise ValueError("the round answered %d of %d group questions, omitting %s"
+                         % (n_groups - len(missing), n_groups, ", ".join(missing)))
+    return answers
 
 
 def _hidden_size(encoder) -> int:
