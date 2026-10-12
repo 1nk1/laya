@@ -66,8 +66,12 @@ An option that cannot mean anything is refused locally, before the request goes 
 budget that is not a positive integer, a threshold outside `[0, 1]`, or a threshold map that is empty
 or holds a value outside `[0, 1]`. Nothing is silently ignored. Laya's
 public `/health` returns `status`, `loaded`, `revisions`, `device`, `device_is_preference`,
-`checkpoint_devices`, and `cpu_fallbacks` -- the same seven keys the laya-serve deployment
-page documents; see [HTTP API](http-api.md). Prediction never probes health first.
+`checkpoint_devices`, and `cpu_fallbacks` to a caller it can authenticate, plus
+`idle_unload_seconds` and `idle_seconds` on a deployment that sets `LAYA_IDLE_UNLOAD_SECONDS` --
+seven keys, or nine there, exactly as [HTTP API](http-api.md) documents them. An anonymous probe
+on a deployment with `LAYA_API_KEY` set gets `{"status": "ok"}` alone, because the withheld fields
+name resident checkpoints, their revisions and the host's device state; that body is a healthy
+response, and `health()` returns it rather than raising. Prediction never probes health first.
 
 FastAPI detail strings and validation arrays are preserved as `LayaAPIError`
 messages/details. Structured error envelopes from compatible backends are also
