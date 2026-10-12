@@ -214,7 +214,7 @@ check_true("hooks_raise=False/warns",
            any(issubclass(w.category, RuntimeWarning) for w in caught))
 
 # ... but it arrives once per distinct message, not once per failure. The emit site is a plain
-# `warnings.warn` inside `laya/hooks.py::dispatch` (`:543-546`) whose text names the hook, the event and
+# `warnings.warn` inside `laya/hooks.py::dispatch` (`:543-547`) whose text names the hook, the event and
 # the exception, so a hook that fails the same way repeats the same string, and Python's default
 # `RuntimeWarning` filter dedups by (message, category, caller line) for the rest of the process.
 # Every other `catch_warnings(record=True)` block in this suite (five of them) sets
@@ -227,6 +227,31 @@ with warnings.catch_warnings(record=True) as dedup:
 check("warnings/identical repeats dedup to one line under the default filter", len(dedup), 1)
 check("warnings/and that line is the hook failure",
       [str(w.message) for w in dedup], ["laya: hook _StartAdapter.on_predict_start failed: hook boom"])
+
+# The other half of the same claim: dedup keys on the message text, so a hook whose error varies with
+# the call -- a retry counter, a request id -- is not deduped at all. That is the arm that stays noisy.
+class Drifting:
+    def __init__(self):
+        self.n = 0
+
+    def on_predict_start(self, ctx):
+        self.n += 1
+        raise ValueError("hook attempt %d" % self.n)
+
+
+f = make_fake()
+drifting = Drifting()
+with warnings.catch_warnings(record=True) as varies:
+    warnings.simplefilter("default")
+    for _ in range(3):
+        f.predict_batch(["s0"], QUESTIONS, hooks=[drifting], hooks_raise=False)
+check("warnings/a varying message prints once per distinct text", len(varies), 3)
+check("warnings/all three name the same hook and event",
+      sorted({str(w.message).rsplit(": hook ", 1)[0] for w in varies}),
+      ["laya: hook Drifting.on_predict_start failed"])
+check("warnings/and the three texts are the three attempts",
+      sorted(str(w.message).rsplit(": ", 1)[1] for w in varies),
+      ["hook attempt 1", "hook attempt 2", "hook attempt 3"])
 
 
 class ErrHook:
