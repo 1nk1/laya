@@ -139,26 +139,61 @@ def test_head_is_the_encoder_stack_not_a_single_layer():
     assert _tiny_model(head_layers=0).head is None
 
 
-def test_the_quantized_head_failure_reads_dtype_on_the_action_head():
-    # The page also tells readers which attribute blows up when they quantize the whole model.
-    # The two facts it names are the attribute the fast path reads and the module it reads it on,
-    # so both come off the source, and the page's quoted message has to agree with them. The
-    # failure itself is reproducible -- a quantized `act_head[0]` makes `weight` a method and
-    # `predict` raises inside `DecisionModel.forward` -- but reproducing it needs a working
-    # quantization engine, which is the very thing that page says depends on the CPU. So this
-    # pins the reading, not the engine.
+def _quantized_whole_model_error(model):
+    """The AttributeError text `predict` would raise on a fully quantized `model`, or None."""
+    quantized = torch.ao.quantization.quantize_dynamic(model, {torch.nn.Linear}, dtype=torch.qint8)
+    try:
+        with torch.no_grad():
+            quantized(*_inputs(batch=1, seq=8, n_markers=1))
+    except AttributeError as exc:
+        return str(exc)
+    return None
+
+
+def test_the_quantized_whole_model_failure_is_the_one_the_page_quotes():
+    # The page tells readers which attribute blows up when they quantize the whole model, and
+    # there are two answers, so it names both and says which one they will get. Torch skips the
+    # encoder layer's sparsity fast path when `self_attn.num_heads` is odd, and the head takes
+    # `nhead = max(1, d // 64)`: a hidden size under 128 gives `nhead = 1`, survives the stack
+    # and fails on `act_head[0].weight.dtype`, while every published checkpoint (d=768, d=1024
+    # -> nhead 12 or 16) takes the fast path and fails earlier, on `.device`. Reproduced here on
+    # both shapes rather than read off the source, because reading the source is exactly what
+    # made the page claim `.dtype` for checkpoints that raise `.device`.
     src = inspect.getsource(DecisionModel.forward)
     read = re.search(r"self\.act_head\[0\]\.weight\.(\w+)", src)
     assert read is not None, "the fast path no longer reads a weight attribute this way"
     assert read.group(1) == "dtype", read.group(1)
     assert type(_tiny_model().act_head[0]).__name__ == "Linear"
+
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, "docs", "reference", "agent.md"), encoding="utf-8") as handle:
         page = handle.read()
     named = re.findall(r"'function' object has no attribute '(\w+)'", page)
-    assert named == ["dtype"], named
+    assert named == ["device", "dtype"], named
     assert re.search(r"head\s+is an `nn\.TransformerEncoderLayer`", page) is None, (
         "the page calls the head a single layer again")
+    assert "nhead = max(1, d // 64)" in page, "the page no longer names what picks the message"
+
+    # A quantization engine is what the surrounding section says depends on the CPU, so the
+    # reproduction is skipped rather than failed where there is none.
+    try:
+        torch.backends.quantized.engine = "qnnpack"
+    except RuntimeError:
+        return
+    odd = _tiny_model(head_layers=2)
+    assert odd.head.layers[0].self_attn.num_heads % 2 == 1, "the tiny fixture stopped being odd"
+    try:
+        odd_error = _quantized_whole_model_error(odd)
+    except RuntimeError:                       # no engine for quantized::linear_prepack
+        return
+    assert odd_error == "'function' object has no attribute 'dtype'", odd_error
+
+    even = _tiny_model(head_layers=2)
+    for layer in even.head.layers:             # 2 heads over d=16: even, so the fast path runs
+        layer.self_attn = torch.nn.MultiheadAttention(16, 2, batch_first=True)
+    assert even.head.layers[0].self_attn.num_heads % 2 == 0
+    even_error = _quantized_whole_model_error(even)
+    assert even_error == "'function' object has no attribute 'device'", even_error
 
 
 if __name__ == "__main__":
@@ -167,6 +202,6 @@ if __name__ == "__main__":
     test_multi_option_question_is_unaffected()
     test_action_head_explicit_dtype_and_autocast()
     test_head_is_the_encoder_stack_not_a_single_layer()
-    test_the_quantized_head_failure_reads_dtype_on_the_action_head()
+    test_the_quantized_whole_model_failure_is_the_one_the_page_quotes()
     print("all decision model tests passed")
 

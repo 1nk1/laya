@@ -62,11 +62,23 @@ fbgemm was faster on that CPU (0.39 s) and still moved the score, to 0.15. Valid
 probabilities on your own data.
 
 Do not quantize the whole `agent.model`. That replaces the decision head's `nn.Linear` layers
-with dynamically quantized linears, whose `weight` is a method rather than a tensor. `act_head[0]`
-is one of them, and `laya/common.py::DecisionModel.forward` reads `.dtype` off its `weight` whenever
-autocast is off, so `predict` raises
-`AttributeError: 'function' object has no attribute 'dtype'`. The stack above that Linear --
-`agent.model.head`, an `nn.TransformerEncoder` of `head_layers` `nn.TransformerEncoderLayer`s
-(`laya/common.py::DecisionModel.__init__`), and absent entirely when `head_layers` is 0 -- is what
-"the decision head" usually names, and it is not the module that fails. Either way,
-leave the head in fp32.
+with dynamically quantized linears, whose `weight` is a method rather than a tensor, and two
+different reads of that method can be the one that raises.
+
+On every published checkpoint it is the encoder stack. `agent.model.head` is an
+`nn.TransformerEncoder` of `head_layers` `nn.TransformerEncoderLayer`s
+(`laya/common.py::DecisionModel.__init__`, and `None` when `head_layers` is 0), and each layer's
+sparsity fast path reads `.device` on the quantized weights, so `predict` raises
+`AttributeError: 'function' object has no attribute 'device'`. Reproduced on `laya`,
+`laya-multilingual` and `laya-typed-decisions`, qnnpack engine, from
+`torch/nn/modules/transformer.py`'s `(x.device.type in _supported_device_type)` line.
+
+Whether that fast path is taken is what decides which message you get, so a reader who sees the
+other one has not found a different bug. Torch skips the fast path when `self_attn.num_heads` is
+odd, and the head takes `nhead = max(1, d // 64)`, so a model built from a config whose hidden
+size is under 128 gets `nhead = 1`, survives the stack, and fails one step later in
+`DecisionModel.forward`, which reads `.dtype` on `act_head[0].weight` whenever autocast is off:
+`AttributeError: 'function' object has no attribute 'dtype'`. The published checkpoints are
+`d=768` and `d=1024`, so `nhead` is 12 or 16 and never that case.
+
+Either way, leave the head in fp32.
