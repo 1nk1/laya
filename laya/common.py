@@ -889,6 +889,12 @@ def resolve_lang_temperatures(raw: Optional[Dict[str, Any]],
 
     A `null` entry or a `null` temperature both mean "inherit the checkpoint's own", which is how
     the `laya-ts` port reads the same option (`agent.ts:322-327`).
+
+    Every value still goes through `clamp_temperature`, and a value the clamp had to replace is named
+    in a `RuntimeWarning` for its language: `{"de": {"temperature": [True, 1.5, 2.0]}}` answers
+    `[1.0, 1.5, 2.0]` and `[99, 0.01, 1]` answers `[5.0, 0.5, 1.0]`, which is a different confidence
+    scale from the one the caller wrote. `temperature_rejected` is what distinguishes a replaced entry
+    from an accepted one.
     """
     resolved: Dict[str, Dict[str, Any]] = {}
     for lang, cfg in (raw or {}).items():
@@ -901,7 +907,8 @@ def resolve_lang_temperatures(raw: Optional[Dict[str, Any]],
             raise ValueError("Language override %r must be a mapping, got %s"
                              % (lang, type(cfg).__name__))
         t_raw = cfg.get("temperature")
-        if t_raw is None:
+        inherited = t_raw is None
+        if inherited:
             t_raw = base_temperature
         if not isinstance(t_raw, (list, tuple)) or len(t_raw) != 3:
             raise ValueError("Language override %r temperature must be a list of 3 floats, got %r"
@@ -910,9 +917,27 @@ def resolve_lang_temperatures(raw: Optional[Dict[str, Any]],
         if not isinstance(tbo_raw, dict):
             raise ValueError("Language override %r temperature_by_options must be a mapping of "
                              "bucket -> float, got %s" % (lang, type(tbo_raw).__name__))
+        temperature = [clamp_temperature(t) for t in t_raw]
+        by_options = {k: clamp_temperature(v) for k, v in tbo_raw.items()}
+        # An override that omits `temperature` inherits the checkpoint's own list, and the loader
+        # that got here has already reported the entries it replaced in it. Repeating that line once
+        # per language would bury the overrides a reader is actually holding.
+        entries = [] if inherited else [
+            ("temperature[%d]" % i, raw, applied)
+            for i, (raw, applied) in enumerate(zip(t_raw, temperature))
+        ]
+        entries += [("%s" % k, v, by_options[k]) for k, v in tbo_raw.items()]
+        rejected = ["%s=%r -> %g" % (name, raw, applied)
+                    for name, raw, applied in entries if temperature_rejected(raw, applied)]
+        if rejected:
+            warnings.warn(
+                "laya: language override %r ships invalid temperatures or values outside "
+                "[%g, %g]; using %s. Treat confidence from the affected entries as uncalibrated."
+                % (lang, TEMP_MIN, TEMP_MAX, ", ".join(rejected)),
+                RuntimeWarning, stacklevel=2)
         resolved[norm] = {
-            "temperature": [clamp_temperature(t) for t in t_raw],
-            "temperature_by_options": {k: clamp_temperature(v) for k, v in tbo_raw.items()},
+            "temperature": temperature,
+            "temperature_by_options": by_options,
         }
     return resolved
 
