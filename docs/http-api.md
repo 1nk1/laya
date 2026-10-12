@@ -379,12 +379,20 @@ raise max_len, or use fewer options`, which `max_len=1024` then answers. The mes
 levers because either can be the fix; `laya/agent.py::_encode_state` keeps a comment recording that
 naming only `head_max_len` "pointed at the wrong knob in both directions".
 
-How many options fit at all is set by that same pair *and* by their text. With no description on the
-options, at `max_len=512` and `head_max_len=192` the largest single choice question that is not
-refused carries 168 options when each label is `T <i>` and 126 when each is
-`Tickets routed to queue <i>`; at `max_len=1024` those become 339 and 254. Each of those four
-boundaries was met through the public call: it answers at the ceiling and refuses one option above
-it. Those 126 sentence labels carry a second lesson -- the answered call reports
+How many options fit at all is set by that same pair *and* by their text *and* by the question's own
+`instructions`. With no description on the options and a three-token instruction (`Which queue?`), at
+`max_len=512` and `head_max_len=192` the largest single choice question that is not refused carries
+168 options when each label is `T <i>` and 126 when each is `Tickets routed to queue <i>`; at
+`max_len=1024` those become 339 and 254. Each of those four boundaries was met through the public call:
+it answers at the ceiling and refuses one option above it. Change the instruction and they move -- a
+two-token one gives 169, 127, 339 and 255, an eight-token one gives 168, 126, 338 and 254 -- because
+`laya/common.py::build_head` truncates the encoded `choice question: <instructions>` prefix to
+`max(8, opt_budget)` tokens, so the first `[MASK]` lands at position 7, 8 or 10 for those three
+wordings and every marker after it shifts with it. The ceiling stops moving once the instruction
+reaches the cap: the same seventeen-token wording returns the eight-token numbers exactly. The state
+does not move it either -- at `max_len=1024` with the eight-token instruction, 338 options answer and
+339 refuse whether the state is one word or the eleven-token sentence this section has been using.
+Those 126 sentence labels carry a second lesson -- the answered call reports
 `options: {"q": {"total": 126, "distinct": 1, "tokens_per_option": 4}}`, because the 4-token cap left
 every option the same span, so the question could not tell its 126 choices apart, and only a
 collision like that puts `options` in the response. Both default ceilings sit above
@@ -393,8 +401,9 @@ refusal -- and reaches a budget refusal only by raising `max_len` or `head_max_l
 which is accepted up to `LAYA_MAX_TOKEN_BUDGET`, 8192 by default. (`LAYA_TOURNAMENT_GROUP` raises the
 count cap to 255 but narrows those choices into groups, so they never reach the one-pass budget.) A
 caller comparing this endpoint with another server's stated "maximum N options" therefore has to quote
-the budget it sent and the option text, not just N. The [Evaluation harness](evals.md) runs the same
-requests in-process without the HTTP layer, so there the 168/126 ceiling is the one that binds.
+the budget it sent, the option text and the instruction, not just N. The [Evaluation harness](evals.md)
+runs the same requests in-process without the HTTP layer, so there the 168/126 ceiling is the one that
+binds.
 
 ## Errors
 
