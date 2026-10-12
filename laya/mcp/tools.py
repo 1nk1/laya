@@ -851,6 +851,101 @@ def laya_shortlist(
     return out
 
 
+def laya_tournament(
+    state: Any,
+    questions: Any,
+    model: Any = "auto",
+    group_size: Any = 16,
+    *,
+    task: Any = None,
+    lang: Any = None,
+    lang_guess: Any = None,
+    max_len: Any = None,
+    head_max_len: Any = None,
+    min_confidence: Any = None,
+    router: Any = None,
+    agent: Any = None,
+) -> dict:
+    """Answer large choices with core's balanced tournament in-process.
+
+    Select the checkpoint from the original request, then pin it for every round.
+    Each round uses ``laya_predict``'s validation, answer shape and device reporting.
+    Probabilities and confidence describe the final call's finalists; ``tournament``
+    adds their ``labels``, the original option count ``n`` and elimination ``rounds``.
+    Small choices report zero rounds; non-choice questions reach the final call.
+    ``latency_ms`` covers routing and all rounds. A narrowed question's discarded
+    ``option_order`` is reported with its original and kept option counts.
+
+    Remote callers use ``laya_predict`` with the HTTP server's tournament enabled;
+    its probability and usage contract differs from this core helper's contract.
+    """
+    if router is not None and agent is None and hasattr(router, "base_url") and hasattr(router, "health"):
+        raise ToolError(
+            "unsupported_remote",
+            "laya_tournament runs core tournament rounds in-process; it is not available when "
+            "LAYA_BASE_URL points at laya-serve. Use laya_predict with LAYA_TOURNAMENT_GROUP "
+            "enabled on that server, or run the MCP server without LAYA_BASE_URL.",
+        )
+    state_d = validate_state(state)
+    questions_d = validate_questions(questions)
+    model_name = validate_model(model)
+    if isinstance(group_size, bool) or not isinstance(group_size, int) or group_size < 2:
+        raise ToolError("invalid_group_size", f"group_size must be an integer of at least 2, got {group_size!r}")
+    routing_overrides = _overrides(validate_task(task), validate_lang(lang), None, None)
+    hint = validate_lang_guess(lang_guess)
+    if hint is not None:
+        routing_overrides["lang_guess"] = hint
+    forward = _overrides(None, None, validate_budget(max_len, "max_len"),
+                         validate_budget(head_max_len, "head_max_len"))
+    min_conf = validate_min_confidence(min_confidence)
+    if min_conf is not None:
+        forward["min_confidence"] = min_conf
+    for name in ("task", "lang_guess"):
+        if model_name != AUTO and name in routing_overrides:
+            raise ToolError(f"invalid_{name}",
+                            f"{name} routes between checkpoints; with a pinned model there is nothing to route")
+    if "lang" in routing_overrides:
+        forward["lang"] = routing_overrides["lang"]
+
+    from laya.shortlist import predict_tournament
+
+    started = time.perf_counter()
+    routing = None
+    predict_agent = agent
+    if model_name == AUTO and router is not None:
+        if not hasattr(router, "route"):
+            raise ToolError("internal_error", "router has no route() method")
+        decision = router.route(state_d, questions_d, **routing_overrides)
+        routing = _decision_to_dict(decision)
+        model_name = routing["model"]
+        if not isinstance(model_name, str) or not model_name:
+            raise ToolError("internal_error", "router.route returned no model")
+        detection = (decision.get("detection") if isinstance(decision, dict)
+                     else getattr(decision, "detection", None))
+        detected = _detected_language(detection)
+        if detected is not None and "lang" not in forward:
+            forward["lang"] = detected
+        predict_agent = None
+
+    class Predictor:
+        def predict(self, round_state, round_questions):
+            return laya_predict(round_state, round_questions, model=model_name,
+                                router=router, agent=predict_agent, **forward)
+
+    out = predict_tournament(Predictor(), state_d, questions_d, group_size=group_size)
+    if routing is not None:
+        out["routing"] = routing
+    out["latency_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+    dropped_orders = {
+        name: {"n": entry["n"], "kept": len(entry["labels"])}
+        for name, entry in out["tournament"].items()
+        if entry["rounds"] and "option_order" in questions_d[name]
+    }
+    if dropped_orders:
+        out["option_order_dropped"] = dropped_orders
+    return out
+
+
 def laya_preset(
     preset: Any,
     state: Any,

@@ -46,6 +46,7 @@ from laya.mcp.tools import (  # noqa: E402
     laya_route_batch,
     laya_shortlist,
     laya_status,
+    laya_tournament,
     validate_batch_requests,
     validate_budget,
     validate_lang,
@@ -992,6 +993,163 @@ BATCH_REQUESTS = [
      "questions": {"triage": {"type": "noul", "instructions": "Leaving?"}},
      "lang": "hi"},
 ]
+
+
+class TournamentAgent:
+    device = "cpu"
+
+    def __init__(self):
+        self.calls = []
+
+    def predict(self, state, questions, **kwargs):
+        self.calls.append((state, questions, kwargs))
+        answers = {}
+        for name, spec in questions.items():
+            if spec["type"] == "choice":
+                labels = list(spec["criteria"])
+                winner = max(labels, key=lambda label: int(label[3:]))
+                answers[name] = {"type": "choice", "choice": winner, "confidence": 0.9,
+                                 "probabilities": {label: float(label == winner) for label in labels}}
+                if kwargs.get("min_confidence", 0) > 0.9:
+                    answers[name]["low_confidence"] = True
+            elif spec["type"] == "score":
+                answers[name] = {"type": "score", "score": 1.0, "confidence": 0.9}
+            else:
+                answers[name] = {"type": "noul", "noul": 0.9, "confidence": 0.9}
+        return {"answers": answers, "usage": {"call": len(self.calls)}}
+
+
+class TournamentRouter:
+    def __init__(self, decision=None):
+        self.decision = decision or {"model": "english", "repo": "fake/repo", "reason": "original request"}
+        self.routes = []
+        self.agent = TournamentAgent()
+        self._agents = {self.decision["model"]: self.agent}
+
+    def route(self, state, questions, **kwargs):
+        self.routes.append((state, questions, kwargs))
+        return self.decision
+
+    def predict(self, state, questions, **kwargs):
+        result = self.agent.predict(state, questions, **kwargs)
+        result["routing"] = {"model": kwargs["model"], "repo": "fake/repo", "reason": "explicit model"}
+        return result
+
+
+def tournament_questions(n):
+    return {"intent": {"type": "choice", "instructions": "Which intent does `body` express?",
+                       "criteria": {"opt%d" % i: "intent %d" % i for i in range(n)}}}
+
+
+def test_tournament():
+    import copy
+
+    for n, rounds, calls, sizes in ((40, 1, 2, [13, 13, 14]), (257, 2, 3, [15] * 8 + [16] + [15] * 7 + [16])):
+        questions = tournament_questions(n)
+        questions["rubric"] = {"type": "score", "instructions": "Rate urgency", "criteria": ["low", "high"]}
+        questions["flag"] = {"type": "noul", "instructions": "Is this urgent?"}
+        original = copy.deepcopy(questions)
+        agent = TournamentAgent()
+        out = laya_tournament(STATE, questions, model="english", agent=agent)
+        ok("tournament/%d_balanced" % n,
+           [len(q["criteria"]) for q in agent.calls[0][1].values()] == sizes)
+        ok("tournament/%d_rounds_and_calls" % n,
+           out["tournament"]["intent"]["rounds"] == rounds and len(agent.calls) == calls)
+        ok("tournament/%d_best_survives" % n, out["answers"]["intent"]["choice"] == "opt%d" % (n - 1))
+        ok("tournament/%d_final_carries_all_questions" % n,
+           set(agent.calls[-1][1]) == set(questions) and set(out["answers"]) == set(questions))
+        ok("tournament/%d_only_choices_have_metadata" % n, set(out["tournament"]) == {"intent"})
+        meta = out["tournament"]["intent"]
+        ok("tournament/%d_original_count" % n, meta["n"] == n)
+        ok("tournament/%d_finalist_probabilities" % n,
+           list(out["answers"]["intent"]["probabilities"]) == meta["labels"])
+        ok("tournament/%d_input_preserved" % n, questions == original)
+        ok("tournament/%d_shape" % n,
+           set(out) == {"answers", "routing", "latency_ms", "device", "tournament"}
+           and out["device"] == "cpu" and out["latency_ms"] >= 0)
+
+    questions = tournament_questions(40)
+    questions["small"] = tournament_questions(2)["intent"]
+    questions["intent"]["option_order"] = list(reversed(range(40)))
+    questions["small"]["option_order"] = [1, 0]
+    original = copy.deepcopy(questions)
+    agent = TournamentAgent()
+    import warnings
+
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        out = laya_tournament(STATE, questions, model="en", agent=agent, group_size=4,
+                              lang="de", max_len=1024, head_max_len=384, min_confidence=0.95)
+    ok("tournament/order_drop_once", len(seen) == 1 and "option_order" in str(seen[0].message))
+    ok("tournament/order_drop_report", out["option_order_dropped"] == {"intent": {"n": 40, "kept": 3}})
+    ok("tournament/orders_input_preserved", questions == original)
+    ok("tournament/small_order_kept", agent.calls[-1][1]["small"]["option_order"] == [1, 0])
+    ok("tournament/narrowed_order_removed",
+       all("option_order" not in q for _s, qs, _k in agent.calls[:-1] for q in qs.values()))
+    ok("tournament/controls_every_round",
+       all(kwargs == {"lang": "de", "max_len": 1024, "head_max_len": 384, "min_confidence": 0.95}
+           for _s, _qs, kwargs in agent.calls))
+    ok("tournament/low_confidence_final", out["answers"]["intent"]["low_confidence"] is True)
+    ok("tournament/custom_size_rounds", len(agent.calls) == 3 and out["tournament"]["intent"]["rounds"] == 2)
+
+    for model in ("english", None, "auto"):
+        agent = TournamentAgent()
+        small = tournament_questions(2)
+        out = laya_tournament(STATE, small, model=model, agent=agent)
+        ok("tournament/%r_passthrough" % model, len(agent.calls) == 1 and agent.calls[0][1] == small)
+        ok("tournament/%r_zero_round_metadata" % model,
+           out["tournament"] == {"intent": {"labels": ["opt0", "opt1"], "n": 2, "rounds": 0}})
+        ok("tournament/%r_direct_routing" % model, out["routing"]["model"] == ("english" if model == "english" else None))
+        ok("tournament/%r_no_order_drop" % model, "option_order_dropped" not in out)
+    agent = TournamentAgent()
+    out = laya_tournament(STATE, {"flag": {"type": "noul", "instructions": "Is this urgent?"}},
+                          model="english", agent=agent)
+    ok("tournament/non_choice_one_call", len(agent.calls) == 1 and out["tournament"] == {})
+
+
+def test_tournament_routing_and_validation():
+    questions = tournament_questions(40)
+    for detection in ({"language": "de"}, SimpleNamespace(language="de")):
+        router = TournamentRouter({"model": "multilingual", "repo": "fake/ml", "reason": "German",
+                                   "detection": detection})
+        unused = TournamentAgent()
+        out = laya_tournament(STATE, questions, router=router, agent=unused,
+                              task="typed_decisions", lang_guess="de", max_len=1024)
+        ok("tournament/auto_original_request", router.routes == [(STATE, questions, {"task": "typed_decisions", "lang_guess": "de"})])
+        ok("tournament/auto_pinned_every_round",
+           all(kwargs == {"model": "multilingual", "lang": "de", "max_len": 1024}
+               for _s, _qs, kwargs in router.agent.calls))
+        ok("tournament/auto_preserves_route", out["routing"] == {"model": "multilingual", "repo": "fake/ml", "reason": "German"})
+        ok("tournament/auto_uses_routed_agent", unused.calls == [] and out["device"] == "cpu")
+        router = TournamentRouter({"model": "multilingual", "reason": "German", "detection": detection})
+        laya_tournament(STATE, questions, router=router, lang="fr")
+        ok("tournament/explicit_lang_wins", all(k["lang"] == "fr" for _s, _qs, k in router.agent.calls))
+
+    router = TournamentRouter()
+    out = laya_tournament(STATE, questions, model="EN", router=router)
+    ok("tournament/pin_skips_selection", router.routes == [] and out["routing"]["model"] == "english")
+    ok("tournament/pin_no_unset_controls", all(k == {"model": "english"} for _s, _qs, k in router.agent.calls))
+    for args, code in (({"state": []}, "invalid_state"), ({"questions": {}}, "invalid_questions"),
+                       ({"model": "gpt4"}, "invalid_model"), ({"task": "bad"}, "invalid_task"),
+                       ({"lang": 3}, "invalid_lang"), ({"lang_guess": 3}, "invalid_lang_guess"),
+                       ({"max_len": 0}, "invalid_max_len"), ({"head_max_len": "384"}, "invalid_head_max_len"),
+                       ({"min_confidence": 2}, "invalid_min_confidence"),
+                       ({"model": "english", "task": "typed"}, "invalid_task"),
+                       ({"model": "english", "lang_guess": "de"}, "invalid_lang_guess")):
+        router = TournamentRouter()
+        params = {"state": STATE, "questions": questions, "router": router, **args}
+        expect_tool_error("tournament/invalid_%r" % args, lambda: laya_tournament(**params), code)
+        ok("tournament/invalid_before_inference_%r" % args, not router.routes and not router.agent.calls)
+    for size in (True, False, None, 1, 0, -1, 2.5, "16"):
+        expect_tool_error("tournament/invalid_group_%r" % size,
+                          lambda: laya_tournament(STATE, questions, group_size=size), "invalid_group_size")
+    expect_tool_error("tournament/not_ready", lambda: laya_tournament(STATE, questions), "models_not_ready")
+    expect_tool_error("tournament/pinned_not_ready",
+                      lambda: laya_tournament(STATE, questions, model="english"), "models_not_ready")
+    bad = tournament_questions(40)
+    bad["intent"]["option_order"] = [0]
+    expect_tool_error("tournament/bad_order_before_rounds",
+                      lambda: laya_tournament(STATE, bad), "invalid_questions")
 
 
 def test_batch_validation():
@@ -2912,6 +3070,8 @@ test_shape()
 test_question_forwarding()
 test_option_order_forwarding()
 test_shortlist()
+test_tournament()
+test_tournament_routing_and_validation()
 test_batch_validation()
 test_batch_predict()
 test_batch_tool_control_forwarding()
