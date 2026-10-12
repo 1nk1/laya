@@ -224,10 +224,10 @@ def questions_fingerprint(dataset: "Dataset") -> str:
     `option_order` is the fifth and last field a question body can carry, and it was the one left
     out: `laya/agent.py::Agent._check_question` accepts only a permutation of the option indices,
     `Agent._to_internal` copies it into the internal question, and from there it reaches both the
-    tokenized head (`laya/common.py::build_sequence` via `build_head`) and the reported
-    probabilities (`laya/agent.py`'s `unpermute_probs` call). It is hashed only when a row names it,
-    so the digest of a question set that does not use the field stays the number its committed
-    baseline already carries.
+    tokenized head (`laya/common.py::build_sequence` through `build_head`) and the reported
+    probabilities (`laya/common.py::unpermute_probs`, applied in `Agent._decode_answers`). It is
+    hashed only when a row names it, so the digest of a question set that does not use the field
+    stays the number its committed baseline already carries.
     """
     schemas = set()
     for example in dataset.examples:
