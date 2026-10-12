@@ -120,8 +120,10 @@ writing a script.
 
 The CLI handles invalid values and common dependency, download, and runtime failures at the
 application boundary. It prints a diagnostic to stderr and returns exit code `2` instead of
-showing an unhandled traceback. If a first-use checkpoint download fails, check dependency
-installation, Hub access, and the selected device before retrying.
+showing an unhandled traceback. A handled failure ends the request, not the session: the prompt comes
+back for the next line, and the session exits `2` when it ends, so a piped session reports the
+code a failing request earned. If a first-use checkpoint download
+fails, check dependency installation, Hub access, and the selected device before retrying.
 
 ## 2. Built-in MCP stdio server
 
