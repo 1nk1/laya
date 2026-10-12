@@ -329,10 +329,16 @@ untested_suites = [
     if f not in EXEMPT_TEST_SUITES and f not in registered_test_files
 ]
 check("ci/wires every non-exempt test suite", untested_suites, [])
-# The point of the shared list is that CI and the publish gate run the same suites. Both invoking
-# the script is the entire mechanism, so assert neither workflow dropped back to an inline list.
-check_true("ci and the release gate share one suite list",
-           "scripts/test_suites.py" in workflow and "scripts/test_suites.py" in release_workflow, "")
+# Linux, Windows and the publish gate must invoke the shared list in their own jobs. A mention
+# elsewhere in the workflow (including a comment) cannot prove that a lane runs those suites.
+for label, source, job in (("ci/linux", workflow, "test"),
+                           ("ci/windows", workflow, "test-windows"),
+                           ("release/build", release_workflow, "build")):
+    job_block = re.search(r"^  %s:\s*\n(.*?)(?=^  [\w-]+:|\Z)" % re.escape(job), source, re.M | re.S)
+    check_true("%s runs the shared suite list" % label,
+               job_block is not None and re.search(r"^\s+run:\s+python scripts/test_suites\.py\s*$",
+                                                   job_block.group(1), re.M) is not None,
+               "expected run: python scripts/test_suites.py in %s" % job)
 
 
 # -------------------------------------------------- CONTRIBUTING.md's "Running the tests" section
