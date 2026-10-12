@@ -134,8 +134,13 @@ for `RuntimeWarning` Python prints the first occurrence of each distinct message
 suppresses the identical repeats for the rest of the process. A hook that fails the same way on every
 one of a thousand calls prints one line. A hook whose error text varies with the call -- a request id,
 a retry counter, a timestamp -- prints one line per distinct text, and that is the case that can be
-noisy under load. Two hooks failing, or one hook failing from two different call sites, are two lines
-each.
+noisy under load.
+
+What counts as distinct is the message text, and that text names the hook's *type* and the event. So two
+different hook classes failing in the same call are two lines, and one hook failing on both events is two
+lines -- but two instances of the *same* class failing the same way are one line, because they produce the
+same string. A single hook failing from two different call sites is two lines as well; the call site is the
+other half of the key.
 
 So the warning stream is not a failure counter. If the rate matters, count inside the hook, or set
 `hooks_raise=True` and handle the exception. To make the repeats print, a caller has to widen the

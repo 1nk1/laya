@@ -253,6 +253,49 @@ check("warnings/and the three texts are the three attempts",
       sorted(str(w.message).rsplit(": ", 1)[1] for w in varies),
       ["hook attempt 1", "hook attempt 2", "hook attempt 3"])
 
+# What makes two *distinct* texts is the hook type and the event named in the message: two classes
+# failing in one call are two lines, one hook failing on both events is two lines, but two instances
+# of the same class failing the same way collapse into one -- they produce the same string.
+class WarnPairA:
+    def on_predict_start(self, ctx):
+        raise ValueError("hook boom")
+
+
+class WarnPairB:
+    def on_predict_start(self, ctx):
+        raise ValueError("hook boom")
+
+
+f = make_fake()
+with warnings.catch_warnings(record=True) as same_type:
+    warnings.simplefilter("default")
+    f.predict_batch(["s0"], QUESTIONS, hooks=[WarnPairA(), WarnPairA()], hooks_raise=False)
+check("warnings/two instances of one class share one line", len(same_type), 1)
+
+f = make_fake()
+with warnings.catch_warnings(record=True) as other_type:
+    warnings.simplefilter("default")
+    f.predict_batch(["s0"], QUESTIONS, hooks=[WarnPairA(), WarnPairB()], hooks_raise=False)
+check("warnings/two classes failing alike are two lines", len(other_type), 2)
+
+
+class WarnBothEvents:
+    def on_predict_start(self, ctx):
+        raise ValueError("hook boom")
+
+    def on_predict_end(self, ctx):
+        raise ValueError("hook boom")
+
+
+f = make_fake()
+with warnings.catch_warnings(record=True) as both_events:
+    warnings.simplefilter("default")
+    f.predict_batch(["s0"], QUESTIONS, hooks=[WarnBothEvents()], hooks_raise=False)
+check("warnings/one hook failing on both events is two lines",
+      [str(w.message).rsplit(": hook ", 1)[0] for w in both_events],
+      ["laya: hook WarnBothEvents.on_predict_start failed",
+       "laya: hook WarnBothEvents.on_predict_end failed"])
+
 
 class ErrHook:
     def __init__(self):
