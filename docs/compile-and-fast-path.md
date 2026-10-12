@@ -19,7 +19,12 @@ and `fast`; omitting it preserves both flags' existing behaviour.
   to choose its cache directory (default `~/.cache/laya/inductor`).
 - `tilelang`: an adapter around the current fast path, using the agent's bf16 or fp16 dtype.
 - `auto`: TileLang on CUDA with a supported ModernBERT encoder and dtype when TileLang is
-  installed, otherwise compile on CUDA; eager on other devices.
+  installed, otherwise compile on CUDA; eager on other devices. One check comes before the device:
+  a checkpoint on the parallel option layout (`Agent.parallel_options`, set by `option_layout` in
+  its config) is eager on CUDA too, because the accelerated forwards do not take the parallel
+  masks. Nothing flags the choice — `auto` answered with a backend, just not the one the clause
+  above implies — so `agent.backend` is what says which arm ran, and `laya.backends.auto_policy` is
+  the authority on the order of those checks.
 - `onnx`: `laya.load(..., backend="onnx", onnx_path="model.onnx")` returns the existing
   `ONNXAgent`. Without `onnx_path`, it uses `laya.onnx`.
 
