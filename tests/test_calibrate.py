@@ -23,12 +23,14 @@ from laya.agent import Agent, load  # noqa: E402
 from laya.calibrate import (  # noqa: E402
     CALIBRATION_VERSION,
     ECE_HOLDOUT_FRAC,
+    LOG_T_MARGIN,
     MIN_BUCKET_N,
     MIN_TYPE_N,
     MIN_BINNING_BUCKET_N,
     _ece_report,
     _ece_split,
     _iter_records,
+    _pairs_by_width,
     _softmax,
     apply_binning_map,
     apply_calibration_payload,
@@ -175,6 +177,124 @@ check_true(
     "clamp/n=MIN_BUCKET_N-1 returns 1.0",
     fit_one_temperature(lo_pairs[: MIN_BUCKET_N - 1]) == 1.0,
 )
+
+
+# --------------------------------------------------- ragged pools, pad columns, runaway scales
+# A type-level fit pools every option count that type has seen, so `fit_one_temperature`
+# regularly receives rows of different lengths. Two things used to cost such a pool its
+# answer, and both surface the same way -- the neutral 1.0, or a bound, instead of a fit:
+#   1. squaring off the short rows put the pad value in the same softmax those rows run
+#      through, so a row whose own logits sat under it stopped being about that row;
+#   2. the search runs on log T with no bound, and a pool whose optimum is below
+#      `TEMP_MIN` walks `log_t` past float32's `exp()` underflow, divides the objective
+#      by zero, and hands `clamp_temperature` a NaN, which it reports as 1.0.
+def _spread_pool(width, scale, n, seed=0):
+    """`n` argmax-correct rows at one width, re-seeded per width."""
+    rs = np.random.RandomState(seed)
+    out = []
+    for _ in range(n):
+        z = list(rs.randn(width) * scale)
+        t = [0.0] * width
+        t[int(np.argmax(z))] = 1.0
+        out.append((z, t))
+    return out
+
+
+def _mixed_rows(k, rng, acc, mag, n=400):
+    """`k`-option rows that are right with probability `acc`, logits at +-mag."""
+    out = []
+    for _ in range(n):
+        y = int(rng.randint(0, k))
+        pred = y if rng.rand() < acc else int(rng.randint(0, k))
+        z, _t = peaked(k, pred, mag)
+        t = np.zeros(k, dtype=np.float32)
+        t[y] = 1.0
+        out.append((z, t))
+    return out
+
+
+two, nine = _spread_pool(2, 1.0, 24), _spread_pool(9, 1.0, 24)
+t_two = fit_one_temperature(two, min_n=10)
+t_nine = fit_one_temperature(nine, min_n=10)
+t_ragged = fit_one_temperature(two + nine, min_n=10)
+check_true("runaway/every width on its own fits the floor", (t_two, t_nine) == (0.5, 0.5),
+           "two=%r nine=%r" % (t_two, t_nine))
+check_true("runaway/ragged pool is a number", bool(np.isfinite(t_ragged)), "T=%r" % t_ragged)
+check_true("runaway/ragged pool is not the neutral 1.0", t_ragged != 1.0, "T=%r" % t_ragged)
+check_true("runaway/ragged pool keeps the floor", abs(t_ragged - TEMP_MIN) < 1e-9,
+           "T=%r" % t_ragged)
+
+# The same runaway at one width: only the walk to zero was wrong, not the raggedness.
+t_soft = fit_one_temperature(_mixed_rows(3, np.random.RandomState(51), 0.7, 0.3), min_n=10)
+check_true("runaway/low-spread pool is not the neutral 1.0", t_soft != 1.0, "T=%r" % t_soft)
+check_true("runaway/low-spread pool keeps the floor", abs(t_soft - TEMP_MIN) < 1e-9,
+           "T=%r" % t_soft)
+
+# Rows whose every logit sits under the pad value: pooled, they used to report the ceiling.
+low_rows = [([-20000.0 - i, -20001.0 - i], [1.0, 0.0]) for i in range(12)]
+t_low_alone = fit_one_temperature(low_rows, min_n=10)
+t_low_pool = fit_one_temperature(low_rows + _spread_pool(4, 1.0, 12), min_n=10)
+check_true("pad/low rows alone fit the floor", abs(t_low_alone - TEMP_MIN) < 1e-9,
+           "T=%r" % t_low_alone)
+check("pad/low rows pooled fit what they fit alone", t_low_pool, t_low_alone)
+check_true("pad/pool is not the ceiling", t_low_pool != TEMP_MAX, "T=%r" % t_low_pool)
+check("pad/one matrix per width, narrowest first",
+     [int(z.shape[1]) for z, _ in _pairs_by_width(low_rows + _spread_pool(4, 1.0, 12))], [2, 4])
+check("pad/row totals survive the split",
+     sum(int(z.shape[0]) for z, _ in _pairs_by_width(low_rows + _spread_pool(4, 1.0, 12))), 24)
+
+# What a question type stores through the public API for the same rows.
+ragged_recs = ([(1, z, t, len(z)) for z, t in low_rows * 34]
+               + [(1, z, t, len(z)) for z, t in _spread_pool(5, 1.0, 400, 1)])
+t_public = fit_temperature_map(ragged_recs)["temperature"][1]
+check_true("public/ragged type keeps the floor", abs(t_public - TEMP_MIN) < 1e-9,
+           "T=%r" % t_public)
+check_true("public/ragged type is neither neutral nor the ceiling",
+           t_public not in (1.0, TEMP_MAX), "T=%r" % t_public)
+
+# Bounding the search must not flatten a minimum that sits inside the band: the fit is
+# checked against the objective it is supposed to minimise, in float64, not against a
+# hard-coded number.
+mid = _mixed_rows(20, np.random.RandomState(293), 0.7, 1.0)
+t_mid = fit_one_temperature(mid, min_n=10)
+
+
+def _nll_at(rows, scale):
+    z = np.asarray([r[0] for r in rows], dtype=np.float64) / float(scale)
+    t = np.asarray([r[1] for r in rows], dtype=np.float64)
+    z = z - z.max(1, keepdims=True)
+    p = np.exp(z)
+    p = p / p.sum(1, keepdims=True)
+    return float(-(t * np.log(np.clip(p, 1e-300, None))).sum(1).mean())
+
+
+check_true("band/interior fit stays interior", TEMP_MIN < t_mid < TEMP_MAX, "T=%r" % t_mid)
+check_true("band/interior fit beats the floor", _nll_at(mid, t_mid) < _nll_at(mid, TEMP_MIN),
+           "T=%r nll=%r floor=%r" % (t_mid, _nll_at(mid, t_mid), _nll_at(mid, TEMP_MIN)))
+check_true("band/interior fit beats either side of itself",
+           _nll_at(mid, t_mid) < min(_nll_at(mid, t_mid * 1.1), _nll_at(mid, t_mid / 1.1)))
+src = inspect.getsource(fit_one_temperature)
+check_true("band/search is bounded by LOG_T_MARGIN", "LOG_T_MARGIN" in src)
+check_true("band/the bound stops before float32 exp() underflows",
+           float(np.log(TEMP_MIN)) - LOG_T_MARGIN > -80.0,
+           "lower edge=%r" % (float(np.log(TEMP_MIN)) - LOG_T_MARGIN))
+
+# Grouping the rows must not turn the objective into an average of per-width averages: it
+# still averages over rows, so repeating one width's rows pulls the fit toward that width.
+wide12 = _mixed_rows(12, np.random.RandomState(11), 0.6, 1.0, 8)
+narrow2 = _mixed_rows(2, np.random.RandomState(12), 0.95, 4.0, 8)
+t_wide = fit_one_temperature(wide12, min_n=8)
+t_narrow = fit_one_temperature(narrow2, min_n=8)
+t_even = fit_one_temperature(wide12 + narrow2, min_n=8)
+t_heavy = fit_one_temperature(wide12 * 2 + narrow2, min_n=8)
+check_true("weight/the two widths want different scales", abs(t_wide - t_narrow) > 0.3,
+           "wide=%r narrow=%r" % (t_wide, t_narrow))
+check_true("weight/both fits are interior, not a bound",
+           all(TEMP_MIN < x < TEMP_MAX for x in (t_wide, t_narrow, t_even, t_heavy)),
+           "%r %r %r %r" % (t_wide, t_narrow, t_even, t_heavy))
+check_true("weight/doubling a width pulls the fit to that width",
+           abs(t_heavy - t_wide) < abs(t_even - t_wide) and abs(t_heavy - t_even) > 0.2,
+           "even=%r heavy=%r wide=%r" % (t_even, t_heavy, t_wide))
 
 
 # --------------------------------------------------------------- ECE on a held-out split, not the fit rows
