@@ -316,7 +316,7 @@ jobs:
         run: |
           ruff check laya/ --select=E9,F63,F7,F82,F401,F811 --line-length=120
           ruff check laya-java/scripts/ laya-dotnet/tools/ laya-ts/scripts/ \
-            --select=E9,F63,F7,F82 --line-length=120
+            laya-go/scripts/ --select=E9,F63,F7,F82 --line-length=120
       - name: Byte-compile every module
         run: python -m compileall -q laya/ tests/
 
