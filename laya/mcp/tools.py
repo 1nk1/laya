@@ -929,8 +929,17 @@ def laya_tournament(
 
     class Predictor:
         def predict(self, round_state, round_questions):
-            return laya_predict(round_state, round_questions, model=model_name,
-                                router=router, agent=predict_agent, **forward)
+            result = laya_predict(round_state, round_questions, model=model_name,
+                                  router=router, agent=predict_agent, **forward)
+            for name, spec in round_questions.items():
+                if spec["type"] != "choice":
+                    continue
+                answer = result["answers"].get(name)
+                if (not isinstance(answer, dict) or not isinstance(answer.get("choice"), str)
+                        or answer["choice"] not in spec["criteria"]):
+                    raise ToolError("internal_error",
+                                    f"tournament prediction for question {name!r} must return a choice from its criteria")
+            return result
 
     out = predict_tournament(Predictor(), state_d, questions_d, group_size=group_size)
     if routing is not None:

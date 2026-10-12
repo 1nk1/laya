@@ -192,6 +192,8 @@ pass answers all three groups; their winners meet in a final pass that also answ
 of the request. Larger sets can take more elimination rounds. The checkpoint is selected from
 the original request and pinned for every round, keeping routing controls and detected-language
 calibration consistent. Token budgets and `min_confidence` reach every pass.
+A missing or out-of-group winner returns `internal_error` before another pass, so a broken
+round cannot silently advance a label the model did not select from that group.
 
 The result has the usual `answers`, `routing`, `latency_ms` and readable `device`, plus
 `tournament` metadata for each choice: `labels` are the finalists in criteria order, `n` is the

@@ -1107,6 +1107,39 @@ def test_tournament():
     ok("tournament/non_choice_one_call", len(agent.calls) == 1 and out["tournament"] == {})
 
 
+def test_tournament_rejects_broken_winners():
+    for bad in (None, {}, {"choice": "opt39"}, {"choice": "unknown"},
+                {"choice": ["opt39"]}, {"choice": 39}):
+        class BrokenAgent(TournamentAgent):
+            def predict(self, state, questions, **kwargs):
+                result = super().predict(state, questions, **kwargs)
+                if len(self.calls) == 1:
+                    if bad is None:
+                        del result["answers"]["0"]
+                    else:
+                        result["answers"]["0"] = bad
+                return result
+
+        agent = BrokenAgent()
+        expect_tool_error("tournament/broken_winner_%r" % bad,
+                          lambda: laya_tournament(STATE, tournament_questions(40),
+                                                 model="english", agent=agent), "internal_error")
+        ok("tournament/broken_winner_stops_round_%r" % bad, len(agent.calls) == 1)
+
+    class BrokenRecursiveAgent(TournamentAgent):
+        def predict(self, state, questions, **kwargs):
+            result = super().predict(state, questions, **kwargs)
+            if len(self.calls) == 2:
+                result["answers"]["0"]["choice"] = "opt256"
+            return result
+
+    agent = BrokenRecursiveAgent()
+    expect_tool_error("tournament/recursive_out_of_group_winner",
+                      lambda: laya_tournament(STATE, tournament_questions(257),
+                                             model="english", agent=agent), "internal_error")
+    ok("tournament/recursive_broken_winner_stops_round", len(agent.calls) == 2)
+
+
 def test_tournament_routing_and_validation():
     questions = tournament_questions(40)
     for detection in ({"language": "de"}, SimpleNamespace(language="de")):
@@ -3120,6 +3153,7 @@ test_question_forwarding()
 test_option_order_forwarding()
 test_shortlist()
 test_tournament()
+test_tournament_rejects_broken_winners()
 test_tournament_routing_and_validation()
 test_batch_validation()
 test_batch_predict()
