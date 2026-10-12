@@ -132,7 +132,7 @@ describe("optionBucket & resolveMinConfidence", () => {
 });
 
 describe("flagLowConfidence", () => {
-  it("is a no-op when minConfidence is 0.0", () => {
+  it("does not flag clean answers when minConfidence is 0.0", () => {
     const sample = [
       {
         answers: {
@@ -142,6 +142,70 @@ describe("flagLowConfidence", () => {
     ];
     flagLowConfidence(sample as any, 0.0);
     expect(sample[0].answers.q1).not.toHaveProperty("low_confidence");
+  });
+
+  it("clears stale low_confidence flag when re-evaluated with a more permissive threshold (#910)", () => {
+    const sample = [
+      {
+        answers: {
+          intent: { choice: "refund", answer_confidence: 0.8 },
+        },
+      },
+    ];
+    const ans = sample[0].answers.intent as any;
+
+    flagLowConfidence(sample as any, 0.9);
+    expect(ans.low_confidence).toBe(true);
+
+    flagLowConfidence(sample as any, 0.5);
+    expect(ans).not.toHaveProperty("low_confidence");
+  });
+
+  it("clears stale low_confidence flag when re-evaluated at minConfidence 0.0 (#910)", () => {
+    const sample = [
+      {
+        answers: {
+          intent: { choice: "refund", answer_confidence: 0.8 },
+        },
+      },
+    ];
+    const ans = sample[0].answers.intent as any;
+
+    flagLowConfidence(sample as any, 0.9);
+    expect(ans.low_confidence).toBe(true);
+
+    // 0.0 is the most permissive threshold: it marks no answer and clears any earlier marker
+    flagLowConfidence(sample as any, 0.0);
+    expect(ans).not.toHaveProperty("low_confidence");
+  });
+
+  it("clears stale low_confidence flag when confidence is missing, non-finite, or out of [0, 1] range", () => {
+    const sample = [
+      {
+        answers: {
+          q_missing: { choice: "a", low_confidence: true },
+          q_nan: { choice: "b", answer_confidence: NaN, low_confidence: true },
+          q_inf: { choice: "c", answer_confidence: Infinity, low_confidence: true },
+          q_neg: { choice: "d", answer_confidence: -0.1, low_confidence: true },
+          q_over: { choice: "e", answer_confidence: 1.5, low_confidence: true },
+        },
+      },
+    ];
+    flagLowConfidence(sample as any, 0.5);
+    for (const key of ["q_missing", "q_nan", "q_inf", "q_neg", "q_over"]) {
+      expect((sample[0].answers as any)[key]).not.toHaveProperty("low_confidence");
+    }
+
+    // Out-of-range confidence is also not flagged when minConfidence is 0.0
+    const sampleNeg = [
+      {
+        answers: {
+          q_neg: { choice: "d", answer_confidence: -0.1 },
+        },
+      },
+    ];
+    flagLowConfidence(sampleNeg as any, 0.0);
+    expect((sampleNeg[0].answers as any).q_neg).not.toHaveProperty("low_confidence");
   });
 
   it("flags answers where answer_confidence falls below threshold", () => {

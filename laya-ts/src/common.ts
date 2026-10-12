@@ -333,16 +333,21 @@ export function resolveMinConfidence(
  *
  * Reads `answer_confidence` (the calibrated max(p) confidence, invariant to label count k),
  * falling back to `confidence` if `answer_confidence` is absent.
- * The raw answer and confidence stay intact; `low_confidence: true` is added.
+ * The raw answer and confidence stay intact; `low_confidence: true` is added when the answer
+ * falls below the threshold, and removed if a previously-flagged answer now clears it (e.g.
+ * when a result dict is reused or re-evaluated with a different threshold).
  *
  * Supports both a scalar number in [0.0, 1.0] and a per-bucket mapping of thresholds.
+ *
+ * Exactly 0.0 runs this same loop rather than short-circuiting out of it. Nothing falls below
+ * it, so it marks no answer -- and the pass is what clears a marker an earlier, stricter threshold
+ * left on a reused payload (#910).
  */
 export function flagLowConfidence(
   results: Array<Record<string, unknown>> | Record<string, unknown>,
   minConfidence: MinConfidence,
 ): void {
   const isMap = typeof minConfidence === "object" && minConfidence !== null;
-  if (!isMap && minConfidence === 0.0) return;
   const list = Array.isArray(results) ? results : [results];
   for (const res of list) {
     const answers = res && typeof res === "object" ? (res as Record<string, unknown>).answers : null;
@@ -354,11 +359,15 @@ export function flagLowConfidence(
       if (conf === undefined || conf === null) {
         conf = ansObj.confidence;
       }
-      if (typeof conf === "number" && !Number.isNaN(conf)) {
-        const thr = isMap ? resolveMinConfidence(ansObj, minConfidence) : minConfidence;
-        if (conf < thr) {
-          ansObj.low_confidence = true;
-        }
+      if (typeof conf !== "number" || !Number.isFinite(conf) || conf < 0 || conf > 1) {
+        delete ansObj.low_confidence;
+        continue;
+      }
+      const thr = isMap ? resolveMinConfidence(ansObj, minConfidence) : minConfidence;
+      if (conf < thr) {
+        ansObj.low_confidence = true;
+      } else {
+        delete ansObj.low_confidence;
       }
     }
   }
