@@ -255,7 +255,7 @@ export function emailState(
   maxChars = 3000,
 ): Record<string, unknown> {
   const state: Record<string, unknown> = {
-    subject: trimPy((subject ?? "")),
+    subject: trimPy(subject ?? ""),
     body: clean ? cleanEmailBody(body ?? "", maxChars) : (body ?? ""),
   };
   if (sender) state["from"] = sender;
