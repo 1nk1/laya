@@ -2,6 +2,7 @@
 
 Run: python tests/test_structured.py
 """
+import inspect
 import os
 import sys
 
@@ -334,11 +335,58 @@ check("batch/projection matches decide", outs[0], decide(FakeRunner(ANSWERS), "x
 check("batch/per-state values", outs[1],
       {"department": "sales", "urgency": 0, "needs_human": False, "priority": 1})
 
-# kwargs are forwarded to predict_batch (batch_size, model, hooks, ...)
+# Call-level keywords ride through to predict_batch -- but only the ones a real runner declares.
+# `lang`/`max_len` are Agent- and ONNXAgent-side keywords, so they are valid here for the Agent
+# convention and are per-request keys for the Router convention below. `model=` is only the second.
 batch_runner = FakeBatchRunner(BATCH_ANSWERS)
-decide_batch(batch_runner, STATES, schema=SCHEMA, batch_size=4, model="english")
+decide_batch(batch_runner, STATES, schema=SCHEMA, batch_size=4, lang="en")
 check("batch/forwards predict kwargs", batch_runner.calls[0]["kwargs"],
-      {"batch_size": 4, "model": "english"})
+      {"batch_size": 4, "lang": "en"})
+
+# No runner takes model= as a call-level keyword: the docstring used to list it among the keywords
+# forwarded to predict_batch, and this suite used to assert that forwarding -- against a fake whose
+# **kwargs absorbs anything. Bound against the real signatures instead, which loads no checkpoint.
+from laya.agent import Agent  # noqa: E402
+from laya.onnx_agent import ONNXAgent  # noqa: E402
+from laya.structured import _ROUTER_REQUEST_KEYS  # noqa: E402
+
+for _cls in (Agent, ONNXAgent, laya.Router):
+    check_raises("batch/%s.predict_batch rejects model=" % _cls.__name__, TypeError,
+                 lambda _cls=_cls: inspect.signature(_cls.predict_batch).bind(
+                     None, STATES, {}, model="english"))
+check_true("batch/model is one of the router's per-request keys",
+           "model" in _ROUTER_REQUEST_KEYS)
+
+
+class StrictAgentRunner:
+    """An ``Agent``-shaped ``predict_batch``: the keywords it names and no ``**kwargs`` to swallow
+    the rest. That is what makes ``model=`` an error a caller meets, not a silent extra argument."""
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.calls = []
+
+    def predict_batch(self, states, questions, batch_size=None, lang=None, hooks=None):
+        self.calls.append({"states": list(states), "kwargs": {"batch_size": batch_size,
+                                                             "lang": lang, "hooks": hooks}})
+        return [{"answers": self.answers[s], "routing": {"model": "english"}} for s in states]
+
+
+# Only half of the asymmetry is new here: `decide_batch` gives a Router-like runner the opposite
+# answer, because it copies `model=` onto every request instead of passing it as a keyword, and main
+# already pins that as "batch/router model= reaches a registered checkpoint".
+try:
+    decide_batch(StrictAgentRunner(BATCH_ANSWERS), STATES, schema=SCHEMA, model="english")
+    _model_error = None
+except TypeError as _e:
+    _model_error = str(_e)
+check("batch/agent-like decide_batch rejects model=",
+      "'model'" in (_model_error or ""), True)
+_strict = StrictAgentRunner(BATCH_ANSWERS)
+check("batch/agent-like decide_batch keeps the keywords it does declare",
+      decide_batch(_strict, STATES, schema=SCHEMA, batch_size=4, lang="en"), outs)
+check("batch/and the declared keywords reach predict_batch as keywords",
+      _strict.calls[0]["kwargs"], {"batch_size": 4, "lang": "en", "hooks": None})
 
 # return_details: one DecisionResult per state with the usual fields
 details = decide_batch(FakeBatchRunner(BATCH_ANSWERS), STATES, schema=SCHEMA, return_details=True)
