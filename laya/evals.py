@@ -726,6 +726,10 @@ class EvalReport:
                 continue
             reasons.append("%s (%s): baseline is %s, this run is %s"
                            % (key, _IDENTITY_LABELS[key], there, here))
+        if self.config.get("schema") == other.get("schema") == "laya-tournament-evals-report/1":
+            here, there = self.config.get("tournament_group_size"), other.get("tournament_group_size")
+            if here is None or there is None or here != there:
+                reasons.append("tournament group size: baseline is %s, this run is %s" % (there, here))
         return (not reasons), reasons
 
     def compare(self, baseline: Dict[str, Any], tolerances: Optional[Dict[str, float]] = None,
@@ -1143,6 +1147,9 @@ def evaluate(runner: Any, dataset: Dataset, evaluators: Optional[Sequence[Evalua
                 shortlist = (result or {}).get("shortlist")
                 if isinstance(shortlist, dict) and qid in shortlist:
                     case["shortlist"] = shortlist[qid]
+                tournament = (result or {}).get("tournament")
+                if isinstance(tournament, dict) and qid in tournament:
+                    case["tournament"] = tournament[qid]
                 cases.append(case)
         index += len(chunk)
 

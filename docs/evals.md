@@ -184,6 +184,47 @@ This does not reproduce the BANKING77 results in [issue #102](https://github.com
 those numbers depend on its dataset, checkpoint and bi-encoder. This API makes the
 same kind of diagnosis repeatable on a caller's own labelled set.
 
+## Attributing tournament errors
+
+For a labelled many-option choice set, `laya.evals_tournament.evaluate_tournament`
+runs the existing `predict_tournament` path and keeps its finalist metadata in the
+regular evaluation report:
+
+```python
+import laya
+from laya.evals import Dataset
+from laya.evals_tournament import evaluate_tournament
+
+agent = laya.load()
+dataset_path = "intents.jsonl"
+report = evaluate_tournament(
+    agent, Dataset.from_jsonl(dataset_path), group_size=16,
+    checkpoint_id="my-checkpoint@revision", dataset_path=dataset_path,
+)
+print(report.overall)
+print(report.cases[0]["tournament_status"])
+```
+
+Each choice case records its finalists and number of elimination rounds, and is
+classified as `correct`, `elimination_miss` (the gold label did not reach the
+final call), or `final_choice_miss` (it survived, but the final call chose another
+label). `tournament_survival_rate` is the fraction of all choices whose gold label
+reached the final call; choices needing no elimination are included. Conditional
+`tournament_accuracy_on_survivors` is omitted when none survived. Ordinary
+`choice_accuracy` remains end-to-end accuracy, and all three metrics appear in the
+existing language, model, question and tag slices. Request latency includes every
+tournament round; the report does not time rounds separately.
+
+Use the checkpoint and group size you intend to deploy. The caller supplies the
+checkpoint identifier, ideally an immutable revision; the report cannot inspect
+the weights. Passing `dataset_path` records a SHA256 of the JSONL bytes. The
+`laya-tournament-evals-report/1` schema and group size prevent a baseline gate
+from comparing different strategies as though they were the same measurement.
+Compare group sizes side by side on development data, then evaluate the chosen
+size once on held-out data. The runtime's final probabilities and confidence are
+over finalists, not over the original labels. The metadata identifies whether
+elimination lost the gold label, but not which round lost it.
+
 ## Evaluating an ONNX export
 
 `run --onnx PATH` scores an exported ONNX model through `ONNXAgent` instead of the torch
