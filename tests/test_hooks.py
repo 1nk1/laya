@@ -692,6 +692,96 @@ check("an object and a lambda trip the same check, and no two rows share a messa
       [True, 5])
 
 
+# ------------------------------------------- docs/hooks/patterns.md's audit hook actually runs
+# The "Audit log" block is that page's answer to "how do I record every decision", and a reader
+# pastes it as written. It imported `json` only, while the body it documents writes to
+# `sys.stdout`, so the first call raised NameError inside the hook -- and `hooks_raise` defaults
+# to True, so the recording hook failed the very request it was recording. `docs/hooks/examples.md`
+# carries the same hook and does import sys. The gate execs the block from the page with a stub
+# `laya` -- 10 of the page's 21 python blocks end in a bare `laya.load(...)` and none of those
+# imports it, so that is the page's own convention, not an accident here -- then installs the hook
+# it hands to `laya.load` through the real `normalise_hooks` + `dispatch` and calls it with a real
+# PredictContext over two states -- so what runs is the page's code on the library's path.
+import ast as _A  # noqa: E402
+import builtins as _B  # noqa: E402
+import contextlib as _CL  # noqa: E402
+import io as _IO  # noqa: E402
+import json as _JSON  # noqa: E402
+import types as _T  # noqa: E402
+from laya.hooks import dispatch as _dispatch  # noqa: E402
+from pathlib import Path as _DocPath  # noqa: E402
+
+_pat_doc = _DocPath(__file__).resolve().parents[1] / "docs" / "hooks" / "patterns.md"
+_pat_section = _pat_doc.read_text(encoding="utf-8").split("### Audit log", 1)[1]
+_pat_block = _pat_section.split("```python\n", 1)[1].split("\n```", 1)[0]
+
+
+def _pat_free_names(src):
+    """Names the block reads but never binds, builtins excluded."""
+    tree = _A.parse(src)
+    bound = set(dir(_B))
+    for node in _A.walk(tree):
+        if isinstance(node, (_A.Import, _A.ImportFrom)):
+            bound.update((a.asname or a.name).split(".")[0] for a in node.names)
+        elif isinstance(node, _A.Name) and isinstance(node.ctx, (_A.Store, _A.Del)):
+            bound.add(node.id)
+        elif isinstance(node, _A.arg):
+            bound.add(node.arg)
+        elif isinstance(node, (_A.FunctionDef, _A.AsyncFunctionDef, _A.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, _A.ExceptHandler) and node.name:
+            bound.add(node.name)
+    return sorted({n.id for n in _A.walk(tree)
+                   if isinstance(n, _A.Name) and isinstance(n.ctx, _A.Load)} - bound)
+
+
+check("the audit block's only free name is the `laya` its `laya.load` line never imports",
+      _pat_free_names(_pat_block), ["laya"])
+
+_pat_registered = []
+_pat_ns = {"laya": _T.SimpleNamespace(load=lambda *a, **kw: _pat_registered.append(kw))}
+try:
+    exec(compile(_pat_block, "docs/hooks/patterns.md", "exec"), _pat_ns)
+    _pat_hooks = normalise_hooks(**_pat_registered[0])
+except Exception as _pat_exc:  # noqa: BLE001
+    _pat_hooks = []
+    _pat_install_error = "%s: %s" % (type(_pat_exc).__name__, _pat_exc)
+else:
+    _pat_install_error = None
+
+_pat_hook = next(iter(_pat_hooks), None)
+check("the block installs without raising, through the real normalise_hooks",
+      _pat_install_error, None)
+check("the page's `laya.load(...)` call carries exactly one keyword, `on_predict_end`",
+      [sorted(_pat_registered[0]) if _pat_registered else None], [["on_predict_end"]])
+check("it becomes exactly one hook, and it is the `audit` the block defines",
+      [len(_pat_hooks), getattr(_pat_hook, "fn", None) is _pat_ns.get("audit")], [1, True])
+
+_pat_ctx = PredictContext(states=["charged twice", "cancel my plan"], questions={})
+_pat_ctx.results = [{"answers": {"intent": "billing"}, "routing": {"model": "english"}, "usage": None},
+                    {"answers": {"intent": "support"}}]
+_pat_ctx.model = "english"
+_pat_ctx.usage = {"input_tokens": 30, "output_tokens": 0}
+_pat_ctx.elapsed_ms = 1.5
+_pat_out = _IO.StringIO()
+try:
+    with _CL.redirect_stdout(_pat_out):
+        _dispatch(_pat_hooks, "on_predict_end", _pat_ctx)
+    _pat_records = [line for line in _pat_out.getvalue().split("\n") if line]
+    _pat_error = None
+except Exception as _pat_exc:  # noqa: BLE001
+    _pat_records = []
+    _pat_error = "%s: %s" % (type(_pat_exc).__name__, _pat_exc)
+
+check("the page's hook records both states without raising", _pat_error, None)
+check("one JSON record per state", len(_pat_records), 2)
+check("each record parses, and carries the call's identity plus the state it describes",
+      [sorted(_JSON.loads(_pat_records[0])) if _pat_records else None],
+      [["answers", "call_elapsed_ms", "call_usage", "model", "routing", "run_id", "state", "usage"]])
+check("the second record is the second state",
+      _JSON.loads(_pat_records[1])["state"] if len(_pat_records) > 1 else None, "cancel my plan")
+
+
 # --------------------------------------------------------------- Router
 class RouteHook:
     def __init__(self):
