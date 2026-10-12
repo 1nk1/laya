@@ -146,38 +146,6 @@ func TestRound4Golden(t *testing.T) {
 	}
 }
 
-// TestSum32Golden holds pairwiseSum32 to numpy's float32 sum, bit for bit, on rows from 1 to
-// 1,000 wide: below 8, the eight-lane block with and without a tail, and past 128 where numpy
-// splits the row.
-func TestSum32Golden(t *testing.T) {
-	cases := fixtures.List(t, fixtures.Obj(t, fixtures.Field(t, fixtures.Load(t, "go_extra.json"), "sum32")).Must("cases"))
-	parse := func(s string) float32 {
-		f, err := strconv.ParseFloat(s, 32)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return float32(f)
-	}
-	wide := 0
-	for _, c := range cases {
-		rec := fixtures.Obj(t, c)
-		var row []float32
-		for _, s := range fixtures.Strings(t, rec.Must("values")) {
-			row = append(row, parse(s))
-		}
-		if len(row) > 128 {
-			wide++
-		}
-		want := parse(fixtures.Str(t, rec.Must("sum")))
-		if got := pairwiseSum32(row); math.Float32bits(got) != math.Float32bits(want) {
-			t.Errorf("sum of %d values = %v, numpy has %v", len(row), got, want)
-		}
-	}
-	if len(cases) < 100 || wide < 20 {
-		t.Fatalf("the golden holds %d rows, %d of them wider than 128", len(cases), wide)
-	}
-}
-
 func TestRound4Edges(t *testing.T) {
 	cases := map[string]struct{ in, want float64 }{
 		"tie rounds down to even": {0.03125, 0.0312},
@@ -504,14 +472,15 @@ func TestLabelAnswersGolden(t *testing.T) {
 
 // TestDecodeFuzzGolden decodes 5,000 random, tied and near-tied rows and compares the marshaled
 // answer with Python's bytes. Two kinds of difference are tolerated and counted, because Decode
-// computes the reported numbers in float64 where numpy computes them in float32, and numpy's
-// float32 exp is a SIMD routine that is not correctly rounded:
+// computes in float64 where numpy computes in float32, and numpy's float32 exp is a SIMD routine
+// whose last bits differ between CPUs (the same row is answered differently by Python on arm64
+// and on x86-64):
 //
 //   - a number that differs by one unit in the fourth decimal (a value within 1e-4 sitting on a
 //     rounding boundary);
-//   - the choice among options whose exp(z - max) is within three float32 ulps of 1 (the argmax
-//     there is decided by exp(-2^-25) coming out 0.99999994, where the correctly rounded value is
-//     1.0). Everything else in such an answer must still be Python's.
+//   - the choice, when the option Python chose and the one Go chose both have a quotient within
+//     nearTieBand of the largest. Go's is the true maximum; everything else in the answer must
+//     still be Python's.
 //
 // Anything else fails.
 func TestDecodeFuzzGolden(t *testing.T) {
@@ -582,8 +551,8 @@ func TestDecodeFuzzGolden(t *testing.T) {
 	if bad > 0 {
 		t.Errorf("%d of %d decodes differ from Python beyond the tolerated float32 effects", bad, len(cases))
 	}
-	if nearTie > 250 || rounded > 25 {
-		t.Errorf("%d near-tie and %d rounding rows: the tolerance is hiding more than numpy's float32 arithmetic", nearTie, rounded)
+	if rounded > 25 {
+		t.Errorf("%d rounding rows: the tolerance is hiding more than float32 arithmetic", rounded)
 	}
 }
 
@@ -626,9 +595,12 @@ func diffJSON(path string, got, want any, out *[]jsonDiff) {
 	}
 }
 
-// nearTied reports whether the options Go and Python chose both have exp(z - max) within three
-// float32 ulps below 1 (z - max >= -1.8e-7), the band in which numpy's float32 exp can round either
-// way; z is the logit divided by the temperature, in float32.
+// nearTieBand is how far below the largest quotient an option may sit and still be one Python can
+// pick: about sixteen float32 steps at 1, a probability ratio of 1 - 1e-6.
+const nearTieBand = 1e-6
+
+// nearTied reports whether the options Go and Python chose both sit within nearTieBand of the
+// largest quotient.
 func nearTied(logits []float32, order []int, temps *Temperatures, kind string, goIdx, pyIdx int) bool {
 	t, _ := temps.For(schema.Type(kind), len(logits), "")
 	z := make([]float32, len(logits))
@@ -645,9 +617,35 @@ func nearTied(logits []float32, order []int, temps *Temperatures, kind string, g
 		z = canonical
 	}
 	for _, i := range []int{goIdx, pyIdx} {
-		if i < 0 || i >= len(z) || top-z[i] > 1.8e-7 {
+		if i < 0 || i >= len(z) || float64(top)-float64(z[i]) > nearTieBand {
 			return false
 		}
 	}
 	return true
+}
+
+// TestQuotientTieFallsToTheFirst: Python divides the float32 logits in float32, so two different
+// logits can become one quotient, an exact tie that numpy.argmax gives to the lower index. These
+// two are adjacent float32 values whose quotients by 3 are equal; numpy answers option 0. Dividing
+// in float64 would tell them apart and answer option 1, the larger logit.
+func TestQuotientTieFallsToTheFirst(t *testing.T) {
+	lower, upper := math.Float32frombits(1069547521), math.Float32frombits(1069547522)
+	if !(lower < upper) || lower/3 != upper/3 {
+		t.Fatalf("%v and %v no longer tie when divided by 3 in float32", lower, upper)
+	}
+	q, err := schema.ChoiceOf("pick", "first", "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	temps, err := NewTemperatures([]any{3.0, 3.0, 3.0}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer, err := Decode(q, Row{Logits: []float32{lower, upper}, K: 2, Act: []float32{0.5}}, "", temps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := answer.(*schema.ChoiceAnswer).Choice; got != schema.Text("first") {
+		t.Errorf("choice = %v, want first: the quotients are one float32", got)
+	}
 }

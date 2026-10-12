@@ -28,8 +28,6 @@ reference over far more input than a hand-written corpus, from a fixed seed:
                     bytes Python writes
   * answers_fuzz    5,000 Agent._decode_answers calls on random, tied and near-tied logit rows
   * marker_refusals Agent._encode_state's "only N of its M option markers fit" refusal
-  * sum32           numpy's float32 sum of rows of values in [0, 1) from 1 to 1,000 wide, the sum
-                    Agent._decode_answers divides by, which changes shape at 8 and past 128
   * questions       Agent._check_question over question definitions, every refusal with its text,
                     and for the accepted ones render_options, the labels, the legend and the
                     normalized instructions and option order
@@ -780,20 +778,6 @@ def marker_refusals_family(rng):
     return out
 
 
-def sum32_family(rng):
-    import numpy as np
-
-    sizes = list(range(1, 20)) + [63, 64, 65, 120, 127, 128, 129, 130, 135, 136, 137, 200, 255, 256, 257, 300, 511, 1000]
-    cases = []
-    for n in sizes:
-        for _ in range(4):
-            # No exp here: numpy's float32 exp differs between CPU architectures, and this file is
-            # compared byte for byte. A double rounded to float32 is the same everywhere.
-            row = np.asarray([rng.uniform(0, 1) for _ in range(n)], dtype=np.float32)
-            cases.append({"values": [str(v) for v in row], "sum": str(row.sum())})
-    return {"cases": cases}
-
-
 def build():
     import tokenizers
 
@@ -817,7 +801,6 @@ def build():
         "label_answers": label_answers_family(rng),
         "answers_fuzz": decode_fuzz_family(rng),
         "marker_refusals": marker_refusals_family(rng),
-        "sum32": sum32_family(rng),
     }
 
 
