@@ -121,15 +121,26 @@ from `predict`/`system_one` rather than at construction.
 
 ## Warnings
 
-With `hooks_raise=False`, each failing hook emits one `RuntimeWarning` naming the hook type and
+With `hooks_raise=False`, a failing hook emits one `RuntimeWarning` naming the hook type and
 event:
 
 ```
 laya: hook Metrics.on_predict_end failed: connection reset
 ```
 
-The warning is emitted once per failure, not once per hook definition, so a flaky hook under
-load can be noisy. Aggregate or rate-limit inside the hook if that matters.
+How many of those lines an operator actually sees is Python's warning filter, not Laya's. The emit is
+a plain `warnings.warn` and its text carries nothing unique to the call, so under the default filter
+for `RuntimeWarning` Python prints the first occurrence of each distinct message per call site and
+suppresses the identical repeats for the rest of the process. A hook that fails the same way on every
+one of a thousand calls prints one line. A hook whose error text varies with the call -- a request id,
+a retry counter, a timestamp -- prints one line per distinct text, and that is the case that can be
+noisy under load. Two hooks failing, or one hook failing from two different call sites, are two lines
+each.
+
+So the warning stream is not a failure counter. If the rate matters, count inside the hook, or set
+`hooks_raise=True` and handle the exception. To make the repeats print, a caller has to widen the
+filter itself (`warnings.simplefilter("always")`, which is what the test suite does in order to see
+each one).
 
 ## Timeouts
 
