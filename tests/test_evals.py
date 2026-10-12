@@ -2101,6 +2101,59 @@ def test_cli_run_records_the_run_identity(monkeypatch, tmp_path):
     assert config["thresholds"]["baseline_tolerance"] == {"choice_accuracy": 0.02}
 
 
+def test_cli_run_an_unwritable_output_path_is_a_usage_error(monkeypatch, tmp_path, capsys):
+    """`--json`/`--markdown` to a path that cannot hold a file is the caller's mistake.
+
+    The module docstring reserves exit 1 for "a threshold or a baseline tolerance fails", and the
+    `EvalError` handler in `main` exists precisely so a broken request cannot read as a regression.
+    `_cmd_agreement` already raises `EvalError` for an unwritable report; `_cmd_run` opened both of
+    its outputs bare. Only one shape of that is caught by accident: a missing parent directory
+    raises `FileNotFoundError`, which `main` narrows to exit 2, while a path that *is* a directory
+    raises `IsADirectoryError` (PermissionError on Windows) -- an `OSError` that is not a
+    `FileNotFoundError`, so it escapes every handler and leaves a traceback and exit 1 for a run
+    that wrote nothing. Same mistake, two different codes.
+    """
+    from laya import evals_cli
+
+    real_open = open                      # captured before any patch below delegates to it
+    _patch_router(monkeypatch)
+    dataset = _write_dataset(tmp_path, RUN_ROWS)
+    spool = str(tmp_path / "spooled.json")
+    cases = [
+        ("a directory that does not exist", str(tmp_path / "no-such-dir" / "report.json"), None),
+        ("a path that is a directory, not a file", str(tmp_path), None),
+        # A full disk, a read-only mount, an expired quota: the errno names no path, so the only
+        # words that can say which output failed are the CLI's own. This is what the `%r` in the
+        # message buys, and `open` really is the call that raises for it.
+        ("a volume that refuses the write", spool, OSError(28, "No space left on device")),
+    ]
+
+    def make_refuser(wanted, err):
+        """`open` for real, except that one path raises. A factory, so nothing binds late."""
+        def refuse(target, *a, **k):
+            if str(target) == wanted:
+                raise err
+            return real_open(target, *a, **k)
+        return refuse
+
+    for flag in ("--json", "--markdown"):
+        for label, path, error in cases:
+            if error is not None:
+                monkeypatch.setattr("builtins.open", make_refuser(path, error))
+            capsys.readouterr()
+            assert evals_cli.main(["run", dataset, flag, path]) == 2, "%s: %s" % (flag, label)
+            err = capsys.readouterr().err
+            assert "Traceback" not in err, "%s %s leaked a traceback" % (flag, label)
+            assert "cannot write" in err, "%s %s: %s" % (flag, label, err)
+            assert path in err, "%s %s did not name the path it could not write: %s" % (
+                flag, label, err)
+            if error is not None:
+                assert "No space left on device" in err, (
+                    "%s %s lost the errno the caller needs: %s" % (flag, label, err))
+                # Put `open` back: a later row must not inherit a refuser aimed at this path.
+                monkeypatch.setattr("builtins.open", real_open)
+
+
 def test_cli_run_refuses_a_baseline_from_a_different_dataset(monkeypatch, tmp_path, capsys):
     """The gate that a promotion decision rests on: two different runs cannot pass as one.
 
