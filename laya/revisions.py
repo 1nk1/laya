@@ -57,8 +57,12 @@ def _reviewed_pin(model_id_or_path: str) -> Optional[str]:
 def resolve_revision(model_id_or_path: str, revision: Optional[str] = None) -> Optional[str]:
     """Pick the revision to download.
 
-    An explicit `revision` is returned unchanged. Otherwise ``LAYA_REVISION``, stripped; empty or
-    unset means "not asked for". The variable holds either a commit SHA/branch/tag, applied to
+    Both the argument and ``LAYA_REVISION`` are stripped, and the argument wins when it is truthy.
+    That has one sharp edge, pinned by `tests/test_revision_pinning.py`: a truthy-but-blank
+    `revision` ("   ") wins the `or` and then strips away, so it suppresses the environment and
+    returns None -- a blank argument is "no pin from me, and no pin from the deployment either",
+    not a way to ask for ``LAYA_REVISION``. An empty or unset one means "not asked for", so the
+    variable applies. The variable holds either a commit SHA/branch/tag, applied to
     every checkpoint load the way `Router(revision=)` applies one, or the word ``reviewed``, which
     looks `model_id_or_path` up in `PINNED_REVISIONS` -- case-insensitively, the way the Hub
     itself reads repo ids, so `laya.load("ConvaiInnovations/Laya")` finds its pin.
