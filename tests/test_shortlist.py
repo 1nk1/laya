@@ -658,6 +658,53 @@ check_raises("cache/bad shape raises", lambda: bad_cached(["alpha", "beta"]))
 check("cache/bad shape caches nothing", bad_cached.cache_info()["size"], 0)
 
 
+class NonFiniteEmbed:
+    """`alpha` embeds NaN on the first call and the query vector on every later one.
+
+    A transient NaN is the case the "bad shape" pair above does not cover: the row is
+    shape-valid, so it is not refused -- `nan_to_num` rewrites it to zeros on the way in,
+    exactly as `_embeddings` does for an unwrapped embedder. The difference is that the
+    wrapper then *stores* the repaired row, so the rewrite outlives the call that caused
+    it, while the unwrapped path re-embeds and recovers on its own.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, texts):
+        self.calls.append(list(texts))
+        first = len(self.calls) == 1
+        return [[float("nan"), float("nan")] if (first and text == "alpha")
+                else ([1.0, 0.0] if text in ("pay me", "alpha") else [0.8, 0.2])
+                for text in texts]
+
+
+nf_embed = NonFiniteEmbed()
+nf_cached = cached_embed_fn(nf_embed)
+# `cache/nan row stored cleaned` and `cache/cleaned row served from cache`, further down
+# this file, pin the rewrite and that the cache serves it. What they do not pin is that the
+# second call's *rows* are the repaired ones, which is where the wrapper and the unwrapped
+# embedder visibly disagree: a transient NaN costs that option its real embedding forever.
+nf_cached(["alpha"])                       # embeds NaN, stores the zeroed row
+check_true("cache/sticky row stays the repaired one",
+           np.array_equal(nf_cached(["alpha"])[0], [0.0, 0.0]) and len(nf_embed.calls) == 1)
+
+# The consequence a caller actually sees: shortlist membership, not just the numbers.
+NF_CRITERIA = {"alpha": None, "beta": None}
+raw_embed = NonFiniteEmbed()
+raw = (shortlist_choice("pay me", NF_CRITERIA, raw_embed, k=1),
+       shortlist_choice("pay me", NF_CRITERIA, raw_embed, k=1))
+wrapped_embed = NonFiniteEmbed()
+wrapped_fn = cached_embed_fn(wrapped_embed)
+sticky = (shortlist_choice("pay me", NF_CRITERIA, wrapped_fn, k=1),
+          shortlist_choice("pay me", NF_CRITERIA, wrapped_fn, k=1))
+check("cache/unwrapped second call recovers the finite row", raw, (["beta"], ["alpha"]))
+check("cache/wrapped second call keeps the zeroed row", sticky, (["beta"], ["beta"]))
+wrapped_fn.cache_clear()
+check("cache/clearing it restores the unwrapped ranking",
+      shortlist_choice("pay me", NF_CRITERIA, wrapped_fn, k=1), ["alpha"])
+
+
 class FakeTensor:
     """Mimics the detach().float().cpu().numpy() chain of a torch tensor."""
 
