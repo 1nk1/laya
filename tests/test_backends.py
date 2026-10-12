@@ -154,6 +154,45 @@ e = EagerBackend(agent)
 check("eager/max_len is unbounded", e.max_len, None)
 check("eager/warmup is free", e.warmup(), 0.0)
 
+# ------------------------------------------------------------------ eager honours the lifecycle
+# `Backend.install` documents that the model may already carry an instance `forward` -- another
+# backend's, or the legacy `fast=True` one -- and puts it back on uninstall. Eager overrides that
+# lifecycle and did none of it, so installing eager over a replacement left the replacement
+# answering every request (`agent.backend` reporting "eager" all the while) and its `uninstall`
+# was a no-op that left the shadow on the model with nothing owning it.
+shadow = Doubling(agent)
+shadow.install()
+check_true("eager over a backend/the replacement runs first", torch.equal(agent.model(**b)[0], ref * 2))
+sh = EagerBackend(agent)
+sh.install()
+check_true("eager over a backend/install makes the stock forward answer", torch.equal(agent.model(**b)[0], ref))
+check_true("eager over a backend/install leaves no shadow on the model", "forward" not in agent.model.__dict__)
+check_true("eager over a backend/stock_forward is the model, not the shadow",
+           torch.equal(sh.stock_forward(**b)[0], ref))
+sh.install()
+check_true("eager over a backend/install is idempotent", torch.equal(agent.model(**b)[0], ref))
+sh.uninstall()
+check_true("eager over a backend/uninstall puts the replacement back", torch.equal(agent.model(**b)[0], ref * 2))
+check_true("eager over a backend/the replacement is still owned", "forward" in agent.model.__dict__)
+sh.uninstall()
+check_true("eager over a backend/uninstall is idempotent", torch.equal(agent.model(**b)[0], ref * 2))
+shadow.uninstall()
+check_true("eager over a backend/both leaving is the stock model again",
+           untouched(agent.model) and torch.equal(agent.model(**b)[0], ref))
+
+# `laya.backends.install` uninstalls `agent._backend` only. A shadow owned by the agent's legacy
+# `_fast` path is still on the model when eager is asked for, and eager is what has to clear it.
+legacy = fake_agent()
+ln = Doubling(legacy)
+ln.install()
+check("install(eager) over a legacy shadow/name", backends.install(legacy, "eager").name, "eager")
+check_true("install(eager) over a legacy shadow/the stock forward answers",
+           torch.equal(legacy.model(**b)[0], ref))
+check_true("install(eager) over a legacy shadow/no shadow left behind", "forward" not in legacy.model.__dict__)
+ln.uninstall()
+check_true("install(eager) over a legacy shadow/stock model after the owner leaves",
+           untouched(legacy.model) and torch.equal(legacy.model(**b)[0], ref))
+
 # ------------------------------------------------------------------ the Agent surface
 import inspect  # noqa: E402
 from laya.agent import Agent, load  # noqa: E402
