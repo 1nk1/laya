@@ -94,31 +94,27 @@ The shipped checkpoints work zero-shot, but fine-tuning on decisions from your o
 
 **[nandhakishorm.github.io/laya](https://nandhakishorm.github.io/laya/)**: guides for [prediction hooks](https://nandhakishorm.github.io/laya/hooks/), [schema-driven decisions](https://nandhakishorm.github.io/laya/structured/), [Docker](https://nandhakishorm.github.io/laya/docker/) and [LangChain and LangGraph](https://nandhakishorm.github.io/laya/langchain/), plus a full [API reference](https://nandhakishorm.github.io/laya/reference/).
 
-## What's new in 0.4.4
+## What's new in 0.4.5
 
-* **laya-go**: a pure-Go tokenizer and language detection, standard library only, with its own
-  advisory parity lane that re-records every golden from the Python package at each commit and
-  fails on a skipped test (#1145).
-* **An out-of-range MCP batch control is reported, not dropped.** `min_confidence=-0.5` or
-  `hooks_timeout=-1` reached the tool as "no gate" and "no deadline"; both now come back named
-  from the validator (#1118).
-* **`min_confidence=0.0` clears a stale abstention marker** instead of returning early, which is
-  what `flag_low_confidence` always documented (#1119, #910).
-* **`laya --sort-by-length` judges its note per checkpoint group.** The reorder switches inside
-  each group, so a file routing to two checkpoints could reorder nothing while the old file-wide
-  condition held and printed nothing. `Router.predict_batch` takes a `diagnostics` dict that
-  reports it (#1114, #1111).
-* **`backend="eager"` pushes an existing replacement aside** rather than reporting itself while a
-  graph backend still answers every request, and restores it on uninstall (#1131).
-* **laya-ts hook timeouts name the hook and the event**, with Python's `TimeoutError` and message
-  (#1140).
-* **Evaluation harness**: a mistyped `--model` fails as a usage error before any download (#1120),
-  an ONNX run records the commit that answered (#1122), a student's abstention is read from the
-  gate's own vocabulary (#1134), and an unreadable runner signature answers both guards the same
-  way (#1112).
-* **Docs**: measured option-budget ceilings for `/v1/systemone`, the `harm_severity` column's unit
-  and why it cannot flag at the default threshold, the AOTInductor route now that it packages, the
-  TileLang CPU lowering, and `/health`'s nine-key shape under idle unloading.
+* **A ragged calibration pool keeps its fit.** `fit_one_temperature` squared off rows of different
+  option counts with a pad value that then competed in the same softmax, so a question type pooled
+  across option-count bands could report the neutral `1.0`, or the ceiling, for a fit that ran.
+  Rows are now grouped by option count and the search on log T is bounded. Single-width fits are
+  unchanged to twelve decimal places (#1158).
+* **laya-ts routes unidentified text to multilingual**, matching Python since 0.4.0. This changes
+  the default: pass `new Router({ default: "english" })` for the old fallback (#1157).
+* **laya-ts clears a stale `low_confidence` marker** when a reused result is re-evaluated at a more
+  permissive threshold, `0.0` included, gating on the same number Python does (#1153, #910).
+* **Windows CI runs the shared suite list.** Its inline copy had drifted to 55 of the 87 suites and
+  accepted missing suite files silently (#1156).
+* **`cached_embed_fn` says what it caches.** A transient `NaN` row is repaired to zeros and the
+  repaired row is cached, so that option ranks as a zero vector until `cache_clear()`, while the
+  unwrapped embedder recovers on its own (#1161).
+* **Docs**: three snippets that could not run as written now can (a missing `sys`, a missing
+  `hashlib, json`, a configuration row whose example raised the row below it), the option ceiling
+  is published with the instruction it was measured with, and the `run_id` count, the empty-batch
+  `ctx.usage`, the `revisions` block per route and the whole-model quantization failure are each
+  stated as measured (#1151, #1154, #1155, #1159, #1162, #1163, #1150, #1160, #1164).
 
 Earlier releases are in the [GitHub releases](https://github.com/NandhaKishorM/laya/releases).
 
