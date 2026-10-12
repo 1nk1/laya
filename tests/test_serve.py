@@ -23,6 +23,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 from laya.serve import (  # noqa: E402
     BATCH_BODY_CALL_CONTROLS,
+    BATCH_BODY_OUT_PARAMETERS,
     BATCH_BODY_ITEM_CONTROLS,
     BODY_CONTROLS,
     BODY_REFUSALS,
@@ -2671,15 +2672,18 @@ def test_batch_call_controls_are_exactly_predict_batch_kwargs_or_refusal():
     """A control added to ``Router.predict_batch`` must be placed on one side of the line.
 
     Either serve forwards it (``BATCH_BODY_CALL_CONTROLS``) or it refuses it (``hooks_timeout``,
-    the one hook-execution arg that ``predict_batch`` takes). Silently ignoring a new kwarg is the
-    failure mode this pin exists to catch: the same reasoning that made ``/v1/systemone`` refuse
-    ``hooks_timeout`` in #724 applies to the batch path -- a caller cannot shorten the deadline
-    on which the operator's own hooks execute.
+    the one hook-execution arg that ``predict_batch`` takes, and ``diagnostics``, the out-parameter
+    HTTP cannot hand back). Silently ignoring a new kwarg is the failure mode this pin exists to
+    catch: the same reasoning that made ``/v1/systemone`` refuse ``hooks_timeout`` in #724 applies
+    to the batch path -- a caller cannot shorten the deadline on which the operator's own hooks
+    execute.
     """
     from laya.router import Router
 
     taken = set(inspect.signature(Router.predict_batch).parameters) - {"self", "requests"}
-    declared = set(BATCH_BODY_CALL_CONTROLS) | set(BODY_REFUSALS)
+    declared = (set(BATCH_BODY_CALL_CONTROLS) | set(BODY_REFUSALS)
+                | set(BATCH_BODY_OUT_PARAMETERS))
+    assert not (set(BATCH_BODY_CALL_CONTROLS) & set(BATCH_BODY_OUT_PARAMETERS))
     assert taken == declared, "predict_batch() takes %s; serve declares %s" % (
         sorted(taken), sorted(declared))
 
@@ -2842,6 +2846,29 @@ def test_batch_hook_control_is_refused_not_dropped(monkeypatch, key):
     assert key in detail
     assert "cannot be sent to this endpoint" in detail
     assert not fake.batch_calls, "the refusal must come before inference"
+
+
+@pytest.mark.parametrize("key", BATCH_BODY_OUT_PARAMETERS)
+def test_batch_out_parameter_is_refused_not_filled_and_dropped(monkeypatch, key):
+    """``diagnostics`` is written into the caller's own dict, which an HTTP caller does not have.
+
+    ``Router.predict_batch`` takes it so a local caller -- the CLI, for #1111 -- can read which
+    checkpoint groups actually reordered. Over HTTP there is nothing to read it back from, so a
+    body that sent it would be answered 200 while the report it asked for was discarded with the
+    request. Refused instead, for the reason ``BODY_REFUSALS`` is: an unhonourable control is
+    reported, never ignored.
+    """
+    client, fake = _batch_client(monkeypatch)
+    r = client.post("/v1/systemone/batch", json={**BATCH_REQ, key: {}})
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert key in detail
+    assert "cannot be returned over HTTP" in detail
+    assert not fake.batch_calls, "the refusal must come before inference"
+    # An explicit null is "not asked for", the way every other control reads it.
+    ok = client.post("/v1/systemone/batch", json={**BATCH_REQ, key: None})
+    assert ok.status_code == 200, ok.text
+    assert key not in fake.batch_calls[0][1]
 
 
 def test_batch_predict_fallback_forwards_every_control(monkeypatch):

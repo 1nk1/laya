@@ -171,6 +171,14 @@ BODY_REFUSALS = ("hooks", "on_predict_start", "on_predict_end", "hooks_raise", "
 BATCH_BODY_CALL_CONTROLS = ("batch_size", "min_confidence", "sort_by_length")
 BATCH_BODY_ITEM_CONTROLS = ("max_len", "head_max_len", "task", "lang", "lang_guess")
 
+# ``diagnostics`` is neither: it is an out-parameter. ``Router.predict_batch`` fills a dict the
+# caller already owns (#1111, so a shell can say which checkpoint groups actually reordered), and a
+# JSON body cannot own one -- whatever a request sent would be filled in and then dropped when the
+# handler returned. So the batch path refuses it, for the reason the list above exists: a control
+# the endpoint cannot honour is told, not ignored. It is listed separately from ``BODY_REFUSALS``
+# because that tuple is pinned against ``Router.predict``, which has no ``diagnostics``.
+BATCH_BODY_OUT_PARAMETERS = ("diagnostics",)
+
 
 def _env_bool(name: str, default: bool) -> bool:
     v = os.environ.get(name)
@@ -487,6 +495,26 @@ def _refuse_body_refusals(body: Dict[str, Any]) -> None:
             status_code=422,
             detail="%s run inside the server process and cannot be sent to this endpoint; "
                    "install them where laya-serve runs, or drop them" % ", ".join(given))
+
+
+def _refuse_out_parameters(body: Dict[str, Any]) -> None:
+    """Reject a batch request that sends one of ``BATCH_BODY_OUT_PARAMETERS`` (422).
+
+    ``Router.predict_batch``'s ``diagnostics`` is a dict the caller keeps a reference to and reads
+    after the call. An HTTP caller keeps no reference, so a value sent here could only be written
+    and discarded. Refusing says so instead of answering 200 to a request for a report that is
+    never delivered.
+    """
+    from fastapi import HTTPException
+
+    given = sorted(key for key in BATCH_BODY_OUT_PARAMETERS
+                   if key in body and body[key] is not None)
+    if given:
+        raise HTTPException(
+            status_code=422,
+            detail="%s is filled in place for an in-process caller and cannot be returned over "
+                   "HTTP; read the per-group report from the CLI or a local Router"
+                   % ", ".join(given))
 
 
 def _validate_language_param(body: Dict[str, Any], key: str) -> Optional[str]:
@@ -1337,6 +1365,7 @@ def create_app(router: Optional[Any] = None):
         # so without this call a batch body would silently hand a caller a shorter deadline for
         # the operator's own hooks.
         _refuse_body_refusals(body)
+        _refuse_out_parameters(body)
         # The same guard `/v1/systemone` runs, for the same reason, and it has to walk the whole
         # body rather than one state because that is what the batch carries: `predict_batch`
         # tokenizes every state and every question here, so a lone `\udXXX` escape in any of them
