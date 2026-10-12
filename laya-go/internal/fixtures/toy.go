@@ -1,10 +1,6 @@
 package fixtures
 
-import (
-	"encoding/json"
-	"strconv"
-	"strings"
-)
+import "encoding/json"
 
 // Toy special-token ids of the tokenizer ToyTokenizer returns.
 const (
@@ -39,21 +35,34 @@ func ToyTokenizer() (tokenizerJSON, configJSON []byte) {
 			next++
 		}
 	}
-	vocab := make([]string, 0, 262)
+	vocab := map[string]int{"[PAD]": ToyPad, "[CLS]": ToyCLS, "[SEP]": ToySEP, "[MASK]": ToyMask, "th": 260, "in": 261}
 	for b := 0; b < 256; b++ {
-		key, _ := json.Marshal(string(runes[b]))
-		vocab = append(vocab, string(key)+":"+strconv.Itoa(b))
+		vocab[string(runes[b])] = b
 	}
-	vocab = append(vocab, `"[PAD]":256`, `"[CLS]":257`, `"[SEP]":258`, `"[MASK]":259`, `"th":260`, `"in":261`)
-	var added []string
+	type addedToken struct {
+		ID         int    `json:"id"`
+		Content    string `json:"content"`
+		SingleWord bool   `json:"single_word"`
+		Lstrip     bool   `json:"lstrip"`
+		Rstrip     bool   `json:"rstrip"`
+		Normalized bool   `json:"normalized"`
+		Special    bool   `json:"special"`
+	}
+	var added []addedToken
 	for i, name := range []string{"[PAD]", "[CLS]", "[SEP]", "[MASK]"} {
-		added = append(added, `{"id":`+strconv.Itoa(256+i)+`,"content":"`+name+
-			`","single_word":false,"lstrip":false,"rstrip":false,"normalized":false,"special":true}`)
+		added = append(added, addedToken{ID: ToyPad + i, Content: name, Special: true})
 	}
-	spec := `{"added_tokens":[` + strings.Join(added, ",") + `],` +
-		`"normalizer":null,"pre_tokenizer":{"type":"ByteLevel","add_prefix_space":false,"use_regex":true},` +
-		`"decoder":{"type":"ByteLevel"},` +
-		`"model":{"type":"BPE","vocab":{` + strings.Join(vocab, ",") + `},"merges":["t h","i n"]}}`
+	// Marshaled as a whole, so no token text is ever spliced into JSON by hand.
+	spec, err := json.Marshal(map[string]any{
+		"added_tokens":  added,
+		"normalizer":    nil,
+		"pre_tokenizer": map[string]any{"type": "ByteLevel", "add_prefix_space": false, "use_regex": true},
+		"decoder":       map[string]any{"type": "ByteLevel"},
+		"model":         map[string]any{"type": "BPE", "vocab": vocab, "merges": []string{"t h", "i n"}},
+	})
+	if err != nil {
+		panic(err) // unreachable: every value above marshals
+	}
 	config := `{"cls_token":"[CLS]","sep_token":"[SEP]","mask_token":"[MASK]","pad_token":"[PAD]"}`
-	return []byte(spec), []byte(config)
+	return spec, []byte(config)
 }

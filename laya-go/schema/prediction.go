@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -163,7 +164,18 @@ func (p Prediction) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []byte(`{"model":` + model + `,"answers":` + string(answers) + `,"usage":` + string(usage) + `}`), nil
+	// Each part is a complete JSON value already; they are written one after another, never
+	// spliced inside a quoted string.
+	var out bytes.Buffer
+	out.Grow(len(model) + len(answers) + len(usage) + 32)
+	out.WriteString(`{"model":`)
+	out.WriteString(model)
+	out.WriteString(`,"answers":`)
+	out.Write(answers)
+	out.WriteString(`,"usage":`)
+	out.Write(usage)
+	out.WriteByte('}')
+	return out.Bytes(), nil
 }
 
 // CollapsedQuestion is one question's CollapsedOptions report, with the question id.

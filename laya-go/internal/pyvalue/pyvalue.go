@@ -263,7 +263,7 @@ func (p *parser) hex4() (rune, error) {
 	if p.i+4 > len(p.s) {
 		return 0, p.fail("truncated \\u escape")
 	}
-	n, err := strconv.ParseUint(p.s[p.i:p.i+4], 16, 32)
+	n, err := strconv.ParseUint(p.s[p.i:p.i+4], 16, 16) // four hex digits: at most 0xFFFF
 	if err != nil || strings.ContainsAny(p.s[p.i:p.i+4], "+-_") {
 		return 0, p.fail("invalid \\u escape")
 	}

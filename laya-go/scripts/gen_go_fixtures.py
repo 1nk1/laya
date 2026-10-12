@@ -602,8 +602,10 @@ def _json_text(rng, depth=0):
 
 _BAD_JSON = ["", " ", "01", "-", "+1", ".5", "1.", "1e", "[1,]", "[,1]", "{\"a\":1,}", "{'a':1}", "[", "]", "{",
              "{\"a\"}", "{\"a\":}", "[1 2]", "1 2", "nul", "True", "NaN1", "Infinit", "- Infinity", "\"\t\"", "\"\\q\"",
-             "\"\\u12\"", "\"\\u12G4\"", "\"abc", "\"\x00\"", "[1]]", "{}{}", "9" * 4301, "-" + "9" * 4301,
-             "[" * 5000 + "]" * 5000]
+             "\"\\u12\"", "\"\\u12G4\"", "\"abc", "\"\x00\"", "[1]]", "{}{}", "9" * 4301, "-" + "9" * 4301]
+# No deep-nesting case: how deep json.loads recurses before RecursionError depends on the CPython
+# build (5,000 levels fail on macOS and parse on the Linux runner). laya-go's own bound,
+# pyvalue.MaxDepth, is held by its unit tests.
 _LONE_SURROGATES = ["\"\\ud800\"", "\"\\udc00\"", "[\"\\ud800x\"]", "{\"\\udfff\":1}", "\"\\ud800\\u0041\"", "\"\\ud83d\"",
                     "\"a\\ud800\\ud800\""]
 
