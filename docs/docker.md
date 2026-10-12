@@ -73,6 +73,7 @@ work with `docker run -e`; Compose-only settings are identified below.
 | `LAYA_MODEL` | `auto` | Router alias: `auto`, `english`, `multilingual`, `typed-decisions` |
 | `LAYA_MODEL_PATH` | unset | Compatible checkpoint path inside the container |
 | `LAYA_REVISION` | unset | Hub commit, branch or tag used for every checkpoint download, or `reviewed` for the reviewed SHAs in `laya/revisions.py`; a `revision=` argument still wins |
+| `LAYA_SHA256_DIGESTS` | unset | JSON digests verified before weights are parsed and loaded: `{artifact: digest}` for every checkpoint, or `{model: {artifact: digest}}` per checkpoint. See [Security](security.md) |
 | `LAYA_REQUEST_FILE` | bundled request | JSON request path inside the container |
 | `OMP_NUM_THREADS` | `4` | CPU threads; keep within available cores |
 | `HF_TOKEN` / `HF_TOKEN_FILE` | unset | Optional Hugging Face credential |
