@@ -2085,7 +2085,7 @@ def test_controls_signature_and_schema():
     import inspect
 
     controls = ["task", "lang", "lang_guess", "max_len", "head_max_len"]
-    for fn, want in ((laya_predict, controls), (laya_shortlist, controls),
+    for fn, want in ((laya_predict, controls), (laya_shortlist, controls), (laya_tournament, controls),
                      (laya_preset, controls), (laya_route, ["model", "task", "lang", "lang_guess"])):
         params = inspect.signature(fn).parameters
         for name in want:
@@ -2099,7 +2099,7 @@ def test_controls_signature_and_schema():
        repr(list(inspect.signature(laya_predict).parameters)))
 
     by_name = {t.name: t for t in asyncio.run(mcp_server.list_tools())}
-    for name, want in (("laya_predict", controls), ("laya_shortlist", controls),
+    for name, want in (("laya_predict", controls), ("laya_shortlist", controls), ("laya_tournament", controls),
                        ("laya_preset", controls), ("laya_route", ["model", "task", "lang"])):
         tool = by_name[name]
         schema = tool.input_schema if hasattr(tool, "input_schema") else tool.inputSchema
@@ -2121,7 +2121,7 @@ def test_controls_signature_and_schema():
     from laya.mcp import server as server_mod
 
     model_schemas = []
-    for name in ("laya_predict", "laya_shortlist", "laya_decide", "laya_route"):
+    for name in ("laya_predict", "laya_shortlist", "laya_tournament", "laya_decide", "laya_route"):
         parameter = inspect.signature(getattr(server_mod, name + "_tool")).parameters["model"]
         ok("signature/%s_model_default_none" % name, parameter.default is None, repr(parameter.default))
         tool = by_name[name]
@@ -2882,9 +2882,9 @@ def test_server_registration():
     names = sorted(t.name for t in tools)
     ok("server/tool_names", names == ["laya_decide", "laya_predict", "laya_predict_batch",
                                       "laya_preset", "laya_route", "laya_route_batch",
-                                      "laya_shortlist", "laya_status"], repr(names))
+                                      "laya_shortlist", "laya_status", "laya_tournament"], repr(names))
     decision = {"laya_predict", "laya_route", "laya_preset", "laya_shortlist",
-                "laya_predict_batch", "laya_route_batch", "laya_decide"}
+                "laya_predict_batch", "laya_route_batch", "laya_decide", "laya_tournament"}
     for t in tools:
         desc = (t.description or "").lower()
         ok("server/desc_%s_nonempty" % t.name, bool(desc.strip()), repr(desc))
@@ -2896,6 +2896,55 @@ def test_server_registration():
             ok("server/desc_noul_labels", "optional labels" in desc)
         if t.name.endswith("_batch"):
             ok("server/desc_%s_requests" % t.name, "non-empty array" in desc)
+
+
+def test_server_tournament():
+    import json
+
+    from laya.mcp import server as server_mod
+    from mcp.server.mcpserver.exceptions import ToolError as McpToolError
+    import laya
+
+    by_name = {t.name: t for t in asyncio.run(mcp_server.list_tools())}
+    tool = by_name["laya_tournament"]
+    schema = tool.input_schema if hasattr(tool, "input_schema") else tool.inputSchema
+    props = schema["properties"]
+    default = inspect.signature(laya.predict_tournament).parameters["group_size"].default
+    ok("schema/tournament_group_default", props["group_size"]["default"] == default)
+    ok("schema/tournament_group_integer", props["group_size"]["type"] == "integer")
+    ok("schema/tournament_required", schema["required"] == ["state", "questions"])
+    for name in ("labels", "n", "rounds", "finalists", "option_order_dropped", "LAYA_BASE_URL"):
+        ok("schema/tournament_description_%s" % name, name in tool.description)
+
+    saved = server_mod._ROUTER
+    try:
+        router = TournamentRouter()
+        server_mod._ROUTER = router
+        result = asyncio.run(mcp_server.call_tool("laya_tournament", {
+            "state": STATE, "questions": tournament_questions(40), "group_size": 4,
+            "task": "typed_decisions", "lang_guess": "de", "lang": "fr",
+            "max_len": 1024, "head_max_len": 384, "min_confidence": 0.95,
+        }))
+        payload = json.loads(result.content[0].text)
+        ok("server/tournament_call_not_error", not result.is_error)
+        ok("server/tournament_custom_group", payload["tournament"]["intent"]["rounds"] == 2
+           and len(router.agent.calls) == 3)
+        ok("server/tournament_controls_reach_each_round",
+           all(k == {"model": "english", "lang": "fr", "max_len": 1024,
+                     "head_max_len": 384, "min_confidence": 0.95}
+               for _s, _qs, k in router.agent.calls))
+        ok("server/tournament_route_controls", router.routes[0][2] == {
+            "task": "typed_decisions", "lang_guess": "de", "lang": "fr"})
+        ok("server/tournament_final_low_confidence", payload["answers"]["intent"]["low_confidence"])
+        try:
+            server_mod.laya_tournament_tool(STATE, tournament_questions(40), group_size=1)
+        except McpToolError as exc:
+            payload = json.loads(str(exc))
+            ok("server/tournament_error_payload", payload["error"] == "invalid_group_size")
+        else:
+            ok("server/tournament_error_payload", False, "invalid group_size accepted")
+    finally:
+        server_mod._ROUTER = saved
 
 
 def test_server_shortlist_k_default():
@@ -3039,7 +3088,7 @@ def test_cli_mcp_page_tool_argument_rows():
         return None
 
     for tool in ("laya_status", "laya_route", "laya_predict",
-                 "laya_shortlist", "laya_preset", "laya_decide"):
+                 "laya_shortlist", "laya_tournament", "laya_preset", "laya_decide"):
         cell = row_cell(tool)
         ok("docs-mcp/args_row_%s_present" % tool, cell is not None, "row not found")
         if cell is None:
@@ -3096,6 +3145,7 @@ test_cli_mcp_page_batch_rows()
 test_auto_task_env()
 test_default_model_env()
 test_server_registration()
+test_server_tournament()
 test_server_shortlist_k_default()
 test_cli_mcp_page_tool_argument_rows()
 

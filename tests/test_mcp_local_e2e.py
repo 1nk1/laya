@@ -118,7 +118,7 @@ def main():
         names = sorted(t["name"] for t in tools.get("tools", []))
         ok("e2e/tool_names", names == ["laya_decide", "laya_predict", "laya_predict_batch",
                                        "laya_preset", "laya_route", "laya_route_batch",
-                                       "laya_shortlist", "laya_status"], repr(names))
+                                       "laya_shortlist", "laya_status", "laya_tournament"], repr(names))
 
         ticket = {
             "state": {

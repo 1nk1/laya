@@ -57,6 +57,7 @@ from .tools import (
     laya_route_batch,
     laya_shortlist,
     laya_status,
+    laya_tournament,
 )
 
 try:
@@ -83,7 +84,7 @@ _GUARDRAILS = (
     "noul (calibrated P(true)). One forward pass ~33ms (GPU) / ~200ms (CPU). "
     "No text generation, so no hallucination. Do NOT use for open Q&A, summarization, "
     "rewriting, code, or multi-hop reasoning. Do NOT use for >20-option choice "
-    "questions without shortlisting (use the laya_shortlist tool)."
+    "questions without narrowing (use laya_shortlist or laya_tournament)."
 )
 
 # The `model` argument's contract, spelled out for clients because the tools take a free string.
@@ -396,7 +397,7 @@ def laya_route_batch_tool(requests: list, hooks_timeout: float = 0) -> str:
         "Shortlist a many-option choice question to its k most likely labels by embedding "
         "similarity (mean-pooled from the answering checkpoint's own encoder, so no extra "
         "model is downloaded), then answer in one forward pass. Use this instead of "
-        "laya_predict whenever a choice question has more options than the guardrails allow. "
+        "laya_predict when embedding similarity is appropriate for narrowing a large choice. "
         "Returns the answers plus per-question shortlist metadata (kept labels, cosine "
         "scores, k, option count, and whether the question passed through unshortlisted). "
         "Shortlisting narrows the label set; head_max_len decides how many tokens each kept label "
@@ -434,6 +435,55 @@ def laya_shortlist_tool(
         questions=questions,
         model=model,
         k=k,
+        task=task,
+        lang=lang,
+        lang_guess=lang_guess,
+        max_len=max_len,
+        head_max_len=head_max_len,
+        min_confidence=min_confidence,
+        router=router,
+    )
+
+
+@server.tool(
+    name="laya_tournament",
+    description=(
+        "Answer large choice questions by balanced elimination with the decision model, without "
+        "embeddings. group_size: integer at least 2, default 16. All groups share one forward "
+        "pass per round; their winners advance until they fit, then one final pass answers the "
+        "complete request. Small choices and non-choice questions pass through. Returns answers, "
+        "routing, total latency_ms, the answering device when readable, and tournament metadata "
+        "per choice: labels (finalists in criteria order), n (original option count), rounds "
+        "(elimination rounds, zero on passthrough). Probabilities and confidence are over the "
+        "finalists only; thresholds fitted on a full option set do not transfer. A narrowed "
+        "question's option_order is dropped and reported under option_order_dropped with n and "
+        "kept counts. In-process only: with LAYA_BASE_URL set, use laya_predict with the HTTP "
+        "server's LAYA_TOURNAMENT_GROUP enabled instead. "
+        + _GUARDRAILS
+        + _MODEL_DOC
+        + _CONTROLS_DOC
+    ),
+)
+def laya_tournament_tool(
+    state: dict,
+    questions: dict,
+    model: str | None = None,
+    group_size: int = 16,
+    task: str | None = None,
+    lang: str | None = None,
+    lang_guess: str | None = None,
+    max_len: int | None = None,
+    head_max_len: int | None = None,
+    min_confidence: float | None = None,
+) -> str:
+    """Answer many-option choices with balanced tournament rounds."""
+    router = _ensure_router()
+    return _wrap(
+        laya_tournament,
+        state=state,
+        questions=questions,
+        model=model,
+        group_size=group_size,
         task=task,
         lang=lang,
         lang_guess=lang_guess,
