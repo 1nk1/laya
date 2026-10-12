@@ -71,6 +71,10 @@ func Decode(q schema.Question, row Row, lang string, t *Temperatures) (schema.An
 	peak := float32(math.Inf(-1))
 	for i := range z {
 		z[i] = row.Logits[i] / float32(temperature) // float32 division, as numpy does it
+		if math.IsInf(float64(z[i]), 1) {
+			// a finite logit can overflow float32 once divided, and inf - inf is NaN in every field
+			return nil, fmt.Errorf("%w: logit %v over temperature %v is not finite", ErrShape, row.Logits[i], temperature)
+		}
 		peak = max(peak, z[i])
 	}
 	p := make([]float64, k)

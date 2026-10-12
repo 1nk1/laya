@@ -2,6 +2,7 @@ package decode
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"strconv"
 	"strings"
@@ -479,8 +480,8 @@ func TestLabelAnswersGolden(t *testing.T) {
 //   - a number that differs by one unit in the fourth decimal (a value within 1e-4 sitting on a
 //     rounding boundary);
 //   - the choice, when the option Python chose and the one Go chose both have a quotient within
-//     nearTieBand of the largest. Go's is the true maximum; everything else in the answer must
-//     still be Python's.
+//     nearTieBand of the largest. Go's is the first maximum of the float64 probabilities;
+//     everything else in the answer must still be Python's.
 //
 // Anything else fails.
 func TestDecodeFuzzGolden(t *testing.T) {
@@ -624,28 +625,86 @@ func nearTied(logits []float32, order []int, temps *Temperatures, kind string, g
 	return true
 }
 
-// TestQuotientTieFallsToTheFirst: Python divides the float32 logits in float32, so two different
-// logits can become one quotient, an exact tie that numpy.argmax gives to the lower index. These
-// two are adjacent float32 values whose quotients by 3 are equal; numpy answers option 0. Dividing
-// in float64 would tell them apart and answer option 1, the larger logit.
+// TestQuotientTieFallsToTheFirst: Python divides the float32 logits by the temperature in float32,
+// so two different logits can become one quotient, an exact tie that numpy.argmax gives to the
+// lower index. Each pair is two adjacent float32 values that tie at its temperature, and numpy
+// answers option 0 for both. The first pair fails if the quotient is kept in float64; the second,
+// whose temperature is not a float32, also fails if the division is done in float64 and rounded.
 func TestQuotientTieFallsToTheFirst(t *testing.T) {
-	lower, upper := math.Float32frombits(1069547521), math.Float32frombits(1069547522)
-	if !(lower < upper) || lower/3 != upper/3 {
-		t.Fatalf("%v and %v no longer tie when divided by 3 in float32", lower, upper)
-	}
 	q, err := schema.ChoiceOf("pick", "first", "second")
 	if err != nil {
 		t.Fatal(err)
 	}
-	temps, err := NewTemperatures([]any{3.0, 3.0, 3.0}, nil, nil)
+	for _, c := range []struct {
+		temperature  float64
+		lower, upper uint32
+	}{
+		{3.0, 1069547521, 1069547522},
+		{1.3, 1072020843, 1072020844},
+	} {
+		lower, upper := math.Float32frombits(c.lower), math.Float32frombits(c.upper)
+		if !(lower < upper) || lower/float32(c.temperature) != upper/float32(c.temperature) {
+			t.Fatalf("%v and %v no longer tie when divided by %v in float32", lower, upper, c.temperature)
+		}
+		temps, err := NewTemperatures([]any{c.temperature, c.temperature, c.temperature}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		answer, err := Decode(q, Row{Logits: []float32{lower, upper}, K: 2, Act: []float32{0.5}}, "", temps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := answer.(*schema.ChoiceAnswer).Choice; got != schema.Text("first") {
+			t.Errorf("T=%v: choice = %v, want first: the quotients are one float32", c.temperature, got)
+		}
+	}
+}
+
+// TestLargeLogitsDoNotOverflow: the maximum is subtracted before exp, so a logit of 800, whose
+// exp is not a float64, still answers 1.0 and 0.0 as Python does.
+func TestLargeLogitsDoNotOverflow(t *testing.T) {
+	q, err := schema.ChoiceOf("pick", "first", "second")
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer, err := Decode(q, Row{Logits: []float32{lower, upper}, K: 2, Act: []float32{0.5}}, "", temps)
+	temps, err := NewTemperatures([]any{1.0, 1.0, 1.0}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := answer.(*schema.ChoiceAnswer).Choice; got != schema.Text("first") {
-		t.Errorf("choice = %v, want first: the quotients are one float32", got)
+	answer, err := Decode(q, Row{Logits: []float32{800, 0}, K: 2, Act: []float32{0.5}}, "", temps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := answer.(json.Marshaler).MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"type":"choice","choice":"first","probabilities":{"first":1.0,"second":0.0},"confidence":1.0,"answer_confidence":1.0,"action":{"act_probability":0.5}}`
+	if string(out) != want {
+		t.Errorf("got  %s\nwant %s", out, want)
+	}
+}
+
+// TestQuotientOverflowIsRefused: a finite logit can overflow float32 when divided by a
+// temperature below 1. Python answers NaN for every field; Decode refuses the row. A quotient
+// that overflows downwards is no trouble on either side: its probability is 0.
+func TestQuotientOverflowIsRefused(t *testing.T) {
+	q, err := schema.ChoiceOf("pick", "first", "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	temps, err := NewTemperatures([]any{0.5, 0.5, 0.5}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer, err := Decode(q, Row{Logits: []float32{3e38, 1}, K: 2, Act: []float32{0.5}}, "", temps); !errors.Is(err, ErrShape) {
+		t.Errorf("answer %v, error %v; want ErrShape", answer, err)
+	}
+	answer, err := Decode(q, Row{Logits: []float32{1, -3e38}, K: 2, Act: []float32{0.5}}, "", temps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps := answer.(*schema.ChoiceAnswer).Probabilities; ps[0].P != 1 || ps[1].P != 0 {
+		t.Errorf("probabilities = %v, want 1 and 0", ps)
 	}
 }
