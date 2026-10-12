@@ -214,10 +214,11 @@ check_true("hooks_raise=False/warns",
            any(issubclass(w.category, RuntimeWarning) for w in caught))
 
 # ... but it arrives once per distinct message, not once per failure. The emit site is a plain
-# `warnings.warn` inside `laya/hooks.py::dispatch` (line 550) whose text names the hook, the event and
+# `warnings.warn` inside `laya/hooks.py::dispatch` (`:543-546`) whose text names the hook, the event and
 # the exception, so a hook that fails the same way repeats the same string, and Python's default
 # `RuntimeWarning` filter dedups by (message, category, caller line) for the rest of the process.
-# Every arm above calls `simplefilter("always")`, which is why the suite never contradicted the page.
+# Every other `catch_warnings(record=True)` block in this suite (five of them) sets
+# `simplefilter("always")`, which is why the suite never contradicted the page.
 f = make_fake()
 with warnings.catch_warnings(record=True) as dedup:
     warnings.simplefilter("default")
