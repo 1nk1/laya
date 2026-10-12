@@ -4,7 +4,9 @@ Uses a tiny from-config BERT encoder (no pretrained weights downloaded) so
 these run fast and offline, unlike tests/test_local_e2e.py which needs a
 real checkpoint on disk.
 """
+import inspect
 import os
+import re
 import sys
 import torch
 from transformers import AutoConfig, AutoModel
@@ -124,10 +126,47 @@ def test_action_head_explicit_dtype_and_autocast():
                     torch.testing.assert_close(act_logits, legacy, rtol=0, atol=0)
 
 
+def test_head_is_the_encoder_stack_not_a_single_layer():
+    # docs/reference/agent.md names `agent.model.head`, so its class is a documented fact rather
+    # than an implementation detail. `DecisionModel.__init__` builds it as an `nn.TransformerEncoder`
+    # wrapping `head_layers` copies of one layer -- not as the layer itself -- and `head_layers: 0`
+    # is the other documented shape: there is no head module at all.
+    model = _tiny_model(head_layers=2)
+    assert type(model.head).__name__ == "TransformerEncoder"
+    assert len(model.head.layers) == 2
+    assert all(type(layer).__name__ == "TransformerEncoderLayer" for layer in model.head.layers)
+    assert not isinstance(model.head, torch.nn.TransformerEncoderLayer)
+    assert _tiny_model(head_layers=0).head is None
+
+
+def test_the_quantized_head_failure_reads_dtype_on_the_action_head():
+    # The page also tells readers which attribute blows up when they quantize the whole model.
+    # The two facts it names are the attribute the fast path reads and the module it reads it on,
+    # so both come off the source, and the page's quoted message has to agree with them. The
+    # failure itself is reproducible -- a quantized `act_head[0]` makes `weight` a method and
+    # `predict` raises inside `DecisionModel.forward` -- but reproducing it needs a working
+    # quantization engine, which is the very thing that page says depends on the CPU. So this
+    # pins the reading, not the engine.
+    src = inspect.getsource(DecisionModel.forward)
+    read = re.search(r"self\.act_head\[0\]\.weight\.(\w+)", src)
+    assert read is not None, "the fast path no longer reads a weight attribute this way"
+    assert read.group(1) == "dtype", read.group(1)
+    assert type(_tiny_model().act_head[0]).__name__ == "Linear"
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "docs", "reference", "agent.md"), encoding="utf-8") as handle:
+        page = handle.read()
+    named = re.findall(r"'function' object has no attribute '(\w+)'", page)
+    assert named == ["dtype"], named
+    assert re.search(r"head\s+is an `nn\.TransformerEncoderLayer`", page) is None, (
+        "the page calls the head a single layer again")
+
+
 if __name__ == "__main__":
     test_single_option_question_does_not_crash()
     test_single_option_top1_minus_top2_is_exactly_one()
     test_multi_option_question_is_unaffected()
     test_action_head_explicit_dtype_and_autocast()
+    test_head_is_the_encoder_stack_not_a_single_layer()
+    test_the_quantized_head_failure_reads_dtype_on_the_action_head()
     print("all decision model tests passed")
 
