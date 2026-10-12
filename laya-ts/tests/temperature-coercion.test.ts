@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { clampTemperature, TEMP_MAX, TEMP_MIN } from "../src/common.js";
 import { Agent } from "../src/agent.js";
 
-// The reference asks "is this a number?" with `float()`, which answers no for null, a boolean, a
-// list, an object and a string that holds nothing but blanks. `Number()` answers yes for all six and
-// produces 0 or the inner element, and 0 lands on TEMP_MIN -- the sharpening end, where a published
-// confidence is inflated rather than merely uncalibrated. These are the cases where the two answers
-// differed, measured as `clamp_temperature(t)` / `clampTemperature(t)` on the port's own base.
+// The reference asks "is this a number?" with `float()`, which refuses a string that holds nothing
+// but blanks and refuses any list. `Number()` reads `Number(" ")` and `Number([])` as 0, which the
+// clamp bounds to TEMP_MIN, and `Number([2])` as 2, which sits inside the range and so passes for a
+// fitted temperature. 0 is the worse of the two: a temperature below 1 sharpens the logits, so the
+// published confidence is inflated rather than merely uncalibrated. Those four are the divergences
+// measured as `clamp_temperature(t)` / `clampTemperature(t)` on the port's own base; the rest of the
+// table pins the fallbacks the port already got right, so a future coercion shortcut is caught here.
 
 const fakeProvider = () => ({
   async runEncoder(_b: any) { return { lastHidden: [[1, 0], [0, 1]] }; },
