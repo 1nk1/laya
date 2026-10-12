@@ -204,8 +204,16 @@ class TemperatureRejectionPredicateTests(unittest.TestCase):
         # `clamp_temperature` is how a `true` temperature loaded unreported. Walk the package
         # rather than naming files, so a re-derived fourth copy is caught the same way.
         root = Path(__file__).resolve().parents[1]
-        offenders = [p.relative_to(root).as_posix() for p in sorted((root / "laya").rglob("*.py"))
-                     if "if float(raw) == applied:" in p.read_text()]
+        paths = sorted((root / "laya").rglob("*.py"))
+        scanned = [p.relative_to(root).as_posix() for p in paths]
+        # Name one file the walk has to find, or a walk that silently matches nothing would report
+        # "no offenders" and guard nothing.
+        self.assertIn("laya/agent.py", scanned)
+        offenders = [name for name, p in zip(scanned, paths)
+                     # An explicit encoding is not decoration: `laya/email.py` and `laya/lang.py`
+                     # carry non-ASCII bytes, so a locale-default read dies on Windows' cp1252
+                     # before the scan can say anything about them.
+                     if "if float(raw) == applied:" in p.read_text(encoding="utf-8")]
         self.assertEqual(offenders, [])
 
 
