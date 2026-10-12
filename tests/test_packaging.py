@@ -59,6 +59,96 @@ for package_root, _dirs, files in os.walk(os.path.join(ROOT, "laya")):
 check("setuptools/packages match every importable laya package",
       sorted(declared_packages), sorted(source_packages))
 
+# laya/mcp/__init__.py carries the same kind of inventory, two levels down: its docstring splits the
+# submodules into "importable without the `mcp` extra" and "requires the extra", and __all__ is what a
+# reader (and `from laya.mcp import *`) is told the package contains. Neither list is derived from
+# anything, so remote.py -- the module LAYA_BASE_URL mode added -- appeared in neither, while every
+# test that imports `laya.mcp.remote` by its full path kept passing. Derive the modules from the tree
+# and read each module's own bindings, the way the package list above does, so a new submodule has to
+# be declared and a stale dependency claim is caught against the source that contradicts it.
+mcp_dir = os.path.join("laya", "mcp")
+mcp_modules = sorted(name[:-3] for name in os.listdir(os.path.join(ROOT, mcp_dir))
+                     if name.endswith(".py") and name != "__init__.py")
+# Guards, not formalities: an unreadable listing would let every comparison below pass against [].
+check_true("mcp/submodules found under laya/mcp", len(mcp_modules) >= 4, mcp_modules)
+
+
+def _literal_all(tree):
+    """The __all__ elements of a parsed module, or None when it is not a list of strings."""
+    for node in tree.body:
+        targets = getattr(node, "targets", [])
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "__all__" for t in targets):
+            value = node.value
+            if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+                return [e.value for e in value.elts if isinstance(e, ast.Constant)]
+            return None          # computed __all__: reported rather than passed as an empty list
+    return None
+
+
+mcp_init = ast.parse(read(os.path.join(mcp_dir, "__init__.py")))
+mcp_all = _literal_all(mcp_init)
+check_true("mcp/__all__ read as a literal from laya/mcp/__init__.py",
+           mcp_all is not None, ast.dump(mcp_init.body[-1]) if mcp_init.body else "empty module")
+check("mcp/__all__ names every submodule", sorted(mcp_all or []), mcp_modules)
+
+
+def _import_time_nodes(tree):
+    """The statements a module runs while it is being imported: no function or class bodies."""
+    result = []
+
+    def walk(body):
+        for stmt in body:
+            # An import inside a def/class body is deferred to the call, so it cannot make the module
+            # itself unimportable without the extra.
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            result.append(stmt)
+            for field in ("body", "orelse", "finalbody"):
+                walk([child for child in getattr(stmt, field, []) if isinstance(child, ast.stmt)])
+            for handler in getattr(stmt, "handlers", []):
+                walk([child for child in handler.body if isinstance(child, ast.stmt)])
+
+    walk(tree.body)
+    return result
+
+
+def binds_mcp_at_import_time(name):
+    """Whether laya/mcp/<name>.py imports the `mcp` distribution at module scope."""
+    for stmt in _import_time_nodes(ast.parse(read(os.path.join(mcp_dir, name + ".py")))):
+        if isinstance(stmt, ast.Import):
+            if any(alias.name.split(".")[0] == "mcp" for alias in stmt.names):
+                return True
+        elif isinstance(stmt, ast.ImportFrom):
+            if not stmt.level and (stmt.module or "").split(".")[0] == "mcp":
+                return True
+    return False
+
+
+mcp_needing = {name for name in mcp_modules if binds_mcp_at_import_time(name)}
+mcp_free = set(mcp_modules) - mcp_needing
+check_true("mcp/both dependency buckets are populated", bool(mcp_needing) and bool(mcp_free),
+           "needing=%s free=%s" % (sorted(mcp_needing), sorted(mcp_free)))
+
+# The sentence is read as two clauses split on the semicolon, so the gate knows which bucket each
+# inlined module name belongs to. `mcp` is inlined in the same sentence ("without the ``mcp``
+# dependency"), so names are compared against the real submodules, not against every literal.
+_buckets = (ast.get_docstring(mcp_init) or "").split(";")
+check_true("mcp/docstring keeps the two-clause dependency sentence this gate reads",
+           len(_buckets) == 2, repr(ast.get_docstring(mcp_init)))
+_raw_free = set(re.findall(r"``(\w+)``", _buckets[0]))
+_raw_needing = set(re.findall(r"``(\w+)``", _buckets[1])) if len(_buckets) > 1 else set()
+_declared_free = _raw_free & set(mcp_modules)
+_declared_needing = _raw_needing & set(mcp_modules)
+check("mcp/docstring's extra-free list is exactly the submodules that bind no mcp import",
+      sorted(_declared_free), sorted(mcp_free))
+check("mcp/docstring's extra list is exactly the submodules that bind mcp at import",
+      sorted(_declared_needing), sorted(mcp_needing))
+# A name the sentence claims that is not on disk is as wrong as one it omits: it sends a reader to
+# `python -m laya.mcp.<name>` for a file that does not exist. `mcp` is the dependency the same
+# sentence names in the same breath ("without the ``mcp`` dependency"), so it is excused.
+check("mcp/docstring names no submodule that is not on disk",
+      sorted((_raw_free | _raw_needing) - set(mcp_modules) - {"mcp"}), [])
+
 requires_python = re.search(r'requires-python\s*=\s*"[>=~^]*\s*([\d.]+)"', pyproject)
 check_true("pyproject/declares requires-python", requires_python is not None)
 floor = version_tuple(requires_python.group(1)) if requires_python else (0, 0)
