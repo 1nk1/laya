@@ -348,7 +348,11 @@ def fit_abstention_thresholds(records: Iterable, temperature: Sequence[float],
     under-abstains depending on the question. This fits one cut per bucket instead, keyed exactly
     like `temperature_by_options` (`common.temp_bucket`, e.g. ``"choice:3-5"``), and the result is a
     `min_confidence` map that :func:`laya.confidence.check_min_confidence` /
-    :func:`laya.confidence.apply_confidence_gate` accept directly.
+    :func:`laya.confidence.apply_confidence_gate` accept directly -- with one exception to keep:
+    every bucket below `min_bucket_n` is omitted, so a calibration set too small to fill a single
+    bucket returns ``{}``, and the validator refuses an empty map ("must be a non-empty dict"). Pass
+    no gate in that case rather than passing what came back; `laya.train` writes the map into a
+    checkpoint only `if abstention_thresholds:`.
 
     `records` are the same `(qtype, logits, target[, k])` tuples `fit_temperature_map` consumes
     (`records_from_labeled` builds them). Confidence is the **calibrated** `max(p)` -- the logits are
