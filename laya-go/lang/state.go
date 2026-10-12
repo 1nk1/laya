@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -38,9 +39,14 @@ type Member struct {
 // key order instead.
 type Object []Member
 
-// UnmarshalJSON decodes a JSON object keeping its key order. Nested objects become Objects and
-// arrays become []any; numbers become float64, which a state ignores anyway.
+// UnmarshalJSON decodes a JSON object keeping its key order, as Python's json.loads does: a
+// repeated key keeps its first position and takes its last value. Nested objects become Objects
+// and arrays become []any; numbers become float64, which a state ignores anyway. JSON null leaves
+// the Object unchanged, as encoding/json does for its own types.
 func (o *Object) UnmarshalJSON(data []byte) error {
+	if string(bytes.TrimSpace(data)) == "null" {
+		return nil
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	tok, err := dec.Token()
 	if err != nil {
@@ -53,6 +59,9 @@ func (o *Object) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	if _, err := dec.Token(); err != io.EOF {
+		return errors.New("lang.Object: data after the JSON object")
+	}
 	*o = v
 	return nil
 }
@@ -60,6 +69,7 @@ func (o *Object) UnmarshalJSON(data []byte) error {
 // decodeObject reads members up to the closing brace of an object whose opening brace was read.
 func decodeObject(dec *json.Decoder) (Object, error) {
 	obj := Object{}
+	at := map[string]int{} // each key's position, so a repeated key overwrites in place
 	for dec.More() {
 		keyTok, err := dec.Token()
 		if err != nil {
@@ -69,7 +79,13 @@ func decodeObject(dec *json.Decoder) (Object, error) {
 		if err != nil {
 			return nil, err
 		}
-		obj = append(obj, Member{keyTok.(string), value})
+		key := keyTok.(string)
+		if i, seen := at[key]; seen {
+			obj[i].Value = value
+			continue
+		}
+		at[key] = len(obj)
+		obj = append(obj, Member{key, value})
 	}
 	if _, err := dec.Token(); err != nil {
 		return nil, err
@@ -97,7 +113,7 @@ func decodeValue(dec *json.Decoder) (any, error) {
 		}
 		list = append(list, v)
 	}
-	if _, err := dec.Token(); err != nil && err != io.EOF {
+	if _, err := dec.Token(); err != nil {
 		return nil, err
 	}
 	return list, nil

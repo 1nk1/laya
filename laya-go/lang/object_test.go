@@ -50,6 +50,43 @@ func TestObjectUnmarshalJSONRefusesWhatIsNotAnObject(t *testing.T) {
 	}
 }
 
+// A repeated key keeps its first position and takes its last value, as Python's json.loads
+// does; keeping both members would read text Python never sees and can flip the verdict.
+func TestObjectUnmarshalJSONRepeatedKeyIsLastWins(t *testing.T) {
+	var o Object
+	doc := `{"a":"Ich kann mich nicht anmelden bitte hilfe","b":"please help me with my card refund today","a":"ok"}`
+	if err := json.Unmarshal([]byte(doc), &o); err != nil {
+		t.Fatal(err)
+	}
+	if len(o) != 2 || o[0].Key != "a" || o[0].Value != "ok" || o[1].Key != "b" {
+		t.Fatalf("members = %#v", o)
+	}
+	if got := StateText(o); got != "ok please help me with my card refund today" {
+		t.Errorf("StateText = %q", got)
+	}
+	if !IsEnglish(o) {
+		t.Error("Python reads this state as English")
+	}
+}
+
+// null is a no-op, as encoding/json treats it for its own types; trailing data is refused.
+func TestObjectUnmarshalJSONNullAndTrailingData(t *testing.T) {
+	o := Object{{Key: "k", Value: "kept"}}
+	if err := json.Unmarshal([]byte(`null`), &o); err != nil || len(o) != 1 {
+		t.Errorf("null: err %v, members %v", err, o)
+	}
+	var holder struct{ State Object }
+	if err := json.Unmarshal([]byte(`{"State":null}`), &holder); err != nil || holder.State != nil {
+		t.Errorf("null field: err %v, state %v", err, holder.State)
+	}
+	var direct Object
+	for _, doc := range []string{`{} x`, `{"a":[1}`, `{"a":"b"} {}`} {
+		if err := direct.UnmarshalJSON([]byte(doc)); err == nil {
+			t.Errorf("%s must be refused", doc)
+		}
+	}
+}
+
 func TestScriptConstantsAreTheNamesPythonUses(t *testing.T) {
 	for script, text := range map[Script]string{
 		ScriptLatin: "hello", ScriptHan: "你好吗", ScriptDevanagari: "नमस्ते", ScriptCyrillic: "привет",
