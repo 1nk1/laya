@@ -613,14 +613,10 @@ export class Router extends HookRegistry {
       router: this,
     });
     try {
-      if (!hasStart) {
-        for (const [qid, qdef] of Object.entries(questions)) {
-          checkQuestion(qid, qdef);
-        }
-      }
-
       // Per-call hooks apply to the whole call, including onRoute inside route().
       const decision = this.route(state, questions, opts);
+      ctx.decision = { ...decision } as unknown as Record<string, unknown>;
+      ctx.model = decision.model;
       const agent = (await this.load(decision.model)) as {
         systemOne(
           s: unknown,
@@ -628,8 +624,6 @@ export class Router extends HookRegistry {
           opts?: PredictOptions,
         ): Promise<SystemOneResult>;
       };
-      ctx.decision = { ...decision } as unknown as Record<string, unknown>;
-      ctx.model = decision.model;
       ctx.agent = agent;
 
       await dispatchAsync(active, "onPredictStart", ctx, { raiseErrors });
@@ -640,9 +634,9 @@ export class Router extends HookRegistry {
               `questions must be a dict of question id -> definition, got ${ctx.questions === null ? "null" : Array.isArray(ctx.questions) ? "Array" : typeof ctx.questions}`,
             );
           }
-          for (const [qid, qdef] of Object.entries(ctx.questions as Record<string, QuestionDef>)) {
-            checkQuestion(qid, qdef);
-          }
+        }
+        for (const [qid, qdef] of Object.entries(ctx.questions as Record<string, QuestionDef>)) {
+          checkQuestion(qid, qdef);
         }
         // Python parity (router.py predict): the request's language also shapes the answer
         // distribution through the agent's lang_temperatures. An explicit lang wins;

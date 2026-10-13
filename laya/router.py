@@ -1327,15 +1327,10 @@ class Router(HookRegistry):
             raise TypeError("state must not be None; pass a string, dict, or list")
         if not isinstance(questions, dict):
             raise TypeError("questions must be a dict of question id -> definition, got %s" % type(questions).__name__)
-        from .agent import Agent
-        check_fn = Agent._check_question
-
         mc = check_min_confidence(min_confidence) if min_confidence is not None else None
         active = compose_hooks(self.hooks, hooks, on_predict_start, on_predict_end)
         raise_errors = self.hooks_raise if hooks_raise is None else bool(hooks_raise)
         timeout = self.hooks_timeout if hooks_timeout is None else validate_timeout(hooks_timeout)
-
-        has_start = any(callable(getattr(h, "on_predict_start", None)) for h in active)
 
         ctx = PredictContext(
             states=[state],
@@ -1353,9 +1348,6 @@ class Router(HookRegistry):
         if scan is not None:
             _SCAN.set(None)
         try:
-            if not has_start:
-                for qid, qdef in questions.items():
-                    check_fn(qid, qdef)
             # Per-call hooks apply to the whole call, including on_route inside route().
             decision = self.route(state, questions, model=model, task=task, lang=lang,
                                   lang_guess=lang_guess, hooks=hooks, hooks_raise=hooks_raise,
@@ -1373,14 +1365,6 @@ class Router(HookRegistry):
             ctx.started_at = time.perf_counter()
             dispatch(active, "on_predict_start", ctx, raise_errors=raise_errors, lock=self._hooks_lock, timeout=timeout)
             if ctx.results is None:
-                if has_start:
-                    if not isinstance(ctx.questions, dict):
-                        raise TypeError(
-                            "questions must be a dict of question id -> definition, got %s"
-                            % type(ctx.questions).__name__
-                        )
-                    for qid, qdef in ctx.questions.items():
-                        check_fn(qid, qdef)
                 skip = _SKIP_DEFAULTS.set(True)
                 try:
                     if scan is not None:

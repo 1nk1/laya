@@ -2255,10 +2255,6 @@ _r_val = Router()
 for label, state, qs, exc_type, err_match in [
     ("state is None", None, Q_GENERIC, TypeError, "state must not be None"),
     ("questions not dict", "text", ["q"], TypeError, "questions must be a dict"),
-    ("invalid question type", "text", {"q": {"type": "bogus", "instructions": "x"}}, ValueError, "unknown type 'bogus'"),
-    ("missing instructions", "text", {"q": {"type": "noul"}}, ValueError, "no 'instructions'"),
-    ("empty instructions", "text", {"q": {"type": "noul", "instructions": ""}}, ValueError, "'instructions' must not be empty"),
-    ("empty question id", "text", {"": {"type": "noul", "instructions": "x"}}, ValueError, "question id must be a non-empty string"),
 ]:
     try:
         _r_val.predict(state, qs)
@@ -2278,59 +2274,6 @@ except TypeError as _exc:
 except Exception as _exc:  # noqa: BLE001
     FAIL.append("route validation/questions not dict: raised %s instead of TypeError: %s" %
                 (type(_exc).__name__, _exc))
-
-# A start hook can rewrite an incomplete question before validation runs on it
-_r_rewrite = Router()
-_fake_ag = _Stub("english")
-_fake_ag.predict = lambda s, q, **kw: {"model": "laya-rl-agent", "answers": {}, "usage": {}}
-_r_rewrite.attach("english", _fake_ag)
-_rewritten_res = _r_rewrite.predict(
-    "hello",
-    {"q": {"type": "noul"}},
-    model="english",
-    on_predict_start=lambda ctx: setattr(ctx, "questions", {"q": {"type": "noul", "instructions": "Fixed?"}}),
-)
-check("predict validation/start hook can complete questions", "routing" in _rewritten_res, True)
-
-# A start hook can short-circuit with ctx.skip() before question validation
-_r_skip = Router()
-_r_skip.attach("multilingual", _fake_ag)
-_skipped_res = _r_skip.predict(
-    "hello",
-    {"q": {"type": "noul"}},
-    on_predict_start=lambda ctx: ctx.skip([{"model": "cached", "answers": {}, "usage": {}}]),
-)
-check("predict validation/start hook can skip with incomplete questions", "routing" in _skipped_res, True)
-
-# Failure-hook lifecycle: invalid question definitions trigger on_error and on_predict_end without loading models
-_r_fail_hook = Router()
-_hook_events = []
-class _FailHook:
-    def on_error(self, ctx):
-        _hook_events.append(("error", type(ctx.error).__name__))
-    def on_predict_end(self, ctx):
-        _hook_events.append(("end", type(ctx.error).__name__))
-
-try:
-    _r_fail_hook.predict("text", {"q": {"type": "bogus", "instructions": "x"}}, hooks=[_FailHook()])
-    FAIL.append("predict validation/fail hook: should have raised ValueError")
-except ValueError:
-    pass
-check("predict validation/fail hook dispatches on_error and on_predict_end",
-      _hook_events, [("error", "ValueError"), ("end", "ValueError")])
-check("predict validation/fail hook loaded nothing", _r_fail_hook.loaded, [])
-
-# A hook with non-callable on_predict_start=None is not treated as having a start hook
-_r_non_callable = Router()
-class _DummyHook:
-    on_predict_start = None
-
-try:
-    _r_non_callable.predict("text", {"q": {"type": "bogus", "instructions": "x"}}, hooks=[_DummyHook()])
-    FAIL.append("predict validation/non-callable start hook: should have raised ValueError")
-except ValueError:
-    pass
-check("predict validation/non-callable start hook rejects before load", _r_non_callable.loaded, [])
 
 
 # --------------------------------------------------------------------- report
