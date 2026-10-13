@@ -12,6 +12,7 @@ The foundation (language detection, questions, sequences, the tokenizer) and the
 | `sequence` | `build_sequence`, `build_head`, `state_room`, `window_budget` and `window_batch_cap`: `EncodeState`, `Build`, `StateRoom`, `PlanWindows`, `BatchCap`. |
 | `infer` | The seam to a model runtime: `Batch` (the graph's five inputs), `Output` (its two), `Session`, and the shape checks `Batch.Validate` and `Output.Check`. |
 | `agent` | `ONNXAgent.predict` and `predict_batch` over an `infer.Session`: `Open`, `Predict`, `PredictBatch`, `LoadConfig`, with batch size, sort-by-length and context cancellation between runs. |
+| `onnx` | A nested module (cgo, its own `go.mod`): `onnx.Open` runs a fused `laya.onnx` on ONNX Runtime and implements `infer.Session`, for `agent.Open`. Needs an ONNX Runtime 1.29+ shared library; `CGO_ENABLED=0` builds and `Open` returns `ErrNoCGO`. |
 | `tokenizer` | A reader and runner for Hugging Face `tokenizer.json` (BPE): normalizer, pre-tokenizer, added tokens, byte fallback, decoder. |
 | `internal/unicodedata` | The character predicates `laya/lang.py` leans on, recorded from CPython. |
 | `internal/pyjson` | `json.dumps` and `repr` spelled as CPython spells them. |
