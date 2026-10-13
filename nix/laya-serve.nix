@@ -257,10 +257,11 @@ in
       example = 16;
       description = ''
         Answer a `choice` with more options than this by elimination, in groups
-        of this size, on /v1/systemone (sets `LAYA_TOURNAMENT_GROUP`), and raise
-        its option cap from 100 to 255. Every option still comes back in
-        `probabilities`; one eliminated in an earlier round carries 0.0. null
-        leaves it off, so every choice is read in one pass as before.
+        of this size, on /v1/systemone and /v1/systemone/batch (sets
+        `LAYA_TOURNAMENT_GROUP`), and raise their option cap from 100 to 255.
+        Every option still comes back in `probabilities`; one eliminated in an
+        earlier round carries 0.0. null leaves it off, so every choice is read
+        in one pass as before.
       '';
     };
 
