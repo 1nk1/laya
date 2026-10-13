@@ -208,7 +208,7 @@ func TestPredictPlanGolden(t *testing.T) {
 					opts = append(opts, agent.WithBatchSize(fixtures.Int(t, n)))
 				}
 				if fixtures.Bool(t, rec.Must("sort")) {
-					opts = append(opts, agent.WithSortByLength())
+					opts = append(opts, agent.WithSortByLength(true))
 				}
 				if tag := rec.Must("lang"); tag != nil {
 					opts = append(opts, agent.WithLanguage(fixtures.Str(t, tag)))

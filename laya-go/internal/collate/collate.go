@@ -1,5 +1,5 @@
 // Package collate pads built sequences into the rectangular tensors the graph takes. The
-// tensor layout is the ONNX graph's contract, not a caller's, so this stays internal.
+// tensor layout is the ONNX graph's contract; callers see the result as an infer.Batch.
 //
 // One row per question, not per state: four questions about one document are four rows that
 // share a state. Rows are padded to the longest sequence and markers to the most options.

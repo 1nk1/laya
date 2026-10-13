@@ -2,6 +2,8 @@ package infer_test
 
 import (
 	"errors"
+	"math"
+	"strings"
 	"testing"
 
 	"github.com/NandhaKishorM/laya/laya-go/infer"
@@ -31,7 +33,18 @@ func TestBatchValidate(t *testing.T) {
 		{"short marker_mask", func(b *infer.Batch) { b.MarkerMask = b.MarkerMask[:1] }, "marker_mask"},
 		{"short qtype", func(b *infer.Batch) { b.QType = nil }, "qtype"},
 		{"one marker slot", func(b *infer.Batch) { *b = batch(3, 4, 1) }, "other"},
+		{"no marker slots", func(b *infer.Batch) { *b = batch(3, 4, 0) }, "other"},
 		{"negative rows", func(b *infer.Batch) { b.Rows = -1 }, "other"},
+		{"negative length", func(b *infer.Batch) { b.Length = -1 }, "other"},
+		{"negative markers", func(b *infer.Batch) { b.Markers = -2 }, "other"},
+		{"rows of no tokens", func(b *infer.Batch) { *b = batch(3, 0, 2) }, "other"},
+		{"marker position below zero", func(b *infer.Batch) { b.MarkerPos[2] = -1 }, "other"},
+		{"marker position at the length", func(b *infer.Batch) { b.MarkerPos[5] = 4 }, "other"},
+		{"marker position in range", func(b *infer.Batch) { b.MarkerPos[5] = 3 }, ""},
+		// 2 * 2^62 wraps to the most negative int, which no slice length equals.
+		{"rows x length overflows", func(b *infer.Batch) { *b = infer.Batch{Rows: 2, Length: math.MaxInt/2 + 1, Markers: 2} }, "overflow"},
+		{"rows x markers overflows", func(b *infer.Batch) { *b = infer.Batch{Rows: 4, Length: 1, Markers: math.MaxInt/2 + 1} }, "overflow"},
+		{"rows x length wraps to zero", func(b *infer.Batch) { *b = infer.Batch{Rows: math.MaxInt/2 + 1, Length: 2, Markers: 2} }, "overflow"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -42,9 +55,11 @@ func TestBatchValidate(t *testing.T) {
 			switch {
 			case c.field == "" && err != nil:
 				t.Fatalf("Validate = %v, want nil", err)
+			case c.field == "overflow" && (err == nil || errors.As(err, &se) || !strings.Contains(err.Error(), "overflow")):
+				t.Fatalf("Validate = %v, want an overflow error", err)
 			case c.field == "other" && (err == nil || errors.As(err, &se)):
 				t.Fatalf("Validate = %v, want a plain error", err)
-			case c.field != "" && c.field != "other" && (!errors.As(err, &se) || se.Name != c.field):
+			case c.field != "" && c.field != "other" && c.field != "overflow" && (!errors.As(err, &se) || se.Name != c.field):
 				t.Fatalf("Validate = %v, want a ShapeError for %s", err, c.field)
 			}
 		})
@@ -70,6 +85,25 @@ func TestOutputCheck(t *testing.T) {
 	}
 }
 
+func TestMessagesAndNamesCarryThePackage(t *testing.T) {
+	for _, err := range []error{
+		infer.ErrClosed, &infer.ShapeError{Name: infer.NameLogits, Got: 1, Want: 2},
+		infer.Batch{Rows: -1}.Validate(), batch(1, 1, 1).Validate(),
+	} {
+		if !strings.HasPrefix(err.Error(), "infer: ") {
+			t.Errorf("%q lacks the package prefix", err)
+		}
+	}
+	for got, want := range map[string]string{
+		infer.NameInputIDs: "input_ids", infer.NameAttentionMask: "attention_mask", infer.NameMarkerPos: "marker_pos",
+		infer.NameMarkerMask: "marker_mask", infer.NameQType: "qtype", infer.NameLogits: "logits", infer.NameActLogits: "act_logits",
+	} {
+		if got != want {
+			t.Errorf("tensor name %q, want %q", got, want)
+		}
+	}
+}
+
 // TestCollateBatchIsInferBatch pins the alias: a Batch the collator builds is a valid infer.Batch.
 func TestCollateBatchIsInferBatch(t *testing.T) {
 	b, err := collate.Collate([]collate.Row{
@@ -82,5 +116,14 @@ func TestCollateBatchIsInferBatch(t *testing.T) {
 	var ib infer.Batch = b
 	if err := ib.Validate(); err != nil || ib.Rows != 2 || ib.Length != 3 || ib.Markers != 2 {
 		t.Fatalf("Validate = %v on %+v", err, ib)
+	}
+}
+
+// TestValidateNamesTheEmptyRow pins that rows of no tokens are refused for that reason, not as a
+// side effect of the marker range check.
+func TestValidateNamesTheEmptyRow(t *testing.T) {
+	err := batch(3, 0, 2).Validate()
+	if err == nil || !strings.Contains(err.Error(), "0 tokens") {
+		t.Fatalf("Validate = %v", err)
 	}
 }

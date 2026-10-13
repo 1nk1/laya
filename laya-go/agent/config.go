@@ -11,6 +11,7 @@ import (
 	"github.com/NandhaKishorM/laya/laya-go/internal/decode"
 	"github.com/NandhaKishorM/laya/laya-go/internal/pyjson"
 	"github.com/NandhaKishorM/laya/laya-go/internal/pyvalue"
+	"github.com/NandhaKishorM/laya/laya-go/internal/unicodedata"
 )
 
 // configFile is the checkpoint file the configuration is read from.
@@ -25,7 +26,7 @@ const (
 
 // ErrUnsupportedLayout is wrapped when a checkpoint's option_layout is not "sequential", the
 // only layout the exported graph takes.
-var ErrUnsupportedLayout = errors.New("laya: option_layout is not supported by the ONNX runtime")
+var ErrUnsupportedLayout = errors.New("agent: option_layout is not supported by the ONNX runtime")
 
 // ConfigError reports a missing or malformed rl_agent_config.json.
 type ConfigError struct {
@@ -34,18 +35,29 @@ type ConfigError struct {
 	Err   error
 }
 
+// tokenizerField is the ConfigError.Field of a tokenizer that could not be loaded.
+const tokenizerField = "tokenizer"
+
 // Error names the file, the field when there is one, and the cause.
 func (e *ConfigError) Error() string {
-	if e.Field == "" {
-		return "laya: " + configFile + ": " + e.Err.Error()
+	cause := "<nil>"
+	if e.Err != nil {
+		cause = e.Err.Error()
 	}
-	return "laya: " + configFile + ": " + e.Field + ": " + e.Err.Error()
+	switch e.Field {
+	case "":
+		return "agent: " + configFile + ": " + cause
+	case tokenizerField:
+		return "agent: tokenizer: " + cause // not a field of the config file
+	}
+	return "agent: " + configFile + ": " + e.Field + ": " + cause
 }
 
 // Unwrap returns the cause.
 func (e *ConfigError) Unwrap() error { return e.Err }
 
-// Config is the checkpoint configuration an Agent runs with.
+// Config is the checkpoint configuration an Agent runs with. Temperatures are not in it; the
+// Agent holds them clamped.
 type Config struct {
 	// MaxLen is the whole sequence budget: max_len, default 512.
 	MaxLen int
@@ -59,7 +71,7 @@ type Config struct {
 }
 
 // LoadConfig reads and checks rl_agent_config.json from the root of checkpoint, as ONNXAgent
-// does: max_len, head_max_len and option_layout, with the temperatures clamped.
+// does: max_len, head_max_len and option_layout, and a warning for every temperature clamped.
 func LoadConfig(checkpoint fs.FS) (Config, error) {
 	cfg, _, err := loadConfig(checkpoint)
 	return cfg, err
@@ -103,6 +115,11 @@ func loadConfig(checkpoint fs.FS) (Config, *decode.Temperatures, error) {
 		}
 		n, isNumber := raw.(json.Number)
 		size, err := strconv.Atoi(string(n))
+		var numErr *strconv.NumError
+		if errors.As(err, &numErr) && numErr.Err == strconv.ErrRange && !strings.HasPrefix(string(n), "-") {
+			return Config{}, nil, &ConfigError{Field: f.key,
+				Err: fmt.Errorf("%s is too large for an int", n)}
+		}
 		if !isNumber || err != nil || size <= 0 {
 			return Config{}, nil, &ConfigError{Field: f.key,
 				Err: fmt.Errorf("want a positive integer, got %s", pyvalue.Repr(raw))}
@@ -160,9 +177,17 @@ func loadConfig(checkpoint fs.FS) (Config, *decode.Temperatures, error) {
 	return cfg, temps, nil
 }
 
-// sameNumber is float(raw) == applied: false for anything that is not a number.
+// sameNumber is float(raw) == applied: false for anything float() refuses. A string is read as
+// decode.Clamp reads it: stripped, and without the hex and underscore spellings Python rejects.
 func sameNumber(raw any, applied float64) bool {
 	switch x := raw.(type) {
+	case string:
+		s := unicodedata.Strip(x)
+		if strings.ContainsAny(s, "xXpP_") {
+			return false
+		}
+		f, err := strconv.ParseFloat(s, 64)
+		return err == nil && f == applied
 	case json.Number:
 		f, err := strconv.ParseFloat(string(x), 64)
 		return err == nil && f == applied

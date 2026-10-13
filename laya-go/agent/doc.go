@@ -15,6 +15,23 @@
 // or sorting. Batch shape does change padding, and with it a probability's last digits, so
 // results are compared with a tolerance across shapes, not byte for byte.
 //
+// # Differences from Python
+//
+// With no questions, Python writes a usage of two keys (input_tokens, output_tokens); schema.Usage
+// writes all seven, and so does this package.
+//
+// A nil state is refused, with or without questions, where Python raises a TypeError only when
+// there are questions. A nil slice or map is an empty list or dict, as in Python.
+//
+// max_len and head_max_len are checked at load and must be positive integers; Python reads them
+// with cfg.get and checks nothing until a call uses them.
+//
+// A temperature that is not a list of exactly 3 numbers is refused at load, as Python's torch
+// Agent refuses it; ONNXAgent loads it.
+//
+// A NaN or infinite logit is refused, including a -Inf for a real option, where Python would
+// answer probability 0 for that option. A model that emits one is broken.
+//
 // # Scope
 //
 // Not here yet: per-language temperature overrides, the calibration file, min_confidence,

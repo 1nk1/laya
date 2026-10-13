@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -35,18 +36,25 @@ type run struct {
 type fakeSession struct {
 	mu     sync.Mutex
 	runs   []run
+	pads   [][]int64 // per run, the distinct ids under a zero mask
 	closes int
 	// before, when set, runs at the start of each Run with the number of runs so far.
 	before func(n int) error
 	// shape, when set, edits the output before it is returned.
 	shape func(*infer.Output)
+	// onCtx, when set, sees the context each Run was given.
+	onCtx func(context.Context)
 }
 
-func (s *fakeSession) Run(_ context.Context, b infer.Batch) (infer.Output, error) {
+func (s *fakeSession) Run(ctx context.Context, b infer.Batch) (infer.Output, error) {
+	if s.onCtx != nil {
+		s.onCtx(ctx)
+	}
 	if err := b.Validate(); err != nil {
 		return infer.Output{}, err
 	}
 	r := run{Rows: b.Rows, Length: b.Length, Markers: b.Markers}
+	var pads []int64
 	out := infer.Output{Logits: make([]float32, b.Rows*b.Markers), ActLogits: make([]float32, b.Rows*2)}
 	for i := 0; i < b.Rows; i++ {
 		var sum, tokens, markers int64
@@ -54,6 +62,8 @@ func (s *fakeSession) Run(_ context.Context, b infer.Batch) (infer.Output, error
 			if b.AttentionMask[i*b.Length+j] == 1 {
 				sum += b.InputIDs[i*b.Length+j]
 				tokens++
+			} else if id := b.InputIDs[i*b.Length+j]; !slices.Contains(pads, id) {
+				pads = append(pads, id)
 			}
 		}
 		for j := 0; j < b.Markers; j++ {
@@ -73,6 +83,7 @@ func (s *fakeSession) Run(_ context.Context, b infer.Batch) (infer.Output, error
 	s.mu.Lock()
 	n := len(s.runs)
 	s.runs = append(s.runs, r)
+	s.pads = append(s.pads, pads)
 	before, shape := s.before, s.shape
 	s.mu.Unlock()
 	if before != nil {
@@ -346,7 +357,7 @@ func TestEmptyQuestionsAndStates(t *testing.T) {
 func TestStateErrors(t *testing.T) {
 	a, s := open(t, `{}`)
 	ctx := context.Background()
-	if _, err := a.PredictBatch(ctx, []any{"fine", nil}, questions(t)); err == nil || !strings.Contains(err.Error(), "state 1 is nil") {
+	if _, err := a.PredictBatch(ctx, []any{"fine", nil}, questions(t)); err == nil || !strings.Contains(err.Error(), "state 1: is nil") {
 		t.Errorf("nil state: %v", err)
 	}
 	if _, err := a.Predict(ctx, struct{ X int }{1}, questions(t)); !errors.Is(err, sequence.ErrUnsupportedState) {
@@ -458,7 +469,7 @@ func TestResultsAreTheSameWhateverTheBatching(t *testing.T) {
 		for _, sorted := range []bool{false, true} {
 			opts := []agent.CallOption{agent.WithBatchSize(size)}
 			if sorted {
-				opts = append(opts, agent.WithSortByLength())
+				opts = append(opts, agent.WithSortByLength(true))
 			}
 			got, err := a.PredictBatch(ctx, states, qs, opts...)
 			if err != nil || len(got) != len(states) {
@@ -507,13 +518,13 @@ func TestChunkingAndSorting(t *testing.T) {
 	// Sorting reorders only when 1 < chunk < states: otherwise the runs are the unsorted ones.
 	for _, size := range []int{1, 11, 40} {
 		plain := record(agent.WithBatchSize(size))
-		sorted := record(agent.WithBatchSize(size), agent.WithSortByLength())
+		sorted := record(agent.WithBatchSize(size), agent.WithSortByLength(true))
 		if !reflect.DeepEqual(plain, sorted) {
 			t.Errorf("batch %d: sorting changed the runs", size)
 		}
 	}
 	unsorted := lengths(record(agent.WithBatchSize(3)))
-	sorted := lengths(record(agent.WithBatchSize(3), agent.WithSortByLength()))
+	sorted := lengths(record(agent.WithBatchSize(3), agent.WithSortByLength(true)))
 	for i := 1; i < len(sorted); i++ {
 		if sorted[i] < sorted[i-1] {
 			t.Errorf("sorted run lengths %v are not ascending", sorted)
@@ -650,7 +661,7 @@ func TestContextStopsTheBatchBetweenChunks(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		defer cancel()
 		s.before = func(int) error { <-ctx.Done(); return nil }
-		if _, err := a.PredictBatch(ctx, states, qs, agent.WithBatchSize(2), agent.WithSortByLength()); !errors.Is(err, context.DeadlineExceeded) {
+		if _, err := a.PredictBatch(ctx, states, qs, agent.WithBatchSize(2), agent.WithSortByLength(true)); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("PredictBatch = %v", err)
 		}
 		if n := len(s.seen()); n != 1 {
@@ -687,7 +698,7 @@ func TestConcurrentPredict(t *testing.T) {
 					}
 					continue
 				}
-				got, err := a.PredictBatch(context.Background(), states, qs, agent.WithBatchSize(3+g), agent.WithSortByLength())
+				got, err := a.PredictBatch(context.Background(), states, qs, agent.WithBatchSize(3+g), agent.WithSortByLength(true))
 				if err != nil {
 					errs <- err
 					return

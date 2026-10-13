@@ -961,13 +961,37 @@ def build():
 EXP_DEPENDENT = ("label_answers", "answers_fuzz")
 
 
+def _unnumber(value):
+    """value with every number replaced by 0, so only its structure is left."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return 0
+    if isinstance(value, dict):
+        return {k: _unnumber(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_unnumber(v) for v in value]
+    return value
+
+
+def _answers_shape(answers):
+    """Each answer's type, key sets and order, legend and ids; no number, and no chosen value."""
+    out = {}
+    for question_id, answer in answers.items():
+        shaped = _unnumber(answer)
+        if "choice" in shaped:
+            shaped["choice"] = None
+        out[question_id] = shaped
+    return out
+
+
 def portable(payload):
     out = dict(payload)
     for name in EXP_DEPENDENT:
         out[name] = {"cases": [{k: v for k, v in case.items() if k != "answer_text"}
                                for case in payload[name]["cases"]]}
     out["predict_plan"] = {
-        name: ({"cases": [{**case, "results": [{k: v for k, v in r.items() if k != "answers"}
+        name: ({"cases": [{**case, "results": [{**r, "answers": _answers_shape(r["answers"])}
                                               for r in case["results"]]}
                           for case in value["cases"]]} if name != "questions" else value)
         for name, value in payload["predict_plan"].items()}

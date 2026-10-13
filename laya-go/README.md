@@ -2,8 +2,8 @@
 
 A pure-Go port of [laya](../README.md). Standard library only: no cgo, no third-party modules.
 
-This first slice is the foundation the rest of the port stands on. The routing and model layers
-(ONNX, agent, router) come in later changes.
+The foundation (language detection, questions, sequences, the tokenizer) and the predict path
+(`infer`, `agent`) are here. The native ONNX session and the router come in later changes.
 
 | Package | What it is |
 | --- | --- |
@@ -11,7 +11,7 @@ This first slice is the foundation the rest of the port stands on. The routing a
 | `schema` | Questions (`Choice`, `ChoiceOf`, `Score`, `Noul`, `NoulWith`, `Questions`) and results (`Answer`, `Prediction`, `Usage`) every other package shares. Questions are refused with laya's own wording and read or written in the Python wire form. |
 | `sequence` | `build_sequence`, `build_head`, `state_room`, `window_budget` and `window_batch_cap`: `EncodeState`, `Build`, `StateRoom`, `PlanWindows`, `BatchCap`. |
 | `infer` | The seam to a model runtime: `Batch` (the graph's five inputs), `Output` (its two), `Session`, and the shape checks `Batch.Validate` and `Output.Check`. |
-| `agent` | `ONNXAgent.predict` and `predict_batch` over an `infer.Session`: `Open`, `Predict`, `PredictBatch`, `LoadConfig`, with batch size, sort-by-length and context cancellation. |
+| `agent` | `ONNXAgent.predict` and `predict_batch` over an `infer.Session`: `Open`, `Predict`, `PredictBatch`, `LoadConfig`, with batch size, sort-by-length and context cancellation between runs. |
 | `tokenizer` | A reader and runner for Hugging Face `tokenizer.json` (BPE): normalizer, pre-tokenizer, added tokens, byte fallback, decoder. |
 | `internal/unicodedata` | The character predicates `laya/lang.py` leans on, recorded from CPython. |
 | `internal/pyjson` | `json.dumps` and `repr` spelled as CPython spells them. |
@@ -39,11 +39,13 @@ order-sensitive state. `Analyze` reads every leaf, so its cost grows with the nu
 ## Layout
 
 - No root package: the module path ends in `laya-go`, so tags are `laya-go/vX.Y.Z`.
-- Pure-Go packages are `lang` now and `router`, `presets` and `shortlist` later.
-- cgo, if ever needed, lives only in a future `onnx` package, with a `//go:build !cgo` stub.
-  Importing `lang` never compiles cgo.
+- Every package in this module is pure Go: `lang`, `schema`, `sequence`, `tokenizer`, `infer` and
+  `agent` now, and `router`, `presets` and `shortlist` later.
+- cgo will live only in an `onnx` package, a nested module with its own `go.mod`, so `go test ./...`
+  here never compiles it. Importing `lang` or `agent` never compiles cgo.
 - `tokenizer` is public (`LoadFS`, `Parse`); `internal/unicodedata`, `internal/pyjson`,
-  `internal/decode` and `internal/collate` stay internal.
+  `internal/decode` and `internal/collate` stay internal. `infer.Batch` is the public name of
+  what `collate` builds.
 
 ## Parity
 ## Parity

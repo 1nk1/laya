@@ -4,10 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 )
 
 // ErrClosed is returned by a Session that has been closed.
-var ErrClosed = errors.New("laya: session is closed")
+var ErrClosed = errors.New("infer: session is closed")
+
+// The graph's tensor names, as ShapeError.Name carries them and as a native session binds them.
+const (
+	NameInputIDs      = "input_ids"
+	NameAttentionMask = "attention_mask"
+	NameMarkerPos     = "marker_pos"
+	NameMarkerMask    = "marker_mask"
+	NameQType         = "qtype"
+	NameLogits        = "logits"
+	NameActLogits     = "act_logits"
+)
 
 // Batch is the graph's five inputs, each flattened row-major, as onnxruntime tensors take them.
 type Batch struct {
@@ -24,9 +36,12 @@ type Output struct {
 	Logits, ActLogits []float32
 }
 
-// Session runs one collated batch. Implementations must be safe for concurrent Run.
+// Session runs one collated batch. Implementations must be safe for concurrent Run. The agent
+// never calls Close concurrently with Run.
 type Session interface {
 	// Run returns the logits for b. It should return ctx.Err() if ctx ends before the run does.
+	// Run must not modify b's slices or retain them after it returns. The returned Output's
+	// slices belong to the caller, and the session must not reuse them.
 	Run(ctx context.Context, b Batch) (Output, error)
 	// Close releases the runtime. It is idempotent; Run after Close returns ErrClosed.
 	Close() error
@@ -34,7 +49,7 @@ type Session interface {
 
 // ShapeError is returned when a slice's length does not match the batch it belongs to.
 type ShapeError struct {
-	// Name is the tensor: "input_ids", "logits" and so on.
+	// Name is the tensor: NameInputIDs, NameLogits and so on.
 	Name string
 	// Got is the slice's length, Want the length the batch's dimensions call for.
 	Got, Want int
@@ -42,30 +57,50 @@ type ShapeError struct {
 
 // Error names the tensor and both lengths.
 func (e *ShapeError) Error() string {
-	return fmt.Sprintf("laya: %s has %d values, want %d", e.Name, e.Got, e.Want)
+	return fmt.Sprintf("infer: %s has %d values, want %d", e.Name, e.Got, e.Want)
 }
 
-// Validate reports a *ShapeError when a slice's length disagrees with Rows, Length and Markers,
-// and a plain error when a dimension is negative or Markers is below 2.
+// Validate checks, in order, that:
+//   - no dimension is negative;
+//   - a batch with rows has Length of at least 1 and Markers of at least 2, since the exported
+//     head takes topk(2);
+//   - Rows*Length and Rows*Markers do not overflow an int (Markers of at least 2 keeps Rows*2 safe too);
+//   - every slice's length matches Rows, Length and Markers, else a *ShapeError;
+//   - every MarkerPos lies in [0, Length).
+//
+// All but the ShapeError are plain errors.
 func (b Batch) Validate() error {
 	if b.Rows < 0 || b.Length < 0 || b.Markers < 0 {
-		return fmt.Errorf("laya: batch has negative dimensions %d x %d x %d", b.Rows, b.Length, b.Markers)
+		return fmt.Errorf("infer: batch has negative dimensions %d x %d x %d", b.Rows, b.Length, b.Markers)
 	}
-	if b.Rows > 0 && b.Markers < 2 {
-		return fmt.Errorf("laya: batch has %d marker slots, the graph needs at least 2", b.Markers)
+	if b.Rows > 0 {
+		if b.Length == 0 {
+			return fmt.Errorf("infer: batch has %d rows of 0 tokens", b.Rows)
+		}
+		if b.Markers < 2 {
+			return fmt.Errorf("infer: batch has %d marker slots, the graph needs at least 2", b.Markers)
+		}
+		if b.Length > math.MaxInt/b.Rows || b.Markers > math.MaxInt/b.Rows {
+			return fmt.Errorf("infer: batch dimensions %d x %d x %d overflow", b.Rows, b.Length, b.Markers)
+		}
 	}
 	for _, c := range []struct {
 		name      string
 		got, want int
 	}{
-		{"input_ids", len(b.InputIDs), b.Rows * b.Length},
-		{"attention_mask", len(b.AttentionMask), b.Rows * b.Length},
-		{"marker_pos", len(b.MarkerPos), b.Rows * b.Markers},
-		{"marker_mask", len(b.MarkerMask), b.Rows * b.Markers},
-		{"qtype", len(b.QType), b.Rows},
+		{NameInputIDs, len(b.InputIDs), b.Rows * b.Length},
+		{NameAttentionMask, len(b.AttentionMask), b.Rows * b.Length},
+		{NameMarkerPos, len(b.MarkerPos), b.Rows * b.Markers},
+		{NameMarkerMask, len(b.MarkerMask), b.Rows * b.Markers},
+		{NameQType, len(b.QType), b.Rows},
 	} {
 		if c.got != c.want {
 			return &ShapeError{Name: c.name, Got: c.got, Want: c.want}
+		}
+	}
+	for i, p := range b.MarkerPos {
+		if p < 0 || p >= int64(b.Length) {
+			return fmt.Errorf("infer: marker_pos[%d] is %d, outside [0, %d)", i, p, b.Length)
 		}
 	}
 	return nil
@@ -75,10 +110,10 @@ func (b Batch) Validate() error {
 // for b.
 func (o Output) Check(b Batch) error {
 	if len(o.Logits) != b.Rows*b.Markers {
-		return &ShapeError{Name: "logits", Got: len(o.Logits), Want: b.Rows * b.Markers}
+		return &ShapeError{Name: NameLogits, Got: len(o.Logits), Want: b.Rows * b.Markers}
 	}
 	if len(o.ActLogits) != b.Rows*2 {
-		return &ShapeError{Name: "act_logits", Got: len(o.ActLogits), Want: b.Rows * 2}
+		return &ShapeError{Name: NameActLogits, Got: len(o.ActLogits), Want: b.Rows * 2}
 	}
 	return nil
 }
