@@ -75,6 +75,10 @@ services:
       # `action` / `answer_confidence`, no `confidence` on noul answers, and `usage` reduced to
       # `input_tokens` + `output_tokens`. Empty keeps the server default (0, full payload).
       LAYA_JEV_STRICT: "${LAYA_JEV_STRICT:-}"
+      # Answer a choice with more options than this by elimination in groups of this size (2..100)
+      # on `/v1/systemone`, raising the option cap from 100 to 255 (#302). Empty keeps the server
+      # default (0, off: one pass up to 100 options).
+      LAYA_TOURNAMENT_GROUP: "${LAYA_TOURNAMENT_GROUP:-}"
       LAYA_LOG_LEVEL: "${LAYA_LOG_LEVEL:-info}"
       # The supply-chain pair: LAYA_REVISION says which Hub commit a checkpoint may load from (a
       # commit, branch, tag, or `reviewed` for the SHAs in laya/revisions.py) and
