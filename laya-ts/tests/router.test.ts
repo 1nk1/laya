@@ -96,4 +96,104 @@ describe("router", () => {
     expect(loader).toHaveBeenCalledTimes(2);
     expect(r.loaded).toEqual(["english"]);
   });
+  it("rejects invalid inputs in predict before loading any checkpoint", async () => {
+    const loader = vi.fn();
+    const r = new Router({ loader });
+
+    await expect(r.predict(null, { q: { type: "noul", instructions: "?" } })).rejects.toThrow(
+      TypeError,
+    );
+    await expect(r.predict(null, { q: { type: "noul", instructions: "?" } })).rejects.toThrow(
+      /state must not be None/,
+    );
+
+    await expect(r.predict("text", [] as never)).rejects.toThrow(TypeError);
+    await expect(r.predict("text", [] as never)).rejects.toThrow(
+      /questions must be a dict of question id -> definition/,
+    );
+
+    await expect(
+      r.predict("text", { q: { type: "bogus", instructions: "?" } } as never),
+    ).rejects.toThrow(/unknown type/);
+
+    await expect(
+      r.predict("text", { "": { type: "noul", instructions: "?" } } as never),
+    ).rejects.toThrow(/question id must be a non-empty string/);
+
+    await expect(
+      r.predict("text", { q: { type: "noul", instructions: "" } } as never),
+    ).rejects.toThrow(/instructions.*must not be empty/);
+
+    expect(loader).not.toHaveBeenCalled();
+    expect(r.loaded).toEqual([]);
+  });
+  it("rejects invalid questions type in route", () => {
+    const r = new Router();
+    expect(() => r.route("text", [] as never)).toThrow(TypeError);
+    expect(() => r.route("text", [] as never)).toThrow(
+      /questions must be a dict of question id -> definition/,
+    );
+  });
+  it("allows onPredictStart hook to complete an incomplete question or skip", async () => {
+    const loader = vi.fn(async () => ({
+      async systemOne() {
+        return { model: "laya-rl-agent", answers: {}, usage: { input_tokens: 5, output_tokens: 0 } };
+      },
+    }));
+    const r = new Router({ loader });
+    const res = await r.predict("text", { q: { type: "noul" } as never }, {
+      onPredictStart: (ctx) => {
+        ctx.questions = { q: { type: "noul", instructions: "Added by hook?" } };
+      },
+    });
+    expect(res.routing).toBeDefined();
+
+    const skipLoader = vi.fn();
+    const skipRouter = new Router({ loader: skipLoader });
+    const skipped = await skipRouter.predict("text", { q: { type: "noul" } as never }, {
+      onPredictStart: (ctx) => {
+        ctx.skip([{ model: "cached", answers: {}, usage: { input_tokens: 0, output_tokens: 0 } }]);
+      },
+    });
+    expect(skipped.routing).toBeDefined();
+    expect(skipped.model).toBe("cached");
+  });
+  it("dispatches onError and onPredictEnd on invalid question definition without loading", async () => {
+    const loader = vi.fn();
+    const r = new Router({ loader });
+    const events: string[] = [];
+
+    await expect(
+      r.predict("text", { q: { type: "bogus", instructions: "x" } } as never, {
+        hooks: [
+          {
+            onError(ctx) {
+              events.push(`error:${(ctx.error as Error).name}`);
+            },
+            onPredictEnd(ctx) {
+              events.push(`end:${(ctx.error as Error).name}`);
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow(/unknown type/);
+
+    expect(events).toEqual(["error:Error", "end:Error"]);
+    expect(loader).not.toHaveBeenCalled();
+    expect(r.loaded).toEqual([]);
+  });
+  it("treats non-function onPredictStart as no start hook and rejects before load", async () => {
+    const loader = vi.fn();
+    const r = new Router({ loader });
+
+    await expect(
+      r.predict("text", { q: { type: "bogus", instructions: "x" } } as never, {
+        hooks: [{ onPredictEnd: () => {}, onPredictStart: null as never }],
+      }),
+    ).rejects.toThrow(/unknown type/);
+
+    expect(loader).not.toHaveBeenCalled();
+    expect(r.loaded).toEqual([]);
+  });
 });
+
