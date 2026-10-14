@@ -245,34 +245,18 @@ func TestCloseWaitsForRunsInFlight(t *testing.T) {
 	}
 }
 
-func TestOtherGraphs(t *testing.T) {
-	p := need(t)
+// TestLayoutErrors needs no graph beyond the shared one: the split layout and a missing file are
+// built in a temporary directory.
+func TestLayoutErrors(t *testing.T) {
+	need(t)
 	closeShared(t)
-
+	splitDir := t.TempDir()
+	for _, name := range []string{"encoder.onnx", "head.onnx"} {
+		if err := os.WriteFile(filepath.Join(splitDir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var ge *GraphError
-	full := p.sibling("full-multilingual")
-	if s, err := Open(full); !errors.As(err, &ge) || s != nil {
-		t.Fatalf("Open(full) = %v, %v; want a *GraphError", s, err)
-	}
-	if ge.Path != full || !strings.Contains(ge.Problem, `"act_logits"`) || !strings.Contains(ge.Problem, "fixed batch") {
-		t.Fatalf("GraphError = %v", ge)
-	}
-	if references() != 0 || ort.IsInitialized() {
-		t.Fatalf("a rejected graph left refs %d, initialized %v", references(), ort.IsInitialized())
-	}
-
-	legacy, err := Open(p.sibling("legacy-multilingual"))
-	if err != nil {
-		t.Fatalf("legacy graph: %v", err)
-	}
-	b := makeBatch(3, 24, 4)
-	out, err := legacy.Run(context.Background(), b)
-	if err != nil || out.Check(b) != nil {
-		t.Fatalf("legacy Run = %v, %v", out, err)
-	}
-	legacy.Close()
-
-	splitDir := filepath.Dir(p.sibling("multilingual"))
 	if s, err := Open(splitDir); !errors.As(err, &ge) || s != nil || !strings.Contains(ge.Problem, "split encoder.onnx + head.onnx layout is not supported") {
 		t.Fatalf("Open(split) = %v, %v", s, err)
 	}
