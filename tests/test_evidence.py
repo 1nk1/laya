@@ -257,6 +257,50 @@ check("evidence CLI returns 0 on realistic pair", rc, 0)
 rc_bad = evals_cli.main(["evidence", "--checkpoint", os.path.join(tmp, "nope")])
 check("missing checkpoint dir -> usage error 2", rc_bad, 2)
 
+# ... but only that one shape of an unreadable path. `--report` pointing at a directory raised
+# `IsADirectoryError`, an `OSError` that is not a `FileNotFoundError`, so it walked past this
+# handler and out of `main`: a traceback and exit 1, the code `laya-evals` reserves for a quality
+# failure, on the run before it printed anything. The other rows were already usage errors and stay
+# so -- they are here because widening the catch to `OSError` must not swallow them, and because a
+# decode failure named no path, which matters most when the command takes two of them.
+import contextlib
+import io
+
+_dir_report = os.path.join(tmp, "a-directory")
+os.makedirs(_dir_report)
+_not_object = os.path.join(tmp, "not-an-object.json")
+with open(_not_object, "w", encoding="utf-8") as f:
+    json.dump([1, 2], f)
+_not_json = os.path.join(tmp, "not-json.json")
+with open(_not_json, "w", encoding="utf-8") as f:
+    f.write("{nope")
+_not_text = os.path.join(tmp, "not-text.json")
+with open(_not_text, "wb") as f:
+    f.write(b"\xff\xfe\x00\x01binary")
+_bad_config_ckpt = os.path.join(tmp, "ckpt-bad-config")
+os.makedirs(_bad_config_ckpt)
+with open(os.path.join(_bad_config_ckpt, "rl_agent_config.json"), "w", encoding="utf-8") as f:
+    f.write("{nope")
+
+for _label, _argv, _path in (
+        ("--report is a directory", ["evidence", "--checkpoint", ckpt, "--report", _dir_report],
+         _dir_report),
+        ("--report is JSON but not an object",
+         ["evidence", "--checkpoint", ckpt, "--report", _not_object], _not_object),
+        ("--report is not JSON", ["evidence", "--checkpoint", ckpt, "--report", _not_json],
+         _not_json),
+        ("--report is not UTF-8 text", ["evidence", "--checkpoint", ckpt, "--report", _not_text],
+         _not_text),
+        ("the checkpoint's own config is not JSON",
+         ["evidence", "--checkpoint", _bad_config_ckpt],
+         os.path.join(_bad_config_ckpt, "rl_agent_config.json"))):
+    _err = io.StringIO()
+    with contextlib.redirect_stderr(_err):
+        _rc = evals_cli.main(_argv)
+    check("evidence CLI: %s -> usage error 2" % _label, _rc, 2)
+    check_true("evidence CLI: %s prints no traceback" % _label, "Traceback" not in _err.getvalue())
+    check_true("evidence CLI: %s names the path" % _label, _path in _err.getvalue())
+
 # ... and on the artifact the research harness actually writes: identity at the document's top
 # level, no `config` key. Read through `inspect_checkpoint`/`format_summary`, which is the whole of
 # what `evidence` prints, so this covers the summary's own shape as well as the verdicts.
