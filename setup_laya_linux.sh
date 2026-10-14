@@ -5,8 +5,8 @@
 # wheels on Linux), downloads the three Laya checkpoints, and verifies the result with a real
 # forward pass.
 #
-# Usage:   ./setup_laya_linux.sh [--skip-models] [--skip-verify]
-#          TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu ./setup_laya_linux.sh
+# Usage:   ./setup_laya.sh [--skip-models] [--skip-verify]   (or ./setup_laya_linux.sh)
+#          TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu ./setup_laya.sh
 # Idempotent: re-running only fixes what is missing.
 set -euo pipefail
 
@@ -59,7 +59,12 @@ fi
 
 say "PyTorch"
 # Installed before the project so the editable install reuses this build instead of pulling
-# its own. TORCH_INDEX_URL selects another build, e.g. a CPU-only index.
+# its own. Without an NVIDIA driver, the CPU wheel avoids the much larger CUDA build.
+# An explicit TORCH_INDEX_URL always wins.
+if [ -z "${TORCH_INDEX_URL:-}" ] && ! command -v nvidia-smi >/dev/null 2>&1; then
+  TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+  echo "no NVIDIA driver found: using the CPU-only torch wheel"
+fi
 TORCH_ARGS=()
 if [ -n "${TORCH_INDEX_URL:-}" ]; then
   TORCH_ARGS=(--index-url "$TORCH_INDEX_URL")
