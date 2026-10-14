@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/NandhaKishorM/laya/laya-go/internal/pyjson"
@@ -121,14 +122,28 @@ type Usage struct {
 	// CollapsedOptions are the questions whose options no longer have a token span each, keyed
 	// by question id. nil unless the head budget collapsed some; laya omits the key then.
 	CollapsedOptions CollapsedQuestions `json:"options,omitempty"`
+	// Windows is how many windows a PredictLong call read: 1 for a state that fit one, 0 on a
+	// prediction that came from Predict or PredictBatch, where laya has no such key.
+	Windows int `json:"windows,omitempty"`
+	// TruncatedWindows is how many windows truncated. It is what a scan of several windows
+	// reports as "truncated", a count where a single call has a flag, so it is read only when
+	// Windows is above 1; Truncated is then TruncatedWindows > 0.
+	TruncatedWindows int `json:"-"`
 }
+
+// scanned reports whether u summarizes several windows, where laya's "truncated" is a count.
+func (u Usage) scanned() bool { return u.Windows > 1 }
 
 // MarshalJSON writes laya's usage dict by hand, so the bytes are Python's: truncated_questions is
 // always a list, never null, and the ids are not HTML-escaped.
 func (u Usage) MarshalJSON() ([]byte, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, `{"input_tokens":%d,"output_tokens":%d,"state_tokens":%d,"state_tokens_dropped":%d,"truncated":%t,"truncated_questions":[`,
-		u.InputTokens, u.OutputTokens, u.StateTokens, u.StateTokensDropped, u.Truncated)
+	truncated := strconv.FormatBool(u.Truncated)
+	if u.scanned() {
+		truncated = strconv.Itoa(u.TruncatedWindows)
+	}
+	fmt.Fprintf(&b, `{"input_tokens":%d,"output_tokens":%d,"state_tokens":%d,"state_tokens_dropped":%d,"truncated":%s,"truncated_questions":[`,
+		u.InputTokens, u.OutputTokens, u.StateTokens, u.StateTokensDropped, truncated)
 	for i, id := range u.TruncatedQuestions {
 		if i > 0 {
 			b.WriteByte(',')
@@ -146,8 +161,37 @@ func (u Usage) MarshalJSON() ([]byte, error) {
 		b.WriteString(`,"options":`)
 		b.Write(opts)
 	}
+	if u.Windows > 0 {
+		fmt.Fprintf(&b, `,"windows":%d`, u.Windows)
+	}
 	b.WriteByte('}')
 	return []byte(b.String()), nil
+}
+
+// UnmarshalJSON reads what MarshalJSON writes: "truncated" is a flag, or the window count of a
+// scan of several windows.
+func (u *Usage) UnmarshalJSON(data []byte) error {
+	type plain Usage // without the methods, so this does not recurse
+	aux := struct {
+		*plain
+		Truncated json.RawMessage `json:"truncated"`
+	}{plain: (*plain)(u)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	u.Truncated, u.TruncatedWindows = false, 0
+	switch raw := strings.TrimSpace(string(aux.Truncated)); raw {
+	case "", "null":
+	case "true", "false":
+		u.Truncated = raw == "true"
+	default:
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			return fmt.Errorf("schema: usage \"truncated\" must be a flag or a window count, got %s", raw)
+		}
+		u.TruncatedWindows, u.Truncated = n, n > 0
+	}
+	return nil
 }
 
 // MarshalJSON writes laya's predict() result: model, answers, usage.
