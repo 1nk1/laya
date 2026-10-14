@@ -110,6 +110,9 @@ DBLCOLON = re.compile(r'(?P<file>[A-Za-z0-9_.\-/]+\.py)::(?P<name>[A-Za-z_][A-Za
                       r'(?:\.[A-Za-z_][A-Za-z0-9_]*)?)')
 LINECITE = re.compile(r'(?P<file>[A-Za-z0-9_.\-/]+\.py):(?P<a>\d+)(?:\s*-\s*(?P<b>\d+))?')
 IDENT = re.compile(r'`(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)`')
+# `docs/index.md`'s deferral sentence: "<topics> is/are in the [README](...) for now."
+DEFERRAL = re.compile(r'(?P<topics>[A-Za-z0-9 ,&/]+?)\s+(?:is|are) in the\s+'
+                      r'\[README\]\([^)]*\)\s*for now\.')
 
 # What may sit between a backticked symbol and the citation after it. Punctuation and spacing
 # cover both live idioms -- "`Foo.bar` (`file:12`)" and "`Foo.bar`, (`file:12`)" -- and the
@@ -212,8 +215,44 @@ def positive_controls() -> None:
                got is None, got)
 
 
+def landing_page() -> None:
+    """``docs/index.md`` is the site's front door, and it used to send three topics back to the
+    README -- two of which have pages in this tree. A reader who trusts that sentence never finds
+    them, so hold it to the tree: a topic the front door defers must have no page here, and every
+    page it links must exist. The first half is the drift that actually happens (a page is added,
+    the front door is not told); the second is the row this fix added."""
+    path = os.path.join(ROOT, "docs", "index.md")
+    text = open(path, encoding="utf-8").read()
+    pages = sorted(f[:-3] for f in os.listdir(os.path.join(ROOT, "docs")) if f.endswith(".md"))
+    check_true("the landing-page check can see the guide pages", len(pages) >= 20,
+               "only %d docs/*.md pages" % len(pages))
+
+    deferred = DEFERRAL.search(text)
+    check_true("the landing page still defers something to the README", deferred is not None,
+               "the `... is/are in the [README](...) for now.` sentence is gone, so this check "
+               "has nothing to hold -- delete it deliberately, not by accident")
+    if deferred is None:
+        return
+    topics = [t.strip() for t in re.split(r",| and ", deferred.group("topics")) if t.strip()]
+    check_true("the deferral lists the topics by name", len(topics) >= 1, topics)
+    for topic in topics:
+        slug = re.sub(r"\s+", "-", re.sub(r"^the\s+", "", topic.lower()).strip())
+        check_true("the README-only claim about %r has no page in this tree" % topic,
+                   slug not in pages,
+                   "docs/%s.md exists, so the front door has to link it instead of deferring it"
+                   % slug)
+
+    links = [l for l in re.findall(r"\]\(([^)#\s]+\.md)\)", text) if not l.startswith("http")]
+    broken = [l for l in links
+              if not os.path.exists(os.path.join(ROOT, "docs", l.replace("/", os.sep)))]
+    check_true("every guide the landing page links exists", not broken, broken)
+    check_true("the landing-page link check has subjects", len(links) >= 10,
+               "only %d relative links: %s" % (len(links), links))
+
+
 def main() -> int:
     positive_controls()
+    landing_page()
     files = text_files()
     check_true("the scan covers the tree", len(files) > 300, "%d text files" % len(files))
 
