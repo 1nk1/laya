@@ -447,7 +447,10 @@ export class Agent extends HookRegistry {
     ];
     const rejected: string[] = [];
     for (const [name, rawV, applied] of entries) {
-      if (Number(rawV) === applied) continue;
+      // `clampTemperature` refuses a bool and installs the neutral 1.0, and `Number(true)` is
+      // exactly that 1.0, so comparing the two numbers alone read a JSON `true` as an accepted
+      // temperature and loaded it in silence. `false` was reported only because it floats to 0.0.
+      if (typeof rawV !== "boolean" && Number(rawV) === applied) continue;
       rejected.push(`${name}=${JSON.stringify(rawV) ?? String(rawV)} -> ${applied}`);
     }
     if (rejected.length > 0) {
