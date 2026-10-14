@@ -7,6 +7,7 @@ import warnings
 from contextlib import nullcontext
 from contextvars import ContextVar
 from functools import wraps
+from numbers import Integral
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
@@ -764,7 +765,18 @@ def td_lambda_targets(p_true: torch.Tensor, batch: Dict, lam: float = 1.0) -> to
 
 
 def ece_score(conf: np.ndarray, correct: np.ndarray, bins: int = 15) -> float:
-    """Expected Calibration Error across confidence bins."""
+    """Expected Calibration Error across confidence bins.
+
+    `bins` is the number of histogram buckets and must be an integer of at least 1. It is refused
+    rather than misread because `np.linspace(0, 1, bins + 1)` yields no interior edge for `0` and
+    `-1`: the loop body never runs and the function returns `0.0`, the best score ECE can report,
+    for a distribution that is anything but well calibrated. A count that arrives from a config
+    file as `0` therefore turns a calibration gate into one that always passes. `True` is refused
+    with the same argument -- it would silently histogram into a single bucket. Any other
+    `Integral` is accepted, a `numpy.int64` among them, since the arrays here are numpy's own.
+    """
+    if isinstance(bins, bool) or not isinstance(bins, Integral) or bins < 1:
+        raise ValueError("bins must be an integer of at least 1, got %r" % (bins,))
     if len(conf) == 0:
         return float("nan")
     edges = np.linspace(0, 1, bins + 1)
