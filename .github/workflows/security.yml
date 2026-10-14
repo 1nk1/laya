@@ -168,7 +168,7 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: gradle
-      - uses: gradle/actions/wrapper-validation@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+      - uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
         if: ${{ matrix.language == 'java-kotlin' }}
       # The Go cell compiles too, so it needs the same pinned toolchain `go.yml` uses and not
       # whatever the runner image happens to carry.
