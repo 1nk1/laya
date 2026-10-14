@@ -2,7 +2,9 @@
 // agent package can answer questions with it.
 //
 // It is a separate module because it needs cgo and a native ONNX Runtime shared library
-// (1.29 or newer, which the caller supplies). Open takes the fused laya.onnx, whose .data
+// (1.29 or newer, which the caller supplies). It requires the core laya-go module and
+// github.com/yalue/onnxruntime_go; until the core module is tagged it builds only inside the
+// laya repository, where go.mod points at it with a replace directive. Open takes the fused laya.onnx, whose .data
 // sidecar must sit beside it, and runs it on the CPU provider:
 //
 //	sess, err := onnx.Open("laya.onnx", onnx.WithLibrary("/opt/onnxruntime/libonnxruntime.so.1.30.0"))

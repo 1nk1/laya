@@ -15,7 +15,7 @@ import (
 	"github.com/NandhaKishorM/laya/laya-go/sequence"
 )
 
-// TestEnteringNeverWaitsForACallInFlight is the scenario of the second review: a Run is blocked,
+// TestEnteringNeverWaitsForACallInFlight is this scenario: a Run is blocked,
 // predictors with a short context arrive as Close begins, and none may wait for that Run.
 func TestEnteringNeverWaitsForACallInFlight(t *testing.T) {
 	s := &fakeSession{}

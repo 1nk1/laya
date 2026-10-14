@@ -181,8 +181,8 @@ jobs:
           pip install -r laya-dotnet/tools/requirements-regen.txt
 
       # The key is byte-identical to the multilingual predict cell in java.yml, so both share one
-      # entry. Like Java's, it is blind to model code outside laya/common.py; the `.laya-revision`
-      # stamp `prepare_checkpoint.py` reads is what stops a stale graph being reused.
+      # entry. Like Java's, it is blind to model code outside laya/common.py. The key hashes
+      # prepare_checkpoint.py, which holds HF_REVISION, so a revision bump misses the cache.
       - name: Cache the exported graph
         id: graph
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

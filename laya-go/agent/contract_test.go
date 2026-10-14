@@ -72,7 +72,7 @@ func blockedClose(t *testing.T, s *fakeSession, states []any, opts ...agent.Call
 	}
 }
 
-// TestCloseBehindABlockedRunDoesNotStallNewCalls is the reviewer's scenario: Close waits on a
+// TestCloseBehindABlockedRunDoesNotStallNewCalls covers this scenario: Close waits on a
 // call stuck in the session, and a new call, even one with a dead context, must not wait too.
 func TestCloseBehindABlockedRunDoesNotStallNewCalls(t *testing.T) {
 	s := &fakeSession{}

@@ -1,9 +1,10 @@
 # laya-go
 
-A pure-Go port of [laya](../README.md). Standard library only: no cgo, no third-party modules.
+A pure-Go port of [laya](../README.md). This module is standard library only: no cgo, no third-party
+modules. Running the model needs the nested `onnx` module, which uses cgo.
 
 The foundation (language detection, questions, sequences, the tokenizer) and the predict path
-(`infer`, `agent`) are here. The native ONNX session and the router come in later changes.
+(`infer`, `agent`) are here, and the `onnx` module runs the graph. The router comes in a later change.
 
 | Package | What it is |
 | --- | --- |
@@ -42,8 +43,9 @@ order-sensitive state. `Analyze` reads every leaf, so its cost grows with the nu
 - No root package: the module path ends in `laya-go`, so tags are `laya-go/vX.Y.Z`.
 - Every package in this module is pure Go: `lang`, `schema`, `sequence`, `tokenizer`, `infer` and
   `agent` now, and `router`, `presets` and `shortlist` later.
-- cgo will live only in an `onnx` package, a nested module with its own `go.mod`, so `go test ./...`
-  here never compiles it. Importing `lang` or `agent` never compiles cgo.
+- cgo lives only in `onnx`, a nested module with its own `go.mod`, so `go test ./...` here never
+  compiles it. `onnx` requires this module and `github.com/yalue/onnxruntime_go`; until this module has
+  a release tag, `onnx` builds only inside this repository (its `go.mod` points here with `replace`). Importing `lang` or `agent` never compiles cgo.
 - `tokenizer` is public (`LoadFS`, `Parse`); `internal/unicodedata`, `internal/pyjson`,
   `internal/decode` and `internal/collate` stay internal. `infer.Batch` is the public name of
   what `collate` builds.
