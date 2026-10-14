@@ -66,6 +66,34 @@ class EvalError(ValueError):
     """A dataset or report is malformed; the message names the row or field."""
 
 
+def _metric_map(values: Any, label: str, *, allow_empty: bool = False) -> Dict[str, Any]:
+    """Return a report's metric map, naming any shape `compare` cannot do arithmetic on.
+
+    Both sides reach `compare` as JSON read from a file the caller named, and the loop subtracts
+    one value from the other for every shared metric. A JSON scalar or list, an `overall` that is
+    not an object, and a metric whose value is a string, null or dict each used to get that far:
+    they raised `AttributeError`/`TypeError` as an unhandled traceback, and `laya-evals` exits 1
+    for an unhandled traceback -- the code it reserves for a quality failure, so a broken baseline
+    file printed the same verdict as a regressed model. A bool was worse than a crash: `float()`
+    turns it into 1.0, so `"choice_accuracy": true` compared as a measurement of 100%.
+
+    An empty map is refused unless `allow_empty`, because it has no metric left that could fail:
+    the committed baseline that turns out to be `{}` or `null` would green the gate. `allow_empty`
+    is the run's own side, where losing a metric a baseline still has is a result to report
+    (`missing: True`) rather than a malformed document.
+    """
+    if not isinstance(values, dict):
+        raise EvalError("%s metrics must be an object of metric name to number, got %s"
+                        % (label, type(values).__name__))
+    if not values and not allow_empty:
+        raise EvalError("%s has no metrics to compare, so nothing in it could fail" % label)
+    for name, value in values.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise EvalError("%s metric %r is not a number, got %s"
+                            % (label, name, type(value).__name__))
+    return values
+
+
 def compare_agreement(reference: Dict, repeat: Dict, student: Dict, *,
                       bootstrap_samples: int = 2000, seed: int = 0) -> Dict[str, Any]:
     """Compare saved teacher reference, teacher repeat, and student choice observations.
@@ -759,8 +787,19 @@ class EvalReport:
         every example errored under ``on_error="skip"`` has an empty ``overall``, and must not
         pass the gate by having nothing left to compare. A NaN metric, baseline or tolerance
         fails the comparison too.
+
+        Either side that is not a metric name to number map, and a baseline with no metrics at
+        all, raises ``EvalError`` rather than reaching the subtraction: both documents are read
+        from a path the caller names, and a shape the gate cannot compare is a broken artifact.
+        See ``_metric_map``.
         """
-        base = (baseline or {}).get("overall", baseline or {})
+        # A baseline may be a full report document or the metric map on its own, which is the
+        # shape `research/evals/check_regression.py` builds per language.
+        if not isinstance(baseline, dict):
+            raise EvalError("baseline report must be a JSON object, got %s"
+                            % type(baseline).__name__)
+        base = _metric_map(baseline.get("overall", baseline), "baseline")
+        overall = _metric_map(self.overall, "report", allow_empty=True)
         tolerances = tolerances or {}
         deltas: Dict[str, Dict[str, float]] = {}
         ok = True
@@ -779,16 +818,16 @@ class EvalReport:
                 if conflict is not None:
                     deltas[metric] = {
                         "baseline": float(base_value),
-                        "value": float(self.overall.get(metric, float("nan"))),
+                        "value": float(overall.get(metric, float("nan"))),
                         "diff": float("nan"), "tolerance": allowed, "incomparable": conflict}
                     ok = False
                     continue
-            if metric not in self.overall:
+            if metric not in overall:
                 deltas[metric] = {"baseline": float(base_value), "value": float("nan"),
                                   "diff": float("nan"), "tolerance": allowed, "missing": True}
                 ok = False
                 continue
-            value = self.overall[metric]
+            value = overall[metric]
             diff = value - float(base_value)
             deltas[metric] = {"baseline": float(base_value), "value": value,
                               "diff": diff, "tolerance": allowed}

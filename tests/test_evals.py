@@ -1687,6 +1687,85 @@ def test_a_nan_metric_fails_every_gate():
     assert healthy.compare({"overall": {"choice_accuracy": 0.9}})[0]
 
 
+def test_compare_refuses_a_document_the_gate_cannot_subtract_through():
+    """`--baseline` and the report path name files this function does arithmetic on.
+
+    Every shape that is not a metric name to number map used to reach the subtraction and raise
+    `AttributeError`/`TypeError` there, and a baseline that simply had no metrics compared nothing
+    and returned a pass. A bool was the quietest of the group: `float(True)` is 1.0, so
+    `"choice_accuracy": true` was read as a measurement of 100%.
+    """
+    report = EvalReport(overall={"choice_accuracy": 0.9})
+
+    for baseline in (None, [], [{"accuracy": 0.9}], "reviewed baseline", 5, True):
+        with pytest.raises(EvalError, match="baseline report must be a JSON object"):
+            report.compare(baseline)
+
+    for overall in (None, [], "abc", 5):
+        with pytest.raises(EvalError, match="baseline metrics must be an object"):
+            report.compare({"overall": overall})
+
+    for empty in ({}, {"overall": {}}):
+        with pytest.raises(EvalError, match="no metrics to compare"):
+            report.compare(empty)
+
+    # A report-shaped document with no `overall` falls back to its top level as the metric map, so
+    # the schema tag is what gets subtracted.
+    with pytest.raises(EvalError, match="baseline metric 'schema' is not a number"):
+        report.compare({"schema": "laya-eval/1", "config": {}})
+    for value, kind in (("0.9", "str"), (None, "NoneType"), ({"v": 1}, "dict"), (True, "bool")):
+        with pytest.raises(EvalError, match="is not a number, got %s" % kind):
+            report.compare({"overall": {"choice_accuracy": value}})
+
+    # The candidate side is read from disk by the same command, so it is checked the same way.
+    with pytest.raises(EvalError, match="report metric 'ece' is not a number"):
+        EvalReport(overall={"ece": "0.02"}).compare({"overall": {"ece": 0.02}})
+
+    # NaN stays a comparison, not a shape error: it fails the gate rather than refusing it.
+    assert not report.compare({"overall": {"choice_accuracy": float("nan")}})[0]
+
+    # And a run that lost a metric a baseline still has is still a result, not a usage error.
+    ok, deltas = EvalReport(overall={}).compare({"overall": {"choice_accuracy": 0.9}})
+    assert not ok and deltas["choice_accuracy"]["missing"]
+
+
+def test_cli_exits_2_for_a_malformed_baseline_or_report(tmp_path, capsys):
+    """A broken artifact is exit code 2; exit 1 is what a quality failure is worth.
+
+    Before, `laya-evals compare report.json --baseline {}` exited 0 with nothing compared, and
+    `--baseline 5` died in a traceback that exited 1 -- indistinguishable from a regression to the
+    CI job reading it.
+    """
+    from laya import evals_cli
+
+    fresh = tmp_path / "report.json"
+    fresh.write_text(json.dumps({"overall": {"choice_accuracy": 0.9}}))
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps({"overall": {"choice_accuracy": 0.9}}))
+
+    for raw in ("{}", "null", "[]", '"reviewed baseline"', "5", '{"overall": {}}',
+                '{"overall": null}', '{"overall": {"choice_accuracy": "0.9"}}',
+                '{"overall": {"choice_accuracy": true}}'):
+        broken = tmp_path / "baseline.json"
+        broken.write_text(raw)
+        assert evals_cli.main(["compare", str(fresh), "--baseline", str(broken)]) == 2, raw
+    # The candidate document carries the same shapes.
+    for raw in ('{"overall": "abc"}', '{"overall": {"choice_accuracy": "0.9"}}'):
+        broken = tmp_path / "candidate.json"
+        broken.write_text(raw)
+        assert evals_cli.main(["compare", str(broken), "--baseline", str(good)]) == 2, raw
+
+    printed = capsys.readouterr().err
+    assert "laya-evals: baseline has no metrics to compare" in printed
+    assert "Traceback" not in printed
+
+    # A well-formed pair still compares, and still exits 1 only when the numbers moved.
+    assert evals_cli.main(["compare", str(fresh), "--baseline", str(good)]) == 0
+    drifted = tmp_path / "drifted.json"
+    drifted.write_text(json.dumps({"overall": {"choice_accuracy": 0.5}}))
+    assert evals_cli.main(["compare", str(fresh), "--baseline", str(drifted)]) == 1
+
+
 def test_cli_rejects_a_nan_limit_or_tolerance(capsys):
     from laya import evals_cli
 
