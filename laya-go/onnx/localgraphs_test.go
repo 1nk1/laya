@@ -5,6 +5,7 @@ package onnx
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -40,4 +41,9 @@ func TestOtherGraphs(t *testing.T) {
 		t.Fatalf("legacy Run = %v, %v", out, err)
 	}
 	legacy.Close()
+}
+
+// sibling is another export beside the main one: <exports>/<name>/laya.onnx.
+func (p paths) sibling(name string) string {
+	return filepath.Join(filepath.Dir(filepath.Dir(p.graph)), name, "laya.onnx")
 }

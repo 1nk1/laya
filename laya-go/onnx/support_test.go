@@ -4,7 +4,6 @@ package onnx
 
 import (
 	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
@@ -23,11 +22,6 @@ func need(t testing.TB) paths {
 		t.Skip("set LAYA_ONNX_GRAPH, LAYA_ONNXRUNTIME_LIBRARY and LAYA_CHECKPOINTS")
 	}
 	return p
-}
-
-// sibling is another export beside the main one: <exports>/<name>/laya.onnx.
-func (p paths) sibling(name string) string {
-	return filepath.Join(filepath.Dir(filepath.Dir(p.graph)), name, "laya.onnx")
 }
 
 // The graph is 1.29 GB, so tests that are not about lifecycle share one session. Lifecycle tests
