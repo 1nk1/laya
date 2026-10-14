@@ -1073,6 +1073,12 @@ check_param("evaluate_shortlist", evaluate_shortlist, "dataset_path", None)
 for param in ("checkpoint_id", "embedder_id"):
     check_param("evaluate_shortlist", evaluate_shortlist, param, inspect.Parameter.empty)
 
+from laya.evals_tournament import evaluate_tournament  # noqa: E402
+
+check_param("evaluate_tournament", evaluate_tournament, "group_size", 16)
+check_param("evaluate_tournament", evaluate_tournament, "dataset_path", None)
+check_param("evaluate_tournament", evaluate_tournament, "checkpoint_id", inspect.Parameter.empty)
+
 
 # docs/hooks/examples.md ## Composition teaches one scope ordering contract; the pre-fix wording
 # ("Installed hooks first, then convenience callables") named only two tiers and put installed at
