@@ -84,7 +84,8 @@ def _fake_safetensors():
     return root
 
 
-def _export(model_dir, out_dir, events, *, export_fails=False, verify_fails=False, extra=()):
+def _export(model_dir, out_dir, events, *, export_fails=False, verify_fails=False, extra=(),
+            sidecars=()):
     """Drive ``main`` against faked torch and read-back seams; return its stdout.
 
     ``events`` records ``(stage, graph_path, out_dir_existed)`` in call order for every
@@ -100,6 +101,12 @@ def _export(model_dir, out_dir, events, *, export_fails=False, verify_fails=Fals
             raise SystemExit("tracing failed")
         with open(path, "wb") as handle:
             handle.write(b"graph")
+        # A graph whose initializers pass the protobuf limit is written as `<name>.onnx` plus a
+        # `<name>.onnx.data` sidecar that the `.onnx` names by a path relative to its own
+        # directory, so the two only stay loadable if they travel together.
+        for suffix in sidecars:
+            with open(path + suffix, "wb") as handle:
+                handle.write(b"weights")
 
     def verify(enc_path, head_path, *args, **kwargs):
         events.append(("verify", (enc_path, head_path), os.path.isdir(out_dir)))
@@ -189,3 +196,30 @@ with tempfile.TemporaryDirectory() as directory:
     assert [stage for stage, _, _ in events] == ["trace", "trace"], events
     assert sorted(os.listdir(skipped)) == ["encoder.onnx", "head.onnx", "rl_agent_config.json",
                                            "tokenizer.json"], os.listdir(skipped)
+
+    # Everything the staging directory holds has to move, not the two graph names. torch writes
+    # `encoder.onnx.data` beside `encoder.onnx` once the initializers pass the protobuf limit, and
+    # the `.onnx` records that sidecar relative to its own directory, so a move of the two names
+    # alone published a graph whose external data had just been deleted with the staging dir.
+    # onnxruntime refuses to load that: `External data path does not exist:
+    # .../onnx-split/english/encoder.onnx.data`, which is how the .NET parity lane found it.
+    external = os.path.join(directory, "external-data")
+    events = []
+    _export(model_dir, external, events, sidecars=(".data",))
+    assert sorted(os.listdir(external)) == [
+        "encoder.onnx", "encoder.onnx.data", "head.onnx", "head.onnx.data",
+        "rl_agent_config.json", "tokenizer.json"], os.listdir(external)
+    for name in ("encoder.onnx.data", "head.onnx.data"):
+        with open(os.path.join(external, name), "rb") as handle:
+            assert handle.read() == b"weights", name
+    assert not os.path.exists(os.path.dirname(events[0][1])), "the staging dir must be cleaned up"
+
+    # And a failed run still publishes nothing, sidecars included.
+    external_failed = os.path.join(directory, "external-data-failed")
+    events = []
+    try:
+        _export(model_dir, external_failed, events, verify_fails=True, sidecars=(".data",))
+        raise AssertionError("a failed verification must abort the export")
+    except SystemExit as error:
+        assert "verification failed" in str(error), error
+    assert not os.path.exists(external_failed), os.listdir(directory)
