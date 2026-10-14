@@ -143,6 +143,16 @@ try:
 except SchemaError as exc:
     check("reject/colliding enum names the field", str(exc),
           "properties.x: enum values produce duplicate choice labels")
+# A JSON 'enum' is an array. A bare scalar used to leak TypeError from len(), and a bare string
+# silently split into per-character options; both must now raise a SchemaError naming the path.
+for scalar in (5, 1.5, True, None, "abc"):
+    check_raises("reject/non-array enum %r" % (scalar,), SchemaError,
+                 _bad({"type": "object", "properties": {"x": {"enum": scalar}}}))
+try:
+    questions_from_json_schema({"type": "object", "properties": {"x": {"enum": "abc"}}})
+except SchemaError as exc:
+    check("reject/non-array enum names the field and type", str(exc),
+          "properties.x: 'enum' must be an array of values, got str")
 check_raises("reject/non-object root", SchemaError, _bad({"type": "array"}))
 check_raises("reject/empty properties", SchemaError, _bad({"type": "object", "properties": {}}))
 

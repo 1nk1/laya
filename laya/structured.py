@@ -99,6 +99,11 @@ def _schema_of(model: Any) -> Dict[str, Any]:
 
 
 def _enum_field(path: str, name: str, values: Sequence[Any], description: Optional[str]) -> _Field:
+    # A JSON 'enum' is an array. Reject a bare scalar before len(): a str is iterable, so without
+    # this check it silently splits into per-character options instead of erroring (the module
+    # promises malformed schemas raise a SchemaError that names the path).
+    if not isinstance(values, (list, tuple)):
+        raise SchemaError("%s: 'enum' must be an array of values, got %s" % (path, type(values).__name__))
     if len(values) > MAX_OPTIONS:
         raise SchemaError("%s: %d options exceeds MAX_OPTIONS=%d" % (path, len(values), MAX_OPTIONS))
     if not values:
