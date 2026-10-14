@@ -1347,7 +1347,7 @@ TileLang fast path and `compile=True` refuse such a checkpoint, and `backend="au
 
 Laya can be exposed as an [MCP](https://modelcontextprotocol.io) stdio server, so any MCP
 client (OpenClaw, Claude Desktop, Cursor, ...) can call typed decisions as tools
-(`laya_predict`, `laya_predict_batch`, `laya_route`, `laya_route_batch`, `laya_decide`, `laya_shortlist`, `laya_preset`, `laya_status`) without writing glue code.
+(`laya_predict`, `laya_predict_batch`, `laya_route`, `laya_route_batch`, `laya_decide`, `laya_shortlist`, `laya_tournament`, `laya_preset`, `laya_status`) without writing glue code.
 This is an **optional extra**: the core package has no `mcp` dependency.
 
 ```bash
@@ -1358,8 +1358,9 @@ laya-mcp-server          # or: python -m laya.mcp.server
 To share a `laya-serve` on your own hardware across editor sessions, set
 `LAYA_BASE_URL=http://127.0.0.1:8000` in each MCP client's environment. Its prediction tools use
 HTTP and import no torch; routing stays local. Set `LAYA_API_KEY` to the server's bearer key and
-`LAYA_REMOTE_TIMEOUT` to the allowed HTTP wait (300 seconds by default). `laya_shortlist` is
-unavailable in this mode. See [shared-server MCP setup](https://github.com/NandhaKishorM/laya/blob/main/docs/cli-mcp.md#share-one-model-server-across-mcp-sessions).
+`LAYA_REMOTE_TIMEOUT` to the allowed HTTP wait (300 seconds by default). `laya_shortlist` and
+`laya_tournament` are unavailable in this mode; use `laya_predict` with the HTTP server's
+`LAYA_TOURNAMENT_GROUP` enabled for shared-server tournament selection. See [shared-server MCP setup](https://github.com/NandhaKishorM/laya/blob/main/docs/cli-mcp.md#share-one-model-server-across-mcp-sessions).
 
 Example MCP client configuration (stdio transport):
 
@@ -1407,8 +1408,14 @@ it shortlists a many-option choice question to its `k` most likely labels by emb
 similarity (mean-pooled from the answering checkpoint's own encoder, so no extra model is
 downloaded), answers in one forward pass, and returns per-question shortlist metadata
 (kept labels, cosine scores, `k`, option count, and whether the question passed through
-unshortlisted). The guardrails shown on every decision
-tool point clients to `laya_shortlist` for >20-option choices. As with the SDK, use it for structured
+unshortlisted). `laya_tournament` is the in-process MCP form of [`predict_tournament`](#honest-limits):
+the decision model narrows large choices in balanced groups of `group_size=16` by default,
+then answers the complete request with the finalists. It returns `tournament` metadata per choice
+(`labels`, original count `n`, elimination `rounds`), finalist-only probabilities, and total latency.
+Small choices pass through with `rounds: 0`; narrowed questions report discarded `option_order`
+values under `option_order_dropped`. Routing uses the original request; language, budget and
+confidence controls reach every round. The guardrails shown on every decision
+tool point clients to `laya_shortlist` or `laya_tournament` for >20-option choices. As with the SDK, use it for structured
 decisions only; not for open Q&A or
 text generation. Tests: `tests/test_mcp.py` (CI, no weights) and
 `tests/test_mcp_local_e2e.py` (local, real weights and a real stdio handshake).

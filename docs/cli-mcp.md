@@ -161,20 +161,21 @@ Laya does not open a network port.
 | `laya_route` | Selects a checkpoint and returns its model, repository, and reason without running a forward pass. | `state`, `questions`, optional `model`, `task`, `lang`, `lang_guess` |
 | `laya_predict` | Runs typed questions and returns answers, routing metadata, latency, and the answering device when readable. | `state`, `questions`, optional `model` (`auto`, `english`, `multilingual`, or `typed-decisions`), `task`, `lang`, `lang_guess`, `max_len`, `head_max_len`, `min_confidence` |
 | `laya_shortlist` | Shortlists a many-option choice question, then answers it and returns the shortlist metadata. | `state`, `questions`, optional `model`, `k` (default `20`), `task`, `lang`, `lang_guess`, `max_len`, `head_max_len`, `min_confidence` |
+| `laya_tournament` | Narrows large choices in balanced rounds using the decision model, then answers the complete request. In-process only. | `state`, `questions`, optional `model`, `group_size` (default `16`), `task`, `lang`, `lang_guess`, `max_len`, `head_max_len`, `min_confidence` |
 | `laya_preset` | Runs a built-in workflow using its built-in question set. | `preset`, `state`, optional `task`, `lang`, `lang_guess`, `max_len`, `head_max_len`, `min_confidence` |
 | `laya_predict_batch` | Answers many requests in one call. Requests are routed first and grouped by checkpoint, so matching question schemas share forward passes; answers come back in input order. | `requests`, each `{state, questions, model?, task?, lang?, lang_guess?, max_len?, head_max_len?}`, optional `batch_size`, `hooks_timeout`, `min_confidence`, `sort_by_length` |
 | `laya_route_batch` | Decides which checkpoint would answer each request, with no forward pass and no checkpoint load. | `requests`, each `{state, questions, model?, task?, lang?, lang_guess?}`, optional `hooks_timeout` |
 | `laya_decide` | Answers a JSON-schema-shaped decision in one forward pass and returns the decided values with per-field confidence, instead of an answer map to parse. Schema properties may be enum choices, booleans, or integers with a minimum and maximum; free strings, arrays, and nested objects are rejected by path. | `state`, `schema`, optional `model`, `min_confidence` |
 
-On `laya_route`, `laya_predict`, `laya_shortlist`, and `laya_decide`, `model` may be omitted or set to `null`; either form resolves to `auto`.
+On `laya_route`, `laya_predict`, `laya_shortlist`, `laya_tournament`, and `laya_decide`, `model` may be omitted or set to `null`; either form resolves to `auto`.
 
 The three batch and schema tools exist because the same operations are available on the SDK and
 `laya-serve`: handling many requests, or serving a caller that already knows the answer shape,
 does not require dropping to Python. For the schema-driven form in more depth, see
 [Schema-driven decisions](structured.md).
 
-The shared guardrail says not to send choice questions with more than 20 options without
-shortlisting. `laya_shortlist` keeps the `k` most likely labels before the forward pass; its
+The shared guardrail says to narrow choice questions with more than 20 options using
+`laya_shortlist` or `laya_tournament`. `laya_shortlist` keeps the `k` most likely labels before the forward pass; its
 default is `k=20`. It uses mean-pooled embeddings from the answering checkpoint's own encoder,
 so it does not download a second model, and returns the kept labels, cosine scores, `k`,
 option count, and whether the question passed through unshortlisted for each shortlisted
@@ -184,6 +185,50 @@ a caller-supplied `option_order`: the order covers every option while the answer
 kept labels only, and remapping it onto them would move options between slots, so the order
 is dropped and the question is named under `option_order_dropped` with its old and kept
 option counts.
+
+`laya_tournament` uses the decision model itself to narrow choices, without an embedding pass.
+With the default `group_size=16`, 40 labels form balanced groups of 13, 13 and 14. One forward
+pass answers all three groups; their winners meet in a final pass that also answers the rest
+of the request. Larger sets can take more elimination rounds. The checkpoint is selected from
+the original request and pinned for every round, keeping routing controls and detected-language
+calibration consistent. Token budgets and `min_confidence` reach every pass.
+A missing or out-of-group winner returns `internal_error` before another pass, so a broken
+round cannot silently advance a label the model did not select from that group.
+
+The result has the usual `answers`, `routing`, `latency_ms` and readable `device`, plus
+`tournament` metadata for each choice: `labels` are the finalists in criteria order, `n` is the
+original option count, and `rounds` counts elimination rounds before the final pass. A choice
+that fits `group_size` reports `rounds: 0`; non-choice questions have no tournament entry.
+Probabilities and confidence come from the final pass over the finalists only, so a threshold
+fitted on the full label set needs to be measured again. `latency_ms` covers routing and all
+passes. Narrowing reports a discarded `option_order` under `option_order_dropped` with `n` and
+`kept` counts, just as shortlisting does; passthrough questions keep their order.
+
+For a small example, call `laya_tournament` with these arguments. `group_size=2` forces one
+elimination round here; keep the default 16 for a larger catalog unless you have measured another size.
+
+```json
+{
+  "state": {"body": "Please refund the duplicate charge."},
+  "questions": {
+    "department": {
+      "type": "choice",
+      "instructions": "Which team should handle the `body`?",
+      "criteria": {
+        "billing": "payments, invoices, refunds",
+        "technical": "bugs, outages, integrations",
+        "account": "login, passwords, profile settings",
+        "sales": "pricing, upgrades, product enquiries"
+      }
+    }
+  },
+  "group_size": 2
+}
+```
+
+This makes two prediction calls and returns two finalists with `n: 4` and `rounds: 1`.
+`group_size` must be an integer of at least 2; invalid values return `invalid_group_size`.
+The tool is available only when the MCP server loads checkpoints in-process.
 
 `state` must be a non-empty JSON object. `questions` must be a non-empty object whose values use
 Laya's typed question schema. `laya_preset` accepts the same five presets the CLI does: `email`,
@@ -199,7 +244,7 @@ Every single-request tool takes the same per-call routing controls the batch req
 and `lang_guess` (a soft language hint that sits below `lang` and above the built-in detector, so a
 probable-but-uncertain code can nudge which checkpoint is chosen without forcing it the way `lang`
 does). `lang_guess` only participates in routing, so like `task` it is refused on a call that pins
-`model` -- a pinned checkpoint has nothing left to route. `laya_predict` and `laya_shortlist` also
+`model` -- a pinned checkpoint has nothing left to route. `laya_predict`, `laya_shortlist`, and `laya_tournament` also
 take `max_len`/`head_max_len` for the answering token budget and `min_confidence` for the abstention
 gate.
 
@@ -283,8 +328,12 @@ Set the same `LAYA_API_KEY` in both processes when the server requires a bearer 
 `LAYA_DEFAULT_MODEL` and `LAYA_AUTO_TASK` aligned so local routing previews match the server's
 actual routing. Device and preload settings belong to the HTTP server. The first call after an
 idle unload waits for a cold load; raise `LAYA_REMOTE_TIMEOUT` if that takes longer than 300 seconds.
-`laya_shortlist` and prediction hook overrides return `unsupported_remote`, since their code needs
-the model process. HTTP errors retain the server's detail text as MCP tool errors. With
+`laya_shortlist`, `laya_tournament`, and prediction hook overrides return `unsupported_remote`, since these
+paths run in the model process. For shared-server tournament selection, enable
+[`LAYA_TOURNAMENT_GROUP` on the HTTP server](http-api.md#large-choices-laya_tournament_group) and call
+`laya_predict`: HTTP keeps probabilities for every original label (zero for eliminated labels),
+reports `x_tournament`, and counts usage across rounds. The in-process `laya_tournament` returns
+finalist-only probabilities and core's `tournament` metadata. HTTP errors retain the server's detail text as MCP tool errors. With
 `LAYA_BASE_URL` unset, the MCP server keeps loading checkpoints in its own process.
 
 The stock `laya-mcp-server` launcher creates its Router without installing hooks. Install prediction

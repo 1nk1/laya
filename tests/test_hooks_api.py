@@ -107,6 +107,23 @@ if _mcp_batch_tool is not None:
     check_param("laya_predict_batch_tool", _mcp_batch_tool, "min_confidence", None)
     check_param("laya_predict_batch_tool", _mcp_batch_tool, "sort_by_length", False)
 
+from laya.mcp.tools import laya_tournament  # noqa: E402
+
+check_param("laya_tournament", laya_tournament, "group_size", 16)
+check_param("laya_tournament", laya_tournament, "model", "auto")
+for param in ("state", "questions"):
+    check_param("laya_tournament", laya_tournament, param, inspect.Parameter.empty)
+for param in ("task", "lang", "lang_guess", "max_len", "head_max_len", "min_confidence", "router", "agent"):
+    check_param("laya_tournament", laya_tournament, param, None, inspect.Parameter.KEYWORD_ONLY)
+
+if _mcp_batch_tool is not None:
+    from laya.mcp.server import laya_tournament_tool  # noqa: E402
+
+    check_param("laya_tournament_tool", laya_tournament_tool, "group_size",
+                sig(laya.predict_tournament)["group_size"].default)
+    for param in ("model", "task", "lang", "lang_guess", "max_len", "head_max_len", "min_confidence"):
+        check_param("laya_tournament_tool", laya_tournament_tool, param, None)
+
 # What the constructor does NOT raise over is part of its contract too: a shared
 # `agent_kwargs["expected_sha256"]` overlapping a per-checkpoint `sha256_digests` entry on one file
 # name is the ordinary shape, not a contradiction -- `model.safetensors` is the one name every
