@@ -99,3 +99,43 @@ describe("Python's whitespace set, where JS's differs", () => {
     );
   });
 });
+
+// Every alternative of the DISCLAIMER pattern, asked one at a time. The corpus above exercises the
+// pattern, not each branch of it, so the port's rewrite of `\b` into a lookaround pair could lose a
+// single word and still pass: `exclusivement` was typed as `exclusivamente`, which left a French
+// footer ("exclusivement destine au destinataire") in the state and already had a Spanish branch of
+// its own. Each answer below is what `laya/email.py::clean_email_body` printed for the same body.
+describe("every DISCLAIMER branch, one word at a time", () => {
+  const KEEP = "Merci de confirmer le remboursement.";
+  const FOOTERS: [string, string][] = [
+    ["en confidential/intended", "This e-mail is confidential and intended solely for the addressee."],
+    ["en confidential/privileged", "This message is confidential and may be privileged."],
+    ["en received in error", "If you received this e-mail in error, please delete it."],
+    ["pt mensagem confidencial", "Esta mensagem e confidencial e de uso restrito."],
+    ["pt uso exclusivo", "Destina-se ao uso exclusivo do destinatario indicado."],
+    ["pt exclusivamente", "Destina-se exclusivamente ao destinatario indicado."],
+    ["pt recebeu por engano", "Se recebeu esta mensagem por engano, apague-a."],
+    ["pt antes de imprimir", "Pense antes de imprimir: o meio ambiente agradece."],
+    ["pt meio ambiente", "O meio ambiente agradece: pense antes de imprimir."],
+    ["es mensaje confidencial", "Este mensaje es confidencial y de uso restringido."],
+    ["es unicamente", "Se dirige unicamente al destinatario indicado."],
+    ["es ha recibido por error", "Si ha recibido este mensaje por error, borrelo."],
+    ["fr ce message confidentiel", "Ce message est confidentiel et destine au seul destinataire."],
+    ["fr recu par erreur", "Si vous avez recu ce message par erreur, supprimez-le."],
+    ["fr usage exclusif", "Ce texte est a usage exclusif du destinataire indique."],
+    ["fr exclusivement", "Ce texte est exclusivement destine au destinataire indique."],
+    ["fr uniquement", "Ce texte est uniquement destine au destinataire indique."],
+  ];
+  it.each(FOOTERS)("%s is stripped, the request above it is kept", (_name, footer) => {
+    expect(cleanEmailBody(KEEP + "\n\n" + footer)).toBe(KEEP);
+  });
+
+  // The control the branch list needs: a sender's own sentence that carries one of the same words
+  // is not a disclaimer, so the paragraph stays whole.
+  it.each([
+    ["the contract is confidential", "Le contrat confidentiel est joint, merci de le relire."],
+    ["a question about confidentiality", "Is this channel confidential?"],
+  ])("%s is not a disclaimer", (_name, body) => {
+    expect(cleanEmailBody(body)).toBe(body);
+  });
+});

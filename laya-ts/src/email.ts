@@ -161,7 +161,7 @@ const DISCLAIMER = new RegExp(
     // sender's own request ("le contrat confidentiel") uses just as often
     `${B_L}(ce|cet|cette) (message|e-?mail|mail|courriel)${B_R}[^.]{0,80}(confidentiel|privil[eé]gi)|` +
     `${B_L}avez re[çc]u (ce|cet|cette) (message|e-?mail|mail)${B_R}[^.]{0,20} par erreur|` +
-    `${B_L}(usage exclusif|exclusivamente|uniquement)${B_R}[^.]{0,30}destinataire)`,
+    `${B_L}(usage exclusif|exclusivement|uniquement)${B_R}[^.]{0,30}destinataire)`,
   "iu",
 );
 const SENTENCE = new RegExp(`(?<=[.!?])${SP}+`, "u");
