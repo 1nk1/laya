@@ -431,7 +431,9 @@ class ONNXAgent(HookRegistry):
                     (`max(64, max_len - head_max_len - 8)`; the 64 is a floor). Smaller windows
                     isolate a localized signal better at the cost of more windows, as in
                     `Agent.predict_long`.
-            stride: Token step between windows. Defaults to `window // 2` (50% overlap).
+            stride: Token step between windows. Defaults to half the *effective* window -- the
+                    window these questions leave room for, which is smaller than the `window` that
+                    was asked for once the room caps it (50% overlap either way).
             aggregate: "auto" (the per-type rules above) is the only mode for now.
             batch_size: Cap on windows per session run, to bound peak memory on very long states.
             lang: Per-language temperature selection, as in `system_one`.
