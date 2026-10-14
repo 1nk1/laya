@@ -2464,6 +2464,7 @@ for _name, _answer in (
     ("non-numeric-probability", _choice(0.5, "high")),
     ("bool-probability", _choice(True, False)),
     ("nan-probability", _choice(float("nan"), 0.5)),
+    ("infinite-probability", _choice(float("inf"), 0.5)),
     ("non-integer-score-level", {"type": "score", "probabilities": {"low": 0.5, "high": 0.5}}),
     # A negative probability is malformed, and at `432312b3` none of these five were refused: they
     # returned 3.0, 2.0, 0.8, 121.0 (120.99999999999989) and 1.75. The third is the one that cannot
@@ -2476,6 +2477,22 @@ for _name, _answer in (
     ("negative-score-level", _score(1.5, -0.5, 0.0)),
 ):
     check("jev_confidence/none-for-%s" % _name, jev_confidence(_answer), None)
+
+
+def _jev_measured(_answer):
+    """`jev_confidence`'s number, or the exception it raised instead, so a slip reports, not aborts."""
+    try:
+        return jev_confidence(_answer)
+    except BaseException as _exc:  # noqa: BLE001 -- the bare TypeError a misplaced check raises
+        return _exc
+
+
+# A probability written as the string "0.9" reads as a number through the function's own float()
+# coercion, so it is measured rather than refused -- and the finite and range checks run on that
+# coerced value, not on the JSON type it arrived as.
+_got = _jev_measured(_choice("0.9", "0.1"))
+check_true("jev_confidence/a numeric string probability is measured as a number",
+           isinstance(_got, float) and abs(_got - 0.8) < 1e-9, repr(_got))
 
 # The range the name promises: nothing this returns is outside [0, 1], and the negatives are
 # exactly what is refused. `x_jev_confidence` is served for a client to compare a threshold

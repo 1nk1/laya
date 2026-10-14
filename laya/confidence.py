@@ -46,14 +46,14 @@ def jev_confidence(answer: Dict[str, Any]) -> Optional[float]:
         score   max(0, 1 - sum(p_i * |i - mode|) / D), D the same sum for a uniform distribution
 
     Both are 1.0 for a single option, and a zero total is read as uniform, as the adapter does.
-    A noul answer has no Jev `confidence`, and a malformed document -- a non-numeric, boolean,
-    non-finite or negative probability -- gives None rather than a guess, so a caller filtering on
-    this number never filters on a made-up one. Negatives are the case that needs naming: the
-    division below normalises by the sum, so a mixed-sign document can divide by a near-zero or
-    negative total and return a number outside [0, 1] for a distribution whose argmax is not the
-    one it measured, while an all-negative document divides back into range and returns exactly
-    what its positive counterpart returns. Refusing them is what makes the range a property: every
-    number this returns lies in [0, 1].
+    A noul answer has no Jev `confidence`, and a malformed document -- a probability that does not
+    read as a number, a boolean, a non-finite or a negative value -- gives None rather than a
+    guess, so a caller filtering on this number never filters on a made-up one. Negatives are the
+    case that needs naming: the division below normalises by the sum, so a mixed-sign document can
+    divide by a near-zero or negative total and return a number outside [0, 1] for a distribution
+    whose argmax is not the one it measured, while an all-negative document divides back into
+    range and returns exactly what its positive counterpart returns. Refusing them is what makes
+    the range a property: every number this returns lies in [0, 1].
     """
     kind = answer.get("type")
     probabilities = answer.get("probabilities")
