@@ -1,5 +1,5 @@
 import { analyse, type AnalyseResult } from "./lang.js";
-import type { PredictOptions, QuestionDef, SystemOneResult } from "./agent.js";
+import { checkQuestion, type PredictOptions, type QuestionDef, type SystemOneResult } from "./agent.js";
 import { checkMinConfidence, flagLowConfidence } from "./common.js";
 import { decide, type DecideOptions, type DecisionResult } from "./structured.js";
 import {
@@ -450,6 +450,13 @@ export class Router extends HookRegistry {
     questions: Record<string, unknown> | null = null,
     opts: RouteOptions = {},
   ): RouteDecision {
+    if (questions !== null && questions !== undefined) {
+      if (typeof questions !== "object" || Array.isArray(questions)) {
+        throw new TypeError(
+          `questions must be a dict of question id -> definition, got ${Array.isArray(questions) ? "Array" : typeof questions}`,
+        );
+      }
+    }
     const decision = this._route(state, questions, opts);
     const raiseErrors = opts.hooksRaise ?? this.hooksRaise;
     const active = composeHooks(this.hooks, opts.hooks);
@@ -584,31 +591,53 @@ export class Router extends HookRegistry {
     questions: Record<string, QuestionDef>,
     opts: RouteOptions & PredictOptions = {},
   ): Promise<RoutedResult> {
+    if (state === null || state === undefined) {
+      throw new TypeError("state must not be None; pass a string, dict, or list");
+    }
+    if (typeof questions !== "object" || questions === null || Array.isArray(questions)) {
+      throw new TypeError(
+        `questions must be a dict of question id -> definition, got ${questions === null ? "null" : Array.isArray(questions) ? "Array" : typeof questions}`,
+      );
+    }
     const mcOpt = opts.minConfidence ?? opts.min_confidence;
     const mc = mcOpt !== undefined && mcOpt !== null ? checkMinConfidence(mcOpt) : null;
     const active = composeHooks(this.hooks, opts.hooks, opts.onPredictStart, opts.onPredictEnd);
     const raiseErrors = opts.hooksRaise ?? this.hooksRaise;
-
-    // Per-call hooks apply to the whole call, including onRoute inside route().
-    const decision = this.route(state, questions, opts);
-    const agent = (await this.load(decision.model)) as {
-      systemOne(
-        s: unknown,
-        q: Record<string, QuestionDef>,
-        opts?: PredictOptions,
-      ): Promise<SystemOneResult>;
-    };
+    const hasStart = active.some((h) => typeof h.onPredictStart === "function");
     const ctx = new PredictContext({
       states: [state],
       questions: questions as Record<string, unknown>,
-      decision: { ...decision } as unknown as Record<string, unknown>,
-      model: decision.model,
-      agent,
+      decision: null,
+      model: null,
+      agent: null,
       router: this,
     });
     try {
+      // Per-call hooks apply to the whole call, including onRoute inside route().
+      const decision = this.route(state, questions, opts);
+      ctx.decision = { ...decision } as unknown as Record<string, unknown>;
+      ctx.model = decision.model;
+      const agent = (await this.load(decision.model)) as {
+        systemOne(
+          s: unknown,
+          q: Record<string, QuestionDef>,
+          opts?: PredictOptions,
+        ): Promise<SystemOneResult>;
+      };
+      ctx.agent = agent;
+
       await dispatchAsync(active, "onPredictStart", ctx, { raiseErrors });
       if (ctx.results === null) {
+        if (hasStart) {
+          if (typeof ctx.questions !== "object" || ctx.questions === null || Array.isArray(ctx.questions)) {
+            throw new TypeError(
+              `questions must be a dict of question id -> definition, got ${ctx.questions === null ? "null" : Array.isArray(ctx.questions) ? "Array" : typeof ctx.questions}`,
+            );
+          }
+        }
+        for (const [qid, qdef] of Object.entries(ctx.questions as Record<string, QuestionDef>)) {
+          checkQuestion(qid, qdef);
+        }
         // Python parity (router.py predict): the request's language also shapes the answer
         // distribution through the agent's lang_temperatures. An explicit lang wins;
         // otherwise forward the language the router detected for the routing decision.

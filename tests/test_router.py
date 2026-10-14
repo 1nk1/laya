@@ -2250,6 +2250,32 @@ check("sort report/results keep input order regardless",
       ["english"] * 4 + ["multilingual"] * 2)
 
 
+# --------------------------------------------------------------------- predict input validation (#707)
+_r_val = Router()
+for label, state, qs, exc_type, err_match in [
+    ("state is None", None, Q_GENERIC, TypeError, "state must not be None"),
+    ("questions not dict", "text", ["q"], TypeError, "questions must be a dict"),
+]:
+    try:
+        _r_val.predict(state, qs)
+        FAIL.append("predict validation/%s: should have raised %s" % (label, exc_type.__name__))
+    except exc_type as _exc:
+        check("predict validation/%s raises %s" % (label, exc_type.__name__), err_match in str(_exc), True)
+    except Exception as _exc:  # noqa: BLE001
+        FAIL.append("predict validation/%s: raised %s instead of %s: %s" %
+                    (label, type(_exc).__name__, exc_type.__name__, _exc))
+check("predict validation/failed calls loaded nothing", _r_val.loaded, [])
+
+try:
+    _r_val.route("text", ["q"])
+    FAIL.append("route validation/questions not dict: should have raised TypeError")
+except TypeError as _exc:
+    check("route validation/questions not dict raises TypeError", "questions must be a dict" in str(_exc), True)
+except Exception as _exc:  # noqa: BLE001
+    FAIL.append("route validation/questions not dict: raised %s instead of TypeError: %s" %
+                (type(_exc).__name__, _exc))
+
+
 # --------------------------------------------------------------------- report
 print("\n%d passed, %d failed" % (len(PASS), len(FAIL)))
 for f in FAIL:
