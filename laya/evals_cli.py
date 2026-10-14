@@ -460,11 +460,24 @@ def _cmd_run(args) -> int:
                                    " ".join("%s=%.4f" % (k, v) for k, v in sorted(metrics.items()))))
 
     if args.json_out:
-        with open(args.json_out, "w", encoding="utf-8") as handle:
-            json.dump(report.to_json(), handle, ensure_ascii=False, indent=2, sort_keys=True)
+        # `_cmd_agreement` already turns a report it cannot write into `EvalError`, and for the same
+        # reason: a path that is a directory, or on a read-only volume, raises an `OSError` that is
+        # not a `FileNotFoundError`, so it walks past `main`'s usage-error handler and leaves a
+        # traceback and exit 1 -- the code this CLI reserves for "a threshold or a baseline
+        # tolerance failed" -- on a run that wrote nothing. A missing parent directory already
+        # exited 2 through that handler; the two shapes of one mistake have to agree.
+        try:
+            with open(args.json_out, "w", encoding="utf-8") as handle:
+                json.dump(report.to_json(), handle, ensure_ascii=False, indent=2, sort_keys=True)
+        except OSError as exc:
+            raise EvalError("cannot write report %r: %s" % (args.json_out, exc)) from exc
     if args.markdown_out:
-        with open(args.markdown_out, "w", encoding="utf-8") as handle:
-            handle.write(report.to_markdown())
+        try:
+            with open(args.markdown_out, "w", encoding="utf-8") as handle:
+                handle.write(report.to_markdown())
+        except OSError as exc:
+            raise EvalError("cannot write markdown report %r: %s"
+                            % (args.markdown_out, exc)) from exc
 
     if failures:
         for failure in failures:
