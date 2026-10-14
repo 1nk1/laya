@@ -154,8 +154,10 @@ jobs:
         # `dotnet build` for it, and a build this change cannot verify locally would turn a
         # scanner into a broken required check. laya-dotnet is covered by gitleaks only today;
         # adding it needs whoever owns that build to confirm autobuild works. `go` builds the
-        # module in laya-go/, not the repo root: autobuild finds laya-go/go.mod itself (checked
-        # with the CodeQL CLI: "Found 1 go.mod files in: laya-go/go.mod", 20 non-test files).
+        # modules in laya-go/ and its nested laya-go/onnx/, not the repo root: autobuild finds
+        # both go.mod files itself and builds the onnx module with cgo (checked with the CodeQL
+        # CLI 2.27.1: "Found 2 go.mod files in: laya-go/go.mod, laya-go/onnx/go.mod", and
+        # onnx/session_cgo.go is in the extracted sources), so no explicit build step is needed.
         language: [python, java-kotlin, javascript-typescript, go]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
