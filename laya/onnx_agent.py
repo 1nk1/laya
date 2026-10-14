@@ -22,7 +22,6 @@ from laya.common import (
     confidence_from_probs,
     encode_text,
     render_criterion,
-    render_options,
     resolve_lang_temperatures,
     serialize_state,
     window_batch_cap,
@@ -642,7 +641,7 @@ class ONNXAgent(HookRegistry):
                 truncate_left=truncate_left, state_ids=state_ids, return_stats=True,
                 return_truncation_stats=True,
             )
-            n_opts = len(render_options(q))
+            n_opts = stats["options"]
             if len(markers) != n_opts:
                 # Same diagnosis as `Agent._encode_state`, so both backends report the same thing.
                 # The markers are placed at absolute positions and `build_sequence` drops the ones
