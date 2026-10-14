@@ -28,6 +28,14 @@ name that symbol's real owner. The two ``_decode_answers`` citations keep their 
 purpose: they point at fragments of a long function, they are correct today, and they are the
 subjects that keep the second check from going vacuous.
 
+"Fall inside" is what the first version did not test: it accepted any overlap, so a range that
+started above the definition it named still passed. Re-measured over the tree, 5 ``:NNN`` citations
+name a symbol beside them and exactly one spilled -- ``laya/tl_kernels.py:258-268``, cited for
+``compile_cpu``, which runs 261-271. Three of those eleven cited lines are not in it: 258 is
+``attn_kernel``'s ``return main`` and 259-260 are blank. The rule is now containment, which keeps
+the idiom that is legitimate -- a fragment of a long function -- and rejects a range reaching past
+either end of the symbol it names.
+
 Deterministic and cheap: parse the tree, compare, print. No weights, no GPU, no network.
 
 Run: python tests/test_doc_citations.py
@@ -173,8 +181,9 @@ def bound_symbol(text: str, pos: int) -> Optional[str]:
 
 def cites_inside(lo: int, hi: int, named: Sequence["Symbol"]) -> bool:
     """Whether the cited range falls inside the symbol it names -- a fragment of a function is a
-    legitimate citation, so overlap is the test, not containment."""
-    return any(s.start <= hi and lo <= s.end for s in named)
+    legitimate citation, so the whole range has to sit between the definition's ends, not merely
+    touch it: a range that starts above the ``def`` lands the reader on the function before it."""
+    return any(s.start <= lo and hi <= s.end for s in named)
 
 
 def positive_controls() -> None:
@@ -194,6 +203,15 @@ def positive_controls() -> None:
     check_true("control: a range 300 lines below it is rejected",
                not cites_inside(last + 1, last + 300, fn), "")
     check_true("control: line 1 of the cited file is rejected", not cites_inside(1, 1, fn), "")
+
+    # The arms the overlap rule let through: a range that shares lines with the symbol but reaches
+    # past either end lands the reader on whatever owns the line outside it.
+    check_true("control: a range starting three lines above the def is rejected",
+               not cites_inside(first - 3, last, fn), "%d-%d accepted" % (first - 3, last))
+    check_true("control: a range ending three lines past the last line is rejected",
+               not cites_inside(first, last + 3, fn), "%d-%d accepted" % (first, last + 3))
+    check_true("control: a fragment of the function is still accepted",
+               cites_inside(first + 1, first + 3, fn), "%d-%d rejected" % (first + 1, first + 3))
 
     stale = "`Agent._to_internal` (`laya/agent.py:%d`)" % (last + 300)
     got = bound_symbol(stale, stale.index("laya/agent.py"))
