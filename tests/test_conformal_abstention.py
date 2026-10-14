@@ -137,6 +137,27 @@ check("gate/k=12 passes under its lower bucket cut", results[0]["answers"]["b"][
 check("gate/echoes the per-bucket threshold (k=2)", results[0]["answers"]["a"]["abstention_threshold"], 0.9)
 check("gate/echoes the per-bucket threshold (k=12)", results[0]["answers"]["b"]["abstention_threshold"], 0.5)
 
+# ---- what covers a bucket the fitter itself omitted ----
+# `MIN_ABSTAIN_BUCKET_N`'s comment used to promise the caller's scalar `min_confidence` covers an
+# omitted bucket. It cannot: a call takes one threshold, a float or a map, never both, and the map
+# path below is the only lookup an omitted bucket can hit. Measured from the fitter's own output
+# rather than a hand-built map, because the fitter is what produces omissions.
+_small = [record(7, 0.35, i % 4 == 0, qtype=1) for i in range(40)]   # score:6-10, under a floor of 50
+_fitted = fit_abstention_thresholds(records + _small, [1.0] * 3, {}, target_error=0.10, min_bucket_n=50)
+check_true("omitted/the fitter does leave the small bucket out",
+           "choice:2" in _fitted and "score:6-10" not in _fitted, _fitted)
+_omitted = [{"answers": {"a": ans("score", 7, 0.05)}}]
+apply_confidence_gate(_omitted, _fitted)
+check("omitted/an omitted bucket resolves to 0.0, not to a caller's scalar",
+      _omitted[0]["answers"]["a"]["abstention_threshold"], 0.0)
+check("omitted/so its least confident answer is passed, not abstained",
+      _omitted[0]["answers"]["a"]["abstention"], GATE_PASSED)
+_with_default = dict(_fitted, default=_fitted["choice:2"])
+_covered = [{"answers": {"a": ans("score", 7, 0.05)}}]
+apply_confidence_gate(_covered, _with_default)
+check("omitted/the map's own 'default' is what does cover it",
+      _covered[0]["answers"]["a"]["abstention"], GATE_ABSTAINED)
+
 # the float path is unchanged
 res_f = [{"answers": {"a": ans("choice", 3, 0.4)}}]
 flag_low_confidence(res_f, 0.7)

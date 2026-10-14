@@ -320,8 +320,12 @@ fit_temperatures = fit_temperature_map
 
 # Per-bucket floor for abstention thresholds. Lower than `MIN_BUCKET_N` (which governs temperature
 # fitting): a threshold is a single order statistic of the calibrated confidences, so it stabilises
-# on far fewer examples than an LBFGS temperature does. Buckets below this are omitted; the caller's
-# scalar `min_confidence` (or the map's "default") covers them.
+# on far fewer examples than an LBFGS temperature does. Buckets below this are omitted, and only the
+# map's own "default" entry covers them afterwards -- `resolve_min_confidence` falls from "default"
+# to 0.0, which gates nothing. There is no scalar behind that fall-through, unlike a temperature
+# bucket omitted from `temperature_by_options`, whose type-level scalar really is the fallback: one
+# call's `min_confidence` is either a float or a map, never both, so no caller's float is in scope
+# here. A map produced with this floor should name a "default" if any bucket under it must abstain.
 MIN_ABSTAIN_BUCKET_N = 100
 
 
@@ -362,7 +366,7 @@ def fit_abstention_thresholds(records: Iterable, temperature: Sequence[float],
                               target_error: float = 0.10,
                               min_bucket_n: int = MIN_ABSTAIN_BUCKET_N,
                               conservative: bool = True) -> Dict[str, float]:
-    """Fit a per-`temp_bucket` abstention threshold so a gate keeps a target error in every bucket.
+    """Fit a per-`temp_bucket` abstention threshold so a gate keeps a target error in each fitted bucket.
 
     A single `min_confidence` does not transfer across option counts (#394): the calibrated
     confidence of a 2-option and a 12-option answer live on different scales, so one cut over- or
@@ -380,9 +384,11 @@ def fit_abstention_thresholds(records: Iterable, temperature: Sequence[float],
     scaled by the fitted `temperature` / `temperature_by_options` first, so thresholds and the
     numbers the runtime reports are on the same scale. `target_error` is the tolerated error among
     accepted answers; `min_bucket_n` omits buckets too small to fit, and `conservative` adds a
-    one-sample margin. The thresholds are empirical cuts on the calibration set, not a formal
-    coverage guarantee -- validate on held-out data (`fit_temperature_map(..., compute_ece=True)`
-    gives a held-out split) for a production gate.
+    one-sample margin. An omitted bucket is not caught by a fallback: the map lookup falls to its own
+    ``"default"`` entry and then to 0.0, which gates nothing, so a `min_bucket_n` that excludes a
+    bucket leaves that bucket ungated unless the map names a ``"default"``. The thresholds are
+    empirical cuts on the calibration set, not a formal coverage guarantee -- validate on held-out
+    data (`fit_temperature_map(..., compute_ece=True)` gives a held-out split) for a production gate.
 
     Pass `binning_map` when the agent that will serve these thresholds has one installed -- by
     `Agent.fit_binning`, or by a calibration payload that carries `binning_map` -- because the
