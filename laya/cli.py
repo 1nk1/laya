@@ -429,6 +429,7 @@ def run_batch(lines, args, router=None):
 def interactive(args):
     print("Laya interactive mode. Type a request and press Enter; Ctrl-D or 'quit' to exit.")
     router = make_router(args)
+    code = 0
     while True:
         try:
             text = input("laya> ").strip()
@@ -437,8 +438,11 @@ def interactive(args):
             break
         if not text or text.lower() in ("quit", "exit"):
             break
-        run(text, args, router)
-    return 0
+        # A handled failure stays non-fatal to the session, but the process cannot then report
+        # success for a request it knows did not run: `laya < requests.txt` exited 0 with every
+        # answer missing and only stderr to say so.
+        code = run(text, args, router) or code
+    return code
 
 
 def main(argv=None):

@@ -1,4 +1,5 @@
 """CLI tests. No model weights are loaded: the Router is stubbed throughout."""
+import builtins
 import io
 import os
 import sys
@@ -82,6 +83,85 @@ code, out, err, stub = run_cli(["some text"], router=BrokenRouter())
 check("error: exit code 2", code == 2, "got %r" % code)
 check("error: names the failure", "could not run Laya" in err, err)
 check("error: points at the fix", "Hugging Face hub" in err, err)
+
+# --------------------------------------------------------------------- interactive session
+# The page promises exit code 2 for a handled failure, and the interactive loop has to keep it:
+# `laya < requests.txt` is a script, so the session owes the code its requests earned.
+def run_session(lines, argv, router=None):
+    """Drive the interactive loop with `lines` as what gets typed, then Ctrl-D."""
+    stub = router or StubRouter()
+    original_router, original_input = cli.make_router, builtins.input
+    typed = iter(list(lines) + [None])
+
+    def fake_input(_prompt=""):
+        item = next(typed)
+        if item is None:
+            raise EOFError
+        return item
+
+    cli.make_router = lambda args: stub
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        builtins.input = fake_input
+        with redirect_stdout(out), redirect_stderr(err):
+            code = cli.main(argv)
+    finally:
+        cli.make_router = original_router
+        builtins.input = original_input
+    return code, out.getvalue(), err.getvalue(), stub
+
+
+class AlwaysBrokenRouter:
+    """Fails every request but counts them, so a session cut short by one is visible."""
+
+    def __init__(self):
+        self.count = 0
+
+    def route(self, state, **kwargs):
+        self.count += 1
+        raise OSError("connection failed")
+
+
+class SecondRequestFails(AlwaysBrokenRouter):
+    def route(self, state, **kwargs):
+        if self.count:
+            raise OSError("connection failed")
+        self.count += 1
+        return StubDecision()
+
+
+class FirstRequestFails(SecondRequestFails):
+    def route(self, state, **kwargs):
+        if self.count:
+            self.count += 1
+            return StubDecision()
+        self.count += 1
+        raise OSError("connection failed")
+
+
+broken = AlwaysBrokenRouter()
+code, out, err, stub = run_session(["first request", "second request"], [], router=broken)
+check("interactive: a handled failure exits 2, not 0", code == 2, "got %r" % code)
+check("interactive: a handled failure keeps the session up",
+      broken.count == 2 and "could not run Laya" in err, "%d calls, err %r" % (broken.count, err))
+
+code, out, err, stub = run_session(["first request", "second request"], [])
+check("interactive: a clean session exits 0", code == 0, "got %r" % code)
+check("interactive: a clean session routes both lines",
+      [c[0] for c in stub.route_calls] == [{"text": "first request"}, {"text": "second request"}],
+      str(stub.route_calls))
+
+mixed = SecondRequestFails()
+code, out, err, stub = run_session(["ok", "bad"], [], router=mixed)
+check("interactive: one failed request is enough for exit 2", code == 2, "got %r" % code)
+
+mixed = FirstRequestFails()
+code, out, err, stub = run_session(["bad", "ok"], [], router=mixed)
+check("interactive: a later success does not erase an earlier failure",
+      code == 2 and mixed.count == 2, "code %r, %d calls" % (code, mixed.count))
+
+code, out, err, stub = run_session(["quit"], [], router=AlwaysBrokenRouter())
+check("interactive: leaving the prompt before a request exits 0", code == 0, "got %r" % code)
 
 # --------------------------------------------------------------------- explicit flags
 code, out, err, stub = run_cli(["--model", "english", "charged twice"])
