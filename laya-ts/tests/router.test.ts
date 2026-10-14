@@ -194,4 +194,3 @@ describe("router", () => {
     expect(skipped.model).toBe("cached");
   });
 });
-
