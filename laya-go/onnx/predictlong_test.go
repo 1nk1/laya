@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -107,6 +108,13 @@ func TestPredictLongThroughTheGraph(t *testing.T) {
 			}
 		}
 		w := an.Answer.Base().Window
+		if topGap(scored, r) <= 2e-4 {
+			// batch size changes the floats a little, so a near tie may go either way
+			if d := deciding(an.Answer) - bestKey; w == nil || d > 2e-4 || d < -2e-4 {
+				t.Errorf("%s: window = %+v, deciding value off by %.2e", an.ID, w, d)
+			}
+			continue
+		}
 		if w == nil || w.Index != best || w.Count != len(texts) || w.TokenStart != starts[best] || w.TokenEnd != min(starts[best]+plan.Window, len(st.IDs)) {
 			t.Errorf("%s: window = %+v, want index %d of %d", an.ID, w, best, len(texts))
 			continue
@@ -123,13 +131,27 @@ func TestPredictLongThroughTheGraph(t *testing.T) {
 	}
 	for r, an := range long.Answers {
 		other := capped.Answers[r].Answer
-		if an.Answer.Base().Window.Index != other.Base().Window.Index {
+		if an.Answer.Base().Window.Index != other.Base().Window.Index && topGap(scored, r) > 2e-4 {
 			t.Errorf("%s: a window cap moved the deciding window %d -> %d", an.ID, an.Answer.Base().Window.Index, other.Base().Window.Index)
 		}
 		if d := deciding(an.Answer) - deciding(other); d > 2e-4 || d < -2e-4 {
 			t.Errorf("%s: a window cap moved the deciding value by %.2e", an.ID, d)
 		}
 	}
+}
+
+// topGap is the gap between the two highest deciding values of question r across the windows.
+func topGap(scored []schema.Prediction, r int) float64 {
+	hi, second := math.Inf(-1), math.Inf(-1)
+	for j := range scored {
+		switch k := deciding(scored[j].Answers[r].Answer); {
+		case k > hi:
+			hi, second = k, hi
+		case k > second:
+			second = k
+		}
+	}
+	return hi - second
 }
 
 func deciding(a schema.Answer) float64 {

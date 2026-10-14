@@ -3,6 +3,7 @@ package schema
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -137,6 +138,12 @@ func (u Usage) scanned() bool { return u.Windows > 1 }
 // MarshalJSON writes laya's usage dict by hand, so the bytes are Python's: truncated_questions is
 // always a list, never null, and the ids are not HTML-escaped.
 func (u Usage) MarshalJSON() ([]byte, error) {
+	if u.scanned() && u.StateTokens == 0 && u.StateTokensDropped == 0 && u.TruncatedWindows == 0 &&
+		len(u.TruncatedQuestions) == 0 && len(u.CollapsedOptions) == 0 {
+		// laya's usage for a scan with no questions: no state was read, so only these keys.
+		return []byte(fmt.Sprintf(`{"input_tokens":%d,"output_tokens":%d,"windows":%d}`,
+			u.InputTokens, u.OutputTokens, u.Windows)), nil
+	}
 	var b strings.Builder
 	truncated := strconv.FormatBool(u.Truncated)
 	if u.scanned() {
@@ -183,11 +190,17 @@ func (u *Usage) UnmarshalJSON(data []byte) error {
 	switch raw := strings.TrimSpace(string(aux.Truncated)); raw {
 	case "", "null":
 	case "true", "false":
+		if u.scanned() {
+			return errors.New(`schema: usage "truncated" of a scan of several windows must be a count`)
+		}
 		u.Truncated = raw == "true"
 	default:
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 0 {
 			return fmt.Errorf("schema: usage \"truncated\" must be a flag or a window count, got %s", raw)
+		}
+		if !u.scanned() {
+			return errors.New(`schema: usage "truncated" is a count only for a scan of several windows`)
 		}
 		u.TruncatedWindows, u.Truncated = n, n > 0
 	}

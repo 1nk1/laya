@@ -47,8 +47,8 @@ type LongPrediction struct {
 // WithWindow, WithStride, WithBatchSize (windows per run; by default the scan bounds a run as
 // laya's window_batch_cap does) and WithLanguage apply. A *StateError names a window, not the
 // state. Errors are those of PredictBatch, and sequence.ErrNoRoom and sequence.ErrStrideGap when
-// the questions leave no room or the stride leaves gaps. The confidence gate, hooks and
-// calibration are not applied.
+// the questions leave no room or the stride leaves gaps. The confidence gate and hooks are not
+// applied, and Go has no calibration.
 func (a *Agent) PredictLong(ctx context.Context, state any, qs schema.Questions, opts ...CallOption) (LongPrediction, error) {
 	var c call
 	for _, opt := range opts {

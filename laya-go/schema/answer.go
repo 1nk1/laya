@@ -398,6 +398,9 @@ func windowFrom(v any) (*Window, error) {
 		}
 		*dst = int(f)
 	}
+	if w.Count < 1 || w.Index < 0 || w.Index >= w.Count || w.TokenStart < 0 || w.TokenEnd < w.TokenStart {
+		return nil, errors.New(`schema: answer "window" is out of range`)
+	}
 	return w, nil
 }
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -143,6 +145,9 @@ func TestPredictLongWithoutQuestions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if js, _ := json.Marshal(got.Usage); string(js) != fmt.Sprintf(`{"input_tokens":0,"output_tokens":0,"windows":%d}`, got.Usage.Windows) {
+		t.Errorf("usage = %s", js)
+	}
 	if len(got.Answers) != 0 || got.Usage.Windows < 3 || len(s.seen()) != 0 {
 		t.Errorf("answers = %v, windows = %d, runs = %d", got.Answers, got.Usage.Windows, len(s.seen()))
 	}
@@ -245,7 +250,7 @@ func TestPredictLongGoldenCases(t *testing.T) {
 					}
 				}
 				want := fixtures.Strings(t, rec.Must("warnings"))
-				if len(want) != 2*len(got.Warnings) {
+				if !slices.Equal(want, append(slices.Clone(got.Warnings), got.Warnings...)) {
 					t.Errorf("warnings = %q, recorded %q", got.Warnings, want)
 				}
 			})

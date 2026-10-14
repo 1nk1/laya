@@ -639,3 +639,55 @@ func TestScanUsageAndWindowJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestUsageTruncatedMatchesWindows(t *testing.T) {
+	for _, bad := range []string{`{"truncated":true,"windows":3}`, `{"truncated":2}`, `{"truncated":2,"windows":1}`} {
+		var u schema.Usage
+		if err := json.Unmarshal([]byte(bad), &u); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	for _, ok := range []string{`{"truncated":2,"windows":3}`, `{"truncated":true,"windows":1}`, `{"input_tokens":0,"output_tokens":0,"windows":3}`} {
+		var u schema.Usage
+		if err := json.Unmarshal([]byte(ok), &u); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+}
+
+func TestUsageOfScanWithoutQuestionsIsBare(t *testing.T) {
+	const want = `{"input_tokens":0,"output_tokens":0,"windows":3}`
+	b, err := json.Marshal(schema.Usage{TruncatedQuestions: []string{}, Windows: 3})
+	if err != nil || string(b) != want {
+		t.Fatalf("got %s, %v", b, err)
+	}
+	var u schema.Usage
+	if err := json.Unmarshal(b, &u); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := json.Marshal(u); string(again) != want {
+		t.Errorf("round trip %s", again)
+	}
+	full, _ := json.Marshal(schema.Usage{StateTokens: 1, TruncatedQuestions: []string{}, Windows: 3})
+	if !strings.Contains(string(full), `"truncated":0`) {
+		t.Errorf("a scan that read state lost its keys: %s", full)
+	}
+}
+
+func TestWindowRange(t *testing.T) {
+	const base = `{"type":"noul","noul":0.5,"confidence":0.5,"answer_confidence":0.5,"action":{"act_probability":0.0},"window":`
+	for _, bad := range []string{
+		`{"index":3,"token_start":0,"token_end":1,"count":3}`,
+		`{"index":-1,"token_start":0,"token_end":1,"count":3}`,
+		`{"index":0,"token_start":-1,"token_end":1,"count":3}`,
+		`{"index":0,"token_start":5,"token_end":4,"count":3}`,
+		`{"index":0,"token_start":0,"token_end":1,"count":0}`,
+	} {
+		if _, err := schema.UnmarshalAnswer([]byte(base + bad + `}`)); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	if _, err := schema.UnmarshalAnswer([]byte(base + `{"index":2,"token_start":4,"token_end":4,"count":3}}`)); err != nil {
+		t.Error(err)
+	}
+}
