@@ -181,8 +181,19 @@ BATCH_BODY_OUT_PARAMETERS = ("diagnostics",)
 
 
 def _env_bool(name: str, default: bool) -> bool:
+    """A `LAYA_*` switch. An unset or blank value means `default`; only the four spellings turn it on.
+
+    Blank is not false here because blank is what a `.env` line, a Compose `KEY=` with nothing
+    after it, and a CI matrix write when a variable is declared and left for the operator to fill
+    in, and most other readers of this family already read it that way -- `mcp.device.env_device`
+    returns None for it, `mcp.remote._timeout_from_env` returns its default, and the numeric and
+    name resolvers below strip and fall back too. `LAYA_PRELOAD=` is the case that costs something:
+    `docs/cli-mcp.md` names `0` as how to ask for lazy loading, a declared-but-unfilled
+    `LAYA_PRELOAD=` gets it anyway, and `laya_status` then echoes the blank back as
+    `preload: false`.
+    """
     v = os.environ.get(name)
-    if v is None:
+    if v is None or not v.strip():
         return default
     return v.strip().lower() in ("1", "true", "yes", "on")
 

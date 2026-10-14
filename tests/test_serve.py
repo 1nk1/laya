@@ -814,6 +814,40 @@ def test_helpers():
     assert _env_bool("X_FLAG", True) is True
 
 
+def test_env_bool_reads_a_blank_value_as_unset(monkeypatch):
+    """`LAYA_X=` is "not set", the way most other readers of this family already read it.
+
+    A blank value is what a `.env` line, a Compose `KEY=` with nothing after it, or a CI matrix
+    writes when a variable is declared and left for the operator to fill in. Reading it as false
+    silently moved `LAYA_PRELOAD` off its documented default of `1` onto lazy loading -- the one
+    switch in the set whose default is True, and `docs/cli-mcp.md` names `0` as the spelling that
+    asks for it -- and `laya_status` then reported the blank back as the operator's own choice.
+    The truthy spelling set is unchanged: anything that is a value and is not one of the four is
+    still false.
+    """
+    for blank in ("", " ", "  \t ", "\n"):
+        monkeypatch.setenv("X_FLAG", blank)
+        assert _env_bool("X_FLAG", True) is True, repr(blank)
+        assert _env_bool("X_FLAG", False) is False, repr(blank)
+
+    monkeypatch.delenv("X_FLAG", raising=False)
+    assert _env_bool("X_FLAG", True) is True
+    assert _env_bool("X_FLAG", False) is False
+
+    for on in ("1", "true", "TRUE", " yes ", "on"):
+        monkeypatch.setenv("X_FLAG", on)
+        assert _env_bool("X_FLAG", False) is True, repr(on)
+    for off in ("0", "no", "off", "false", "ture", "2"):
+        monkeypatch.setenv("X_FLAG", off)
+        assert _env_bool("X_FLAG", True) is False, repr(off)
+
+    # The live case: the preload switch keeps its documented default when the value is blank.
+    monkeypatch.setenv("LAYA_PRELOAD", "")
+    assert _env_bool("LAYA_PRELOAD", True) is True
+    monkeypatch.setenv("LAYA_PRELOAD", "0")
+    assert _env_bool("LAYA_PRELOAD", True) is False
+
+
 def test_resolve_model_follows_the_router_registry(monkeypatch):
     """A checkpoint added to laya.router must become pinnable over HTTP with no edit here.
 
