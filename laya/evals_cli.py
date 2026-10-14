@@ -257,8 +257,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _load_report(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
+    # `main`'s usage-error handler promises that "an unreadable report" exits 2, and four report
+    # reads route through here. Only one shape of unreadable kept that promise: a missing path
+    # raised FileNotFoundError and landed in the handler, while a path that is a directory or on an
+    # unreadable volume, a file that is not valid JSON, and a file that is valid JSON but not an
+    # object each escaped as a traceback and exit 1 -- the code this CLI reserves for "a threshold
+    # or a baseline tolerance failed". A CI job cannot tell those apart, which is the one
+    # distinction the exit codes exist to draw. `laya-evals agreement` has always read its three
+    # runs this way; this makes the shared report loader satisfy the same contract.
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            document = json.load(handle)
+    except (OSError, ValueError, RecursionError) as exc:
+        raise EvalError("cannot read report %r: %s" % (path, exc)) from exc
+    if not isinstance(document, dict):
+        raise EvalError("cannot read report %r: expected a JSON object, found %s"
+                        % (path, type(document).__name__))
+    return document
 
 
 def _check_thresholds(overall: Dict[str, float], mins: Dict[str, float],
@@ -489,7 +504,15 @@ def _cmd_run(args) -> int:
 def _cmd_evidence(args) -> int:
     try:
         result = evidence.inspect_checkpoint(args.checkpoint, args.report)
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
+        # `FileNotFoundError` alone covered a missing path only. A `--report` that is a directory,
+        # or a checkpoint config the process may not read, raised an OSError subclass that walked
+        # out of `main` and left a traceback with exit 1 -- the code this CLI keeps for a quality
+        # failure -- next to the same mistake on a missing path, which exited 2. Both are caller
+        # mistakes about a named path, and the errno text names it. Nothing here reaches the Hub:
+        # `laya/evidence.py` imports `json` and `os` only, so there is no failed download to
+        # mistake for a usage error, which is why this handler is allowed to be wider than the
+        # `FileNotFoundError` one in `main`.
         print("laya-evals: %s" % exc, file=sys.stderr)
         return 2
     print(evidence.format_summary(result))

@@ -2154,6 +2154,80 @@ def test_cli_run_an_unwritable_output_path_is_a_usage_error(monkeypatch, tmp_pat
                 monkeypatch.setattr("builtins.open", real_open)
 
 
+def test_cli_report_reads_refuse_an_unreadable_report_with_code_2(monkeypatch, tmp_path, capsys):
+    """`main` promises an unreadable report is a usage error; only one shape of it kept that promise.
+
+    Every report read goes through `_load_report` -- `compare`'s report and baseline, and `run`'s
+    baseline -- and it opened bare. A path that does not exist raised `FileNotFoundError`, which
+    `main` narrows to exit 2, but the other ways a file fails to be a report each escaped: a path
+    that *is* a directory (`IsADirectoryError`), text that is not JSON (`JSONDecodeError`), JSON
+    that is valid but not an object (`AttributeError` one call later), and an errno that names no
+    path at all. Each left a traceback and exit 1 -- the code this CLI reserves for "a threshold or
+    a baseline tolerance failed" -- so a CI job could not tell a corrupt artifact from a regression.
+    The message has to name the path, because three of those four errors do not.
+    """
+    from laya import evals_cli
+
+    real_open = open                      # captured before any patch below delegates to it
+    document = json.dumps({"overall": {"choice_accuracy": 0.5}, "slices": {}, "cases": []})
+    good = tmp_path / "good.json"
+    good.write_text(document, encoding="utf-8")
+    not_json = tmp_path / "not-json.json"
+    not_json.write_text("{nope", encoding="utf-8")
+    not_object = tmp_path / "not-object.json"
+    not_object.write_text("[1, 2]", encoding="utf-8")
+    a_directory = tmp_path / "a-directory"
+    a_directory.mkdir()
+    denied = tmp_path / "denied.json"
+    denied.write_text(document, encoding="utf-8")
+
+    cases = [
+        ("a path that is a directory, not a file", str(a_directory), None),
+        ("a file that is not JSON", str(not_json), None),
+        ("a file that is valid JSON but not an object", str(not_object), None),
+        ("a volume that refuses the read", str(denied), OSError(13, "Permission denied")),
+    ]
+
+    def make_refuser(wanted, err):
+        """`open` for real, except that one path raises. A factory, so nothing binds late."""
+        def refuse(target, *a, **k):
+            if str(target) == wanted:
+                raise err
+            return real_open(target, *a, **k)
+        return refuse
+
+    for label, path, error in cases:
+        for position in ("report", "baseline"):
+            monkeypatch.setattr("builtins.open", real_open)
+            if error is not None:
+                monkeypatch.setattr("builtins.open", make_refuser(path, error))
+            argv = (["compare", path, "--baseline", str(good)] if position == "report" else
+                    ["compare", str(good), "--baseline", path])
+            capsys.readouterr()
+            assert evals_cli.main(argv) == 2, "%s as %s: %s" % (label, position, argv)
+            err = capsys.readouterr().err
+            assert "Traceback" not in err, "%s as %s leaked a traceback: %s" % (label, position, err)
+            assert "cannot read report" in err, "%s as %s: %s" % (label, position, err)
+            assert path in err, "%s as %s did not name the path: %s" % (label, position, err)
+            if error is not None:
+                assert "Permission denied" in err, (
+                    "%s as %s lost the errno the caller needs: %s" % (label, position, err))
+
+    # `run` reads the same function, on the same two shapes, after a whole evaluation pass.
+    _patch_router(monkeypatch)
+    dataset = _write_dataset(tmp_path, RUN_ROWS)
+    for label, path, error in cases[:2]:
+        monkeypatch.setattr("builtins.open", real_open)
+        if error is not None:
+            monkeypatch.setattr("builtins.open", make_refuser(path, error))
+        capsys.readouterr()
+        assert evals_cli.main(["run", dataset, "--baseline", path]) == 2, "%s under run" % label
+        err = capsys.readouterr().err
+        assert "Traceback" not in err, "%s under run leaked a traceback: %s" % (label, err)
+        assert "cannot read report" in err and path in err, "%s under run: %s" % (label, err)
+    monkeypatch.setattr("builtins.open", real_open)
+
+
 def test_cli_run_refuses_a_baseline_from_a_different_dataset(monkeypatch, tmp_path, capsys):
     """The gate that a promotion decision rests on: two different runs cannot pass as one.
 
