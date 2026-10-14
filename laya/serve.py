@@ -738,6 +738,33 @@ def _resolve_port() -> int:
     return port
 
 
+#: What `LAYA_LOG_LEVEL` answers when it is unset or blank: uvicorn's own default. Named so the read
+#: and the blank guard state it once -- a second copy is a second thing to keep in step.
+DEFAULT_LOG_LEVEL = "info"
+
+
+def _resolve_log_level() -> str:
+    """Log level from LAYA_LOG_LEVEL, validated. Exits with a message instead of a traceback.
+
+    The accepted names are uvicorn's own ``LOG_LEVELS``, not a list restated here, so the two cannot
+    drift. uvicorn lowercases the value but does not strip it, so both a typo and a value copied out
+    of a ``.env`` with padding reach ``LOG_LEVELS[...]`` and die inside ``Config.configure_logging``
+    with a bare ``KeyError`` naming the value -- a traceback that reads as a uvicorn bug, from the
+    one variable whose sibling in this file promises a message. A blank value is "not specified",
+    which is how the rest of the family reads it, and takes the documented default.
+    """
+    raw = os.environ.get("LAYA_LOG_LEVEL", DEFAULT_LOG_LEVEL)
+    level = raw.strip().lower()
+    if not level:
+        return DEFAULT_LOG_LEVEL
+    from uvicorn.config import LOG_LEVELS
+
+    if level not in LOG_LEVELS:
+        raise SystemExit("invalid LAYA_LOG_LEVEL %r: must be one of %s"
+                         % (raw.strip(), ", ".join(sorted(LOG_LEVELS))))
+    return level
+
+
 #: Values the walk in `_state_length_lower_bound_over` will examine before giving up. This bounds the
 #: values *inspected*, not the total work: `stack.extend` pushes a container's elements without
 #: charging them against the budget, so a 2 MiB body of many small values costs ~0.43 ms of walking
@@ -1537,7 +1564,7 @@ def main() -> None:
         create_app(),
         host=os.environ.get("LAYA_HOST", "0.0.0.0"),
         port=_resolve_port(),
-        log_level=os.environ.get("LAYA_LOG_LEVEL", "info"),
+        log_level=_resolve_log_level(),
         http=NoDelayHTTPProtocol,
     )
 
