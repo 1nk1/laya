@@ -496,7 +496,7 @@ is reviewable on its own:
 | `schema` | the report shape, `laya-evals-report/1`, so a consumer can refuse one it cannot read |
 | `dataset` | the path as typed -- a name, not a hash |
 | `dataset_sha256` | the sha256 of the dataset bytes that were parsed |
-| `questions_sha256` | a fingerprint of the question schema: every question's id, type, `instructions` and `criteria`, over the whole dataset |
+| `questions_sha256` | a fingerprint of the question schema: every question's id, type, `instructions`, `labels` and `criteria`, plus `option_order` on any row that names it, over the whole dataset |
 | `laya_version` | the `laya` that computed the numbers |
 | `coverage_metric_definition` | which definition of `aurc` / `selective_accuracy@*` produced this report (see [coverage cuts](#coverage-cuts-and-ties)). A relative gate rule on either refuses a baseline recorded under a different one, rather than subtracting numbers that do not mean the same thing |
 | `thresholds` | the gate this run applied: `min`, `max` and `baseline_tolerance` |
@@ -527,6 +527,17 @@ non-string `instructions` is hashed as `json.dumps(ins, ensure_ascii=False)`, ma
 a copy edit is treated as a new experiment. That is the honest default -- the alternative is a
 similarity heuristic standing between a run and its baseline, and no evaluation system in common
 use has one.
+
+`option_order` is the one field hashed conditionally, and only when a row names it. It is a
+caller-supplied key: `laya/mcp/server.py` advertises it, `Agent._check_question` and
+`laya/mcp/tools.py::_check_option_order` validate it as a permutation of the option indices, and
+`laya/common.py::build_sequence` and `unpermute_probs` read it to place each answer slot, so a row
+that permutes its options asks a different question and two such datasets must not share a
+fingerprint. `research/eval/metamorphic.py::permute_options` measures the same sensitivity from the
+other side -- it exists to shuffle the option list and check that the answers follow. Hashing an
+absent key as `null` would move the digest of every dataset that never uses the field, so an absent
+key stays out of the hash and such a dataset keeps the fingerprint its committed baseline already
+carries.
 
 Nothing time-bearing is recorded, so a report is still byte-reproducible for a fixed runner.
 
