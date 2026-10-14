@@ -284,3 +284,43 @@ func TestStateErrorWithoutACause(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestZeroAgentRefusesCallsBeforeClose(t *testing.T) {
+	var a agent.Agent
+	if _, err := a.Predict(context.Background(), "x", questions(t)); !errors.Is(err, agent.ErrClosed) {
+		t.Errorf("Predict on the zero Agent = %v, want ErrClosed", err)
+	}
+}
+
+type panickyClose struct{ *fakeSession }
+
+func (panickyClose) Close() error { panic("boom") }
+
+func TestPanickingSessionCloseIsReportedAgain(t *testing.T) {
+	a, err := agent.Open(toyCheckpoint(`{}`), panickyClose{&fakeSession{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer func() { recover() }()
+		a.Close()
+	}()
+	if err := a.Close(); err == nil || !strings.Contains(err.Error(), "panicked: boom") {
+		t.Errorf("second Close = %v, want the panic reported", err)
+	}
+}
+
+func TestStateErrorTexts(t *testing.T) {
+	for _, c := range []struct {
+		err  *agent.StateError
+		want string
+	}{
+		{&agent.StateError{Index: 0, Err: errors.New("state machine jammed")}, "agent: state 0: state machine jammed"},
+		{&agent.StateError{Index: 1, Err: &agent.StateError{Index: 3, Err: errors.New("x")}}, "agent: state 1: agent: state 3: x"},
+		{&agent.StateError{Index: 2, Err: errors.New("agent: state is nil")}, "agent: state 2: is nil"},
+	} {
+		if got := c.err.Error(); got != c.want {
+			t.Errorf("got %q, want %q", got, c.want)
+		}
+	}
+}

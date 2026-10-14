@@ -40,6 +40,10 @@ func TestBatchValidate(t *testing.T) {
 		{"rows of no tokens", func(b *infer.Batch) { *b = batch(3, 0, 2) }, "other"},
 		{"marker position below zero", func(b *infer.Batch) { b.MarkerPos[2] = -1 }, "other"},
 		{"marker position at the length", func(b *infer.Batch) { b.MarkerPos[5] = 4 }, "other"},
+		{"negative token id", func(b *infer.Batch) { b.InputIDs[5] = -1 }, "other"},
+		{"qtype below zero", func(b *infer.Batch) { b.QType[1] = -1 }, "other"},
+		{"qtype above two", func(b *infer.Batch) { b.QType[2] = 3 }, "other"},
+		{"qtype two", func(b *infer.Batch) { b.QType[2] = 2 }, ""},
 		{"marker position in range", func(b *infer.Batch) { b.MarkerPos[5] = 3 }, ""},
 		// 2 * 2^62 wraps to the most negative int, which no slice length equals.
 		{"rows x length overflows", func(b *infer.Batch) { *b = infer.Batch{Rows: 2, Length: math.MaxInt/2 + 1, Markers: 2} }, "overflow"},
@@ -124,6 +128,22 @@ func TestCollateBatchIsInferBatch(t *testing.T) {
 func TestValidateNamesTheEmptyRow(t *testing.T) {
 	err := batch(3, 0, 2).Validate()
 	if err == nil || !strings.Contains(err.Error(), "0 tokens") {
+		t.Fatalf("Validate = %v", err)
+	}
+}
+
+// TestValidateNamesTheBadRowAndColumn pins that the error says where the value is.
+func TestValidateNamesTheBadRowAndColumn(t *testing.T) {
+	b := batch(3, 4, 2)
+	b.InputIDs[9] = -1 // row 2, column 1
+	err := b.Validate()
+	if err == nil || !strings.Contains(err.Error(), "row 2 column 1") {
+		t.Fatalf("Validate = %v", err)
+	}
+	b = batch(3, 4, 2)
+	b.QType[1] = -1
+	err = b.Validate()
+	if err == nil || !strings.Contains(err.Error(), "qtype row 1") {
 		t.Fatalf("Validate = %v", err)
 	}
 }

@@ -201,6 +201,16 @@ func TestLoadErrorHint(t *testing.T) {
 	}
 }
 
+func TestLoadErrorHintOnlyForAPIBaseFailures(t *testing.T) {
+	err := loadError("/x/missing.so", errors.New("dlopen: no such file or directory"))
+	if !errors.Is(err, ErrRuntime) || !strings.Contains(err.Error(), "no such file") {
+		t.Fatalf("%v", err)
+	}
+	if strings.Contains(err.Error(), "1.29") {
+		t.Errorf("a file-not-found error carries the version hint: %v", err)
+	}
+}
+
 func TestResolveOptions(t *testing.T) {
 	o, err := resolve([]Option{WithLibrary("/l"), nil, WithIntraOpThreads(3), WithInterOpThreads(2)})
 	if err != nil || o.library != "/l" || o.intra != 3 || o.inter != 2 {

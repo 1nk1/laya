@@ -34,7 +34,14 @@ func (e *StateError) Error() string {
 		return fmt.Sprintf("agent: state %d", e.Index)
 	}
 	// The cause is a complete message ("agent: state is nil; ..."); keep one prefix and one subject.
-	msg := strings.TrimPrefix(strings.TrimPrefix(e.Err.Error(), "agent: "), "state ")
+	msg := e.Err.Error()
+	if rest, ok := strings.CutPrefix(msg, "agent: state "); ok {
+		if _, nested := e.Err.(*StateError); !nested {
+			msg = rest
+		}
+	} else {
+		msg = strings.TrimPrefix(msg, "agent: ")
+	}
 	return fmt.Sprintf("agent: state %d: %s", e.Index, msg)
 }
 
@@ -124,9 +131,16 @@ func (a *Agent) Config() Config {
 // Close marks the agent closed, waits for calls in flight and closes the session. Close blocks
 // until calls in flight return; cancel their contexts to bound it. A call that has not yet
 // entered returns ErrClosed without waiting. Close is idempotent: a second call, concurrent or
-// not, waits for the first and returns the same error.
+// not, waits for the first and returns the same error. Close must not be called from inside a
+// call (from the session's Run): it would wait for that call, which waits for Close.
 func (a *Agent) Close() error {
 	a.once.Do(func() {
+		defer func() {
+			if r := recover(); r != nil { // once is spent either way: later calls report this
+				a.closeErr = fmt.Errorf("agent: the session's Close panicked: %v", r)
+				panic(r)
+			}
+		}()
 		a.mu.Lock()
 		a.shut = true
 		a.closed.Store(true)
@@ -196,7 +210,7 @@ func (a *Agent) Predict(ctx context.Context, state any, qs schema.Questions, opt
 // run.
 //
 // Errors may be wrapped; match them with errors.Is and errors.As:
-//   - ErrClosed, once Close has been called;
+//   - ErrClosed, once Close has been called (a context already done is reported first);
 //   - ctx.Err(), checked on entry, before each state is encoded and between runs;
 //   - *StateError, naming the state, around sequence.ErrUnsupportedState (also for a nil
 //     state), sequence.ErrMissingSpecialToken or a *sequence.MarkersError with its ID set;

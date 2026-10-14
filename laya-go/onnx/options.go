@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // LibraryEnv names the environment variable that holds the path of the ONNX Runtime shared
@@ -17,7 +18,10 @@ var ErrNoCGO = errors.New("onnx: built without cgo")
 // ErrRuntime wraps every failure to load or start ONNX Runtime, with the path tried and a hint.
 var ErrRuntime = errors.New("onnx: cannot load ONNX Runtime")
 
-// ErrRuntimeConflict is returned when Open names a library other than the one already loaded.
+// ErrRuntimeConflict is returned when Open is given a WithLibrary path other than the one
+// already loaded. Only an explicit WithLibrary is checked: LibraryEnv and the default name are
+// used only to load the first runtime. An ONNX Runtime the application initialized itself is
+// adopted as is, and then no library option is checked or used.
 var ErrRuntimeConflict = errors.New("onnx: ONNX Runtime already loaded from another path")
 
 // Option adjusts Open.
@@ -28,13 +32,16 @@ type options struct {
 	intra, inter int
 }
 
-// WithLibrary sets the ONNX Runtime shared library to load. It overrides LibraryEnv.
+// WithLibrary sets the ONNX Runtime shared library to load. It overrides LibraryEnv. If a
+// runtime is already loaded from another path, Open fails with ErrRuntimeConflict.
 func WithLibrary(path string) Option { return func(o *options) { o.library = path } }
 
 // WithIntraOpThreads sets the threads one operator may use. 0 keeps the runtime default.
 func WithIntraOpThreads(n int) Option { return func(o *options) { o.intra = n } }
 
-// WithInterOpThreads sets the operators that may run at once. 0 keeps the runtime default.
+// WithInterOpThreads sets the operators that may run at once. 0 keeps the runtime default. A
+// value above 0 also selects ONNX Runtime's parallel execution mode, which ignores the count
+// otherwise.
 func WithInterOpThreads(n int) Option { return func(o *options) { o.inter = n } }
 
 // resolve applies the options and rejects values that cannot be honored.
@@ -90,6 +97,9 @@ func samePath(a, b string) bool {
 
 // loadError wraps a failure to start the runtime from path as ErrRuntime, with a hint.
 func loadError(path string, err error) error {
-	return fmt.Errorf("%w: %q: %v (needs ONNX Runtime 1.29 or newer; set WithLibrary or %s to its shared library)",
-		ErrRuntime, path, err, LibraryEnv)
+	hint := ""
+	if strings.Contains(err.Error(), "API base") {
+		hint = " (needs ONNX Runtime 1.29 or newer; set WithLibrary or " + LibraryEnv + " to its shared library)"
+	}
+	return fmt.Errorf("%w: %q: %v%s", ErrRuntime, path, err, hint)
 }

@@ -66,10 +66,13 @@ func (e *ShapeError) Error() string {
 //     head takes topk(2);
 //   - Rows*Length and Rows*Markers do not overflow an int (Markers of at least 2 keeps Rows*2 safe too);
 //   - every slice's length matches Rows, Length and Markers, else a *ShapeError;
-//   - every MarkerPos lies in [0, Length).
+//   - every MarkerPos lies in [0, Length);
+//   - no token id is negative, and every QType is 0, 1 or 2 (the three question types).
 //
-// All but the ShapeError are plain errors. Token ids, question types and mask values are not
-// checked: a backend passes them to the graph, which rejects an out-of-range index.
+// All but the ShapeError are plain errors. Token ids at or above the vocabulary size and mask
+// values are not checked: a backend passes them to the graph (a nonzero mask counts as 1). The
+// negative ids and types are refused here because ONNX Runtime wraps them to the last rows of the
+// embedding tables and answers from the wrong rows without an error.
 func (b Batch) Validate() error {
 	if b.Rows < 0 || b.Length < 0 || b.Markers < 0 {
 		return fmt.Errorf("infer: batch has negative dimensions %d x %d x %d", b.Rows, b.Length, b.Markers)
@@ -102,6 +105,16 @@ func (b Batch) Validate() error {
 	for i, p := range b.MarkerPos {
 		if p < 0 || p >= int64(b.Length) {
 			return fmt.Errorf("infer: marker_pos[%d] is %d, outside [0, %d)", i, p, b.Length)
+		}
+	}
+	for i, id := range b.InputIDs {
+		if id < 0 {
+			return fmt.Errorf("infer: input_ids row %d column %d is %d, token ids must not be negative", i/b.Length, i%b.Length, id)
+		}
+	}
+	for i, q := range b.QType {
+		if q < 0 || q > 2 {
+			return fmt.Errorf("infer: qtype row %d is %d, want 0, 1 or 2", i, q)
 		}
 	}
 	return nil

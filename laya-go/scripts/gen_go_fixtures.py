@@ -989,14 +989,16 @@ def _answer_shape(answer):
     """One answer's type, key sets and order and legend, with no number and no chosen option.
 
     A choice is blanked only when it is one of the answer's options, so a choice that names no
-    option, or is not a scalar, still differs. Anything that is not an answer is kept as it is.
+    option, or is not a scalar, still differs. Option membership is by key spelling, so a label's
+    type (false against "false") is not compared here; the Go tests pin it against a golden
+    recorded where they run. Anything that is not an answer is kept as it is.
     """
     if not isinstance(answer, dict):
         return answer
     shaped = _unnumber(answer)
     probabilities = answer.get("probabilities")
     if "choice" in answer and isinstance(probabilities, dict) and _key(answer["choice"]) in probabilities:
-        shaped["choice"] = None
+        shaped["choice"] = "<an option>"  # not None, so a choice changed to null still differs
     return shaped
 
 
@@ -1010,7 +1012,7 @@ def _text_shape(text):
     """answer_text, parsed and shaped; text that is not JSON is kept, so it differs."""
     try:
         return render(_answer_shape(json.loads(text))).rstrip("\n")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return text
 
 
@@ -1045,7 +1047,7 @@ def main(argv=None):
         try:
             with open(path, encoding="utf-8") as handle:
                 current = render(portable(json.load(handle)))
-        except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError, RecursionError):
             current = None
         if current != render(portable(payload)):
             print("gen_go_fixtures: %s is stale or missing; run laya-go/scripts/gen_go_fixtures.py"

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -30,7 +31,9 @@ var (
 )
 
 // Open loads a fused laya.onnx, whose .data sidecar must sit beside it, on the CPU provider.
-// A graph that is missing, split, or declares other tensors is a *GraphError.
+// A graph that is missing, split, lacks its sidecar, or declares other tensors is a *GraphError.
+// Open reads the graph twice: once to check it, once to run it, because the binding has no
+// session-level query for a graph's inputs and outputs.
 func Open(graphPath string, opts ...Option) (*Session, error) {
 	o, err := resolve(opts)
 	if err != nil {
@@ -54,6 +57,10 @@ func Open(graphPath string, opts ...Option) (*Session, error) {
 func load(path string, o options) (*Session, error) {
 	in, out, err := ort.GetInputOutputInfo(path)
 	if err != nil {
+		if strings.Contains(err.Error(), "External data") {
+			return nil, &GraphError{Path: path, Problem: fmt.Sprintf(
+				"its external-data (.data) sidecar is missing; it must sit beside the graph file (%v)", err)}
+		}
 		return nil, fmt.Errorf("onnx: cannot read %s: %w", path, err)
 	}
 	if err := checkGraph(infos(in), infos(out)); err != nil {
@@ -71,21 +78,40 @@ func load(path string, o options) (*Session, error) {
 	if err := so.SetGraphOptimizationLevel(ort.GraphOptimizationLevelEnableAll); err != nil {
 		return nil, fmt.Errorf("onnx: optimization level: %w", err)
 	}
-	if o.intra > 0 {
-		if err := so.SetIntraOpNumThreads(o.intra); err != nil {
-			return nil, fmt.Errorf("onnx: intra-op threads: %w", err)
-		}
-	}
-	if o.inter > 0 {
-		if err := so.SetInterOpNumThreads(o.inter); err != nil {
-			return nil, fmt.Errorf("onnx: inter-op threads: %w", err)
-		}
+	if err := applyThreads(so, o); err != nil {
+		return nil, err
 	}
 	ds, err := ort.NewDynamicAdvancedSession(path, inputNames, outputNames, so)
 	if err != nil {
 		return nil, fmt.Errorf("onnx: cannot load %s (its .data sidecar must sit beside it): %w", path, err)
 	}
 	return &Session{s: ds}, nil
+}
+
+// threadConfig is the part of ort.SessionOptions that applyThreads sets, so a test can record it.
+type threadConfig interface {
+	SetIntraOpNumThreads(n int) error
+	SetInterOpNumThreads(n int) error
+	SetExecutionMode(m ort.ExecutionMode) error
+}
+
+// applyThreads sets the thread options. ONNX Runtime ignores the inter-op count in sequential
+// execution mode, so a requested inter-op count also selects parallel mode.
+func applyThreads(c threadConfig, o options) error {
+	if o.intra > 0 {
+		if err := c.SetIntraOpNumThreads(o.intra); err != nil {
+			return fmt.Errorf("onnx: intra-op threads: %w", err)
+		}
+	}
+	if o.inter > 0 {
+		if err := c.SetExecutionMode(ort.ExecutionModeParallel); err != nil {
+			return fmt.Errorf("onnx: execution mode: %w", err)
+		}
+		if err := c.SetInterOpNumThreads(o.inter); err != nil {
+			return fmt.Errorf("onnx: inter-op threads: %w", err)
+		}
+	}
+	return nil
 }
 
 func infos(in []ort.InputOutputInfo) []tensorInfo {
@@ -113,11 +139,12 @@ func infos(in []ort.InputOutputInfo) []tensorInfo {
 func (s *Session) RuntimeVersion() string { return s.version }
 
 // Close waits for runs in flight, releases the graph and drops its hold on ONNX Runtime, which
-// is unloaded when the last session closes. It is idempotent.
+// is unloaded when the last session closes, unless the application initialized that runtime
+// itself. It is idempotent, and a Session not made by Open closes with no effect.
 func (s *Session) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.s == nil {
 		return nil
 	}
 	s.closed = true
@@ -132,7 +159,7 @@ func (s *Session) Close() error {
 func (s *Session) Run(ctx context.Context, b infer.Batch) (infer.Output, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.closed {
+	if s.closed || s.s == nil {
 		return infer.Output{}, infer.ErrClosed
 	}
 	if err := b.Validate(); err != nil {
@@ -191,11 +218,8 @@ func (s *Session) Run(ctx context.Context, b infer.Batch) (infer.Output, error) 
 	}()
 
 	s.runs.Add(1)
-	if err := s.execute(ctx, inputs, outputs); err != nil {
-		if cerr := ctx.Err(); cerr != nil {
-			return infer.Output{}, fmt.Errorf("onnx: run cancelled: %w", cerr)
-		}
-		return infer.Output{}, fmt.Errorf("onnx: run failed on %d rows of %d tokens: %w", b.Rows, b.Length, err)
+	if terminated, err := s.execute(ctx, inputs, outputs); err != nil {
+		return infer.Output{}, runError(ctx, terminated, err, b)
 	}
 	logits, lok := outputs[0].(*ort.Tensor[float32])
 	act, aok := outputs[1].(*ort.Tensor[float32])
@@ -205,31 +229,51 @@ func (s *Session) Run(ctx context.Context, b infer.Batch) (infer.Output, error) 
 	return collect(b, outTensor{logits.GetShape(), logits.GetData()}, outTensor{act.GetShape(), act.GetData()})
 }
 
-// execute runs the graph, terminating it if ctx ends first. The watcher is always joined before
-// the run options are destroyed.
-func (s *Session) execute(ctx context.Context, inputs, outputs []ort.Value) error {
+// runError explains a failed run. A run the context terminated reports the cancellation; any
+// other failure keeps ONNX Runtime's error, and when the context has also ended it wraps both.
+func runError(ctx context.Context, terminated bool, err error, b infer.Batch) error {
+	cerr := ctx.Err()
+	switch {
+	case cerr != nil && terminated:
+		return fmt.Errorf("onnx: run cancelled: %w", cerr)
+	case cerr != nil:
+		return fmt.Errorf("onnx: run failed on %d rows of %d tokens: %w (context: %w)", b.Rows, b.Length, err, cerr)
+	}
+	return fmt.Errorf("onnx: run failed on %d rows of %d tokens: %w", b.Rows, b.Length, err)
+}
+
+// execute runs the graph, terminating it if ctx ends first, and reports whether it did. The
+// watcher is always joined before the run options are destroyed.
+func (s *Session) execute(ctx context.Context, inputs, outputs []ort.Value) (terminated bool, err error) {
 	done := ctx.Done()
 	if done == nil {
-		return s.s.Run(inputs, outputs)
+		return false, s.s.Run(inputs, outputs)
 	}
 	ro, err := ort.NewRunOptions()
 	if err != nil {
-		return fmt.Errorf("run options: %w", err)
+		return false, fmt.Errorf("run options: %w", err)
 	}
 	defer ro.Destroy()
 	stop := make(chan struct{})
 	joined := make(chan struct{})
+	var fired atomic.Bool
 	go func() {
 		defer close(joined)
 		select {
 		case <-done:
+			fired.Store(true)
 			ro.Terminate()
 		case <-stop:
 		}
 	}()
 	defer func() {
 		close(stop)
+		// The join must precede ro.Destroy (deferred above, so it runs after this): the watcher
+		// may still be inside ro.Terminate, and destroying the options under it is a
+		// use-after-free in native code.
 		<-joined
+		terminated = fired.Load()
 	}()
-	return s.s.RunWithOptions(inputs, outputs, ro)
+	err = s.s.RunWithOptions(inputs, outputs, ro)
+	return false, err
 }
