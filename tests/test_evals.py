@@ -1704,6 +1704,57 @@ def test_cli_rejects_a_nan_limit_or_tolerance(capsys):
     assert (args.min_accuracy, args.max_ece) == (0.8, 0.1)
 
 
+def test_cli_rejects_an_infinite_limit_or_tolerance(capsys):
+    """`inf` disables a gate exactly as `nan` does, and arrives without anyone typing "inf"."""
+    from laya import evals_cli
+
+    # Every spelling `float()` answers with a non-finite number, plus the overflow that is the
+    # reason this is not only a typo case: `--max ece=1e999` parses clean and means no cap.
+    for raw in ("inf", "-inf", "+inf", "Infinity", "-Infinity", "1e999", "inf ", " INF"):
+        with pytest.raises(EvalError, match="is not a number") as exc:
+            evals_cli._parse_pairs(["ece=%s" % raw])
+        assert raw in str(exc.value), "the message names the value the caller typed"
+
+    # The two dedicated flags bypass `_parse_pairs`, and exit 2 rather than a traceback.
+    for flag in ("--min-accuracy", "--max-ece"):
+        for raw in ("inf", "1e999"):
+            with pytest.raises(SystemExit) as exc:
+                evals_cli.main(["run", "data.jsonl", flag, raw])
+            assert exc.value.code == 2
+            assert "not a number" in capsys.readouterr().err
+        # A leading "-" is argparse's own refusal here, not `_limit`'s: the value reads as the
+        # next option. Still exit 2, and `--min accuracy=-inf` -- the form that reaches
+        # `_parse_pairs` -- is refused above.
+        with pytest.raises(SystemExit) as exc:
+            evals_cli.main(["run", "data.jsonl", flag, "-inf"])
+        assert exc.value.code == 2
+        assert "expected one argument" in capsys.readouterr().err
+
+    # Only the two non-finite kinds are refused: a boundary number is still a limit.
+    assert evals_cli._parse_pairs(["ece=0.0", "choice_accuracy=1.0", "brier=-0.0"]) == {
+        "ece": 0.0, "choice_accuracy": 1.0, "brier": 0.0}
+    assert evals_cli._limit("1e308") == 1e308
+
+
+def test_an_infinite_limit_would_have_decided_nothing():
+    """The harm the guard above prevents, pinned so relaxing it cannot go quiet.
+
+    Without the refusal these are the values `_check_thresholds` and `compare` compute from a
+    non-finite limit, and each one is a pass: `laya-evals` would exit 0 having gated nothing. A
+    test that asserts them is not asserting correct behaviour -- it is the witness that the
+    guard's absence was a defect.
+    """
+    from laya import evals_cli
+
+    inf = float("inf")
+    assert evals_cli._check_thresholds({"ece": 0.42}, {}, {"ece": inf}) == []
+    assert evals_cli._check_thresholds({"choice_accuracy": 0.10}, {"choice_accuracy": -inf}, {}) == []
+    ok, deltas = EvalReport(config={}, overall={"choice_accuracy": 0.10}).compare(
+        {"overall": {"choice_accuracy": 0.90}}, {"choice_accuracy": inf})
+    assert ok, "an 0.80 drop passed a gate whose tolerance was inf"
+    assert deltas["choice_accuracy"]["diff"] == pytest.approx(-0.8)
+
+
 def test_default_evaluators_cover_the_three_types():
     names = {e.name for e in default_evaluators()}
     assert {"choice_accuracy", "noul_accuracy", "score_mae", "mean_confidence"} <= names
