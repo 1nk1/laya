@@ -443,8 +443,9 @@ DEFERRED = ()
 required = sorted((package_read & documented_rows) - excluded - set(DEFERRED))
 
 check_true("core/the widened set is not empty", len(required) >= 10, required)
-check_true("core/the widened set includes the name this change forwards",
-           "LAYA_REVISION" in required, sorted(required))
+check_true("core/the widened set includes the names this change forwards",
+           "LAYA_REVISION" in required and "LAYA_SHA256_DIGESTS" in required,
+           sorted(required))
 check_true("core/nothing is deferred out of the widened set", DEFERRED == (),
            "a deferred name is a documented knob that no shipped deployment can set")
 
@@ -588,6 +589,17 @@ if server_doc:
                        re.search(r"^\| `%s` \|" % _name, _body, re.M) is not None,
                        "the two sections above derive their demand from this table, so a row "
                        "deleted by accident retires the gate instead of reopening the question")
+        _quickstart_env = env_blocks(read("compose.yaml")).get("laya", {})
+        check_true("compose/compose.yaml defines the laya service",
+                   "laya" in env_blocks(read("compose.yaml")), sorted(_quickstart_env))
+        for _name in ("LAYA_REVISION", "LAYA_SHA256_DIGESTS"):
+            check_true("compose/compose.yaml/laya forwards the supply-chain knob %s"
+                       % _name, _name in _quickstart_env,
+                       "it is documented and read by the quickstart runtime, and the service "
+                       "that needs it is the one that never named it")
+            check_true("docs/docker.md keeps the %s row in the main table" % _name,
+                       re.search(r"^\| `%s` \|" % _name, docker_md, re.M) is not None,
+                       "the base compose file forwards it so the main table must document it")
 
 # 7. the real renderer, when this machine has one: the rendered environment must carry the value.
 if shutil.which("docker"):
