@@ -241,9 +241,21 @@ except ValueError as exc:
     check_true("ece/refuses bins=0 with no samples", _ECE_REFUSAL in str(exc), str(exc))
 
 # numpy integer counts are the ones that arrive with the arrays this metric is handed
-check("ece/bins=5 as np.int64 matches int",
-      ece_score(*_mis, bins=np.int64(5)), ece_score(*_mis, bins=5))
-close("ece/bins=1 is the mean gap over the whole range", ece_score(*_mis, bins=1), 0.49, tol=1e-9)
+def _ece_figure(value):
+    """ece_score's number for a bins count, or None when it refuses."""
+    try:
+        return ece_score(_mis[0], _mis[1], bins=value)
+    except BaseException:  # noqa: BLE001 -- a refusal here is a failure to report, not to raise
+        return None
+
+
+_i64, _py = _ece_figure(np.int64(5)), _ece_figure(5)
+check_true("ece/bins=5 as np.int64 matches int", _py is not None and _i64 == _py,
+           "np.int64=%r int=%r" % (_i64, _py))
+# one bucket spans all of [0, 1], so it reports the raw gap between mean confidence and accuracy
+_one = _ece_figure(1)
+check_true("ece/bins=1 is the mean gap over the whole range",
+           _one is not None and abs(_one - 0.49) <= 1e-9, "%r" % (_one,))
 
 # laya.evals.ece delegates here, so the CLI's gate inherits the refusal
 from laya.evals import ece as _evals_ece  # noqa: E402
