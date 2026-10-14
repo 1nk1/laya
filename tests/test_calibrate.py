@@ -1173,6 +1173,61 @@ try:
 except ValueError:
     check_true("binning/bins must be >= 1", True)
 
+# `bins` and `min_bucket_n` are counts, and this module already has a count rule -- `min_n` in
+# `fit_one_temperature`, `k` in `_validated_pair`, and the `"bins"` of every `binning_map` entry a
+# calibration payload carries. Only `bins < 1` was applied to these two, so everything below either
+# escaped the guard as a `TypeError` from `range()` / a numpy cast, or -- the arms that were
+# *accepted* -- came back as a map. Checked message and all, because "raised something" was exactly
+# what was wrong.
+for _name, _bad in [("bins", 0), ("bins", -3), ("bins", 2.5), ("bins", 10.0), ("bins", float("nan")),
+                    ("bins", float("inf")), ("bins", True), ("bins", False), ("bins", None),
+                    ("bins", "10"), ("min_bucket_n", 0), ("min_bucket_n", -3),
+                    ("min_bucket_n", 2.5), ("min_bucket_n", float("nan")), ("min_bucket_n", True),
+                    ("min_bucket_n", None)]:
+    try:
+        fit_binning_map(mixed, fitted["temperature"], fitted["temperature_by_options"],
+                        **{_name: _bad})
+        _res = "no ValueError"
+    except ValueError as _exc:
+        _res = str(_exc)
+    except Exception as _exc:
+        _res = "raised %s" % type(_exc).__name__
+    check("binning/%s refuses %r" % (_name, _bad), _res,
+          "%s must be a positive integer, got %r" % (_name, _bad))
+
+# The two arms the old guard let through, and what they cost. `numpy.int64` is an `Integral`, so it
+# passed `bins < 1`, fitted happily, and put a numpy scalar in `"bins"` that `save_calibration`'s
+# `json.dump` refuses to serialise. `True` is an `Integral` too: one bin, and a map
+# `apply_calibration_payload` rejects on its boolean arm -- a producer whose own file format cannot
+# read what it emits.
+_np_map = fit_binning_map(mixed, fitted["temperature"], fitted["temperature_by_options"],
+                          bins=np.int64(12))
+check("binning/numpy bins arrives as a Python int",
+      type(next(iter(_np_map.values()))["bins"]).__name__, "int")
+check("binning/numpy bins keeps every requested bin",
+      len(next(iter(_np_map.values()))["values"]), 12)
+_np_payload = calibration_payload(fitted["temperature"], fitted["temperature_by_options"],
+                                  binning_map=_np_map)
+try:
+    _np_round = json.loads(json.dumps(_np_payload))
+except TypeError as _exc:
+    _np_round = "json %s" % _exc
+check_true("binning/numpy bins payload writes as JSON", isinstance(_np_round, dict), _np_round)
+if isinstance(_np_round, dict):
+    # Only a payload that made it to JSON can be read back, so a regression here fails the check
+    # above by name instead of aborting the suite on the loader's own type error.
+    _np_stub = type("Stub", (), {})()
+    apply_calibration_payload(_np_stub, _np_round)
+    check("binning/numpy bins reloads as the map that was fitted", _np_stub.binning_map, _np_map)
+
+# A floor given as a numpy integer is still a floor: the guard is this module's `Integral` rule, not
+# a narrower one, so a `min_bucket_n` that came out of an array expression keeps working.
+check("binning/numpy floor reads as the int floor",
+      fit_binning_map(mixed, fitted["temperature"], fitted["temperature_by_options"],
+                      bins=12, min_bucket_n=np.int64(MIN_BINNING_BUCKET_N)),
+      fit_binning_map(mixed, fitted["temperature"], fitted["temperature_by_options"],
+                      bins=12, min_bucket_n=MIN_BINNING_BUCKET_N))
+
 
 print("\n%d passed, %d failed" % (len(PASS), len(FAIL)))
 for f in FAIL:

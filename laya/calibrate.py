@@ -92,6 +92,27 @@ def _validated_pair(logits, target, k=None):
     return logits, target, int(k)
 
 
+def _positive_int(name: str, value: int) -> int:
+    """A count parameter: an integer >= 1, normalised to a Python `int`, or a `ValueError` naming it.
+
+    This is the rule the module already applies everywhere a count is checked -- `min_n` in
+    :func:`fit_one_temperature`, `k` in :func:`_validated_pair` (which returns `int(k)` for the same
+    reason), and the `"bins"` of every `binning_map` entry :func:`apply_calibration_payload` reads --
+    applied to the two fitting parameters that were checked with less. The asymmetry was not
+    cosmetic: a `bool` is an `Integral`, so `bins` computed as a comparison (`len(bucket) > 15`)
+    passed the old `bins < 1` guard and emitted `{"bins": True, ...}`, a map the loader refuses on
+    its boolean arm. And a `numpy` integer is an `Integral` but not a Python `int`, so a `bins`
+    derived from an array shape emitted a map `Agent.save_calibration`'s own `json.dump` cannot write
+    -- a fit that produced an artifact the file format rejects. `int()` keeps that second case
+    working. A float, a string or `None` is a mistake, and now names itself instead of raising
+    `TypeError` from `range()` (or, for a `min_bucket_n` that compares `nan` to a length, silently
+    disabling the sample floor the parameter exists to enforce).
+    """
+    if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+        raise ValueError("%s must be a positive integer, got %r" % (name, value))
+    return int(value)
+
+
 def _pairs_by_width(pairs: Sequence) -> List[Tuple[torch.Tensor, torch.Tensor]]:
     """One (logits, target) matrix per distinct option count, narrowest first.
 
@@ -401,6 +422,7 @@ def fit_abstention_thresholds(records: Iterable, temperature: Sequence[float],
     """
     if not 0.0 <= target_error <= 1.0:
         raise ValueError("target_error must be in [0.0, 1.0], got %r" % (target_error,))
+    min_bucket_n = _positive_int("min_bucket_n", min_bucket_n)
     recs = _iter_records(records)
     by_bucket: Dict[str, List[Tuple[float, int]]] = {}
     for qt, z, t, k in recs:
@@ -455,8 +477,8 @@ def fit_binning_map(records: Iterable, temperature: Sequence[float],
     fabricated 0, not that it passes through -- only a bucket the map has no entry for does that
     (:func:`apply_binning_map`).
     """
-    if bins < 1:
-        raise ValueError("bins must be >= 1, got %r" % (bins,))
+    bins = _positive_int("bins", bins)
+    min_bucket_n = _positive_int("min_bucket_n", min_bucket_n)
     recs = _iter_records(records)
     by_bucket: Dict[str, List[Tuple[float, int]]] = {}
     for qt, z, t, k in recs:

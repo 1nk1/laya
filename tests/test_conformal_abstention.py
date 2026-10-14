@@ -245,6 +245,30 @@ check("validate/the same records at floor 1 fit every bucket they touch",
       sorted(_all_buckets), ["choice:11+", "choice:2"])
 check("validate/and pass the validator unchanged", _accepts(dict(_all_buckets)), dict(_all_buckets))
 
+# The floor had no guard, and a comparison against a length is where a bad one goes unnoticed:
+# `len(pairs) < nan` is False for every bucket, and so is `< -1`, so the sentence above
+# ("`min_bucket_n` omits buckets too small to fit") was only ever true of a floor that happened to be
+# an integer. A `nan` or `2.5` arrived quietly -- a floor from a plain `/` division, say -- and the
+# gate was fitted on whatever records the caller had. Same positive-integer rule `fit_binning_map`
+# applies, checked by message because the old behaviour was silence rather than a wrong exception.
+for _bad in (0, -3, 2.5, float("nan"), float("inf"), True, None, "100"):
+    try:
+        fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {}, target_error=0.10, min_bucket_n=_bad)
+        _res = "no ValueError"
+    except ValueError as _exc:
+        _res = str(_exc)
+    except Exception as _exc:
+        _res = "raised %s" % type(_exc).__name__
+    check("floor/%r is refused by name" % (_bad,), _res,
+          "min_bucket_n must be a positive integer, got %r" % (_bad,))
+
+# And the rule did not get stricter than the module's own: an integer floor below the shipped one
+# still fits, which is how a caller asks for a bucket the default would have dropped.
+check("floor/an integer below the shipped floor still fits",
+      sorted(fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {}, target_error=0.10,
+                                       min_bucket_n=1)),
+      ["choice:3-5"])
+
 BOGUS = {
     "choice:2-5": "an invented band",
     "choice:12": "an option count, not a band",
