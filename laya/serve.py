@@ -55,8 +55,8 @@ env var                    meaning                                        defaul
                            `input_tokens` + `output_tokens`
 ``LAYA_TOURNAMENT_GROUP``  answer a choice with more options than this   0 (off)
                            by elimination in groups of this size, on
-                           ``/v1/systemone``; raises its option cap from
-                           100 to 255 (#302)
+                           both decision routes; raises their option
+                           cap from 100 to 255 (#302)
 =========================  ============================================  =========
 
 ``LAYA_DEVICE`` is a preference, not a guarantee: an ``Agent`` that asks for a
@@ -76,7 +76,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # A failed inference is reported to the client as a fixed 500 so nothing about paths,
 # weights or memory state leaks, which leaves the server log as the only place the
@@ -242,6 +242,39 @@ def _add_jev_confidence(result: Dict[str, Any]) -> Dict[str, Any]:
     return {**result, "answers": answers}
 
 
+def _tournament_plan(questions: Any, group: int) -> Optional[Dict[str, List[str]]]:
+    """The choices to narrow by elimination, as `{qid: labels}`, or None to answer in one pass.
+
+    Every choice over `group` is narrowed. A choice with `option_order` keeps the one-pass path
+    while one pass can still read it, since narrowing drops the order (#1062): but once any choice
+    is over MAX_CHOICE_OPTIONS, which only the raised cap admits and one pass was never asked to
+    read, the request is narrowed and an order on a narrowed choice is dropped as
+    `predict_tournament` does. A label that is not a string cannot be mapped back onto the answer,
+    so such a choice keeps one pass too, and is refused when one pass is not an option.
+    """
+    from .shortlist import _criteria_items
+    if not isinstance(questions, dict):
+        return None
+    large: Dict[str, List[str]] = {}
+    for qid, question in questions.items():
+        if not (isinstance(question, dict) and question.get("type") == "choice"):
+            continue
+        criteria = question.get("criteria")
+        if isinstance(criteria, (dict, list)) and len(criteria) > group:
+            large[qid] = [label for label, _ in _criteria_items(criteria)]
+    if not large:
+        return None
+    unmappable = [qid for qid, labels in large.items() if not all(isinstance(label, str) for label in labels)]
+    ordered = [qid for qid in large if questions[qid].get("option_order") is not None]
+    if any(len(labels) > MAX_CHOICE_OPTIONS for labels in large.values()):
+        if unmappable:
+            raise ValueError(
+                "question %r: a choice is narrowed by elimination once a request has one over %d "
+                "options, and that needs every label to be a string" % (unmappable[0], MAX_CHOICE_OPTIONS))
+        return large
+    return None if unmappable or ordered else large
+
+
 def _predict_with_tournament(router: Any, state: Any, questions: Dict[str, Any], group: int,
                              **predict_kwargs: Any) -> Dict[str, Any]:
     """Answer `questions`, narrowing every choice over `group` options by elimination (#302).
@@ -257,20 +290,12 @@ def _predict_with_tournament(router: Any, state: Any, questions: Dict[str, Any],
     the final round scored. `confidence` and `answer_confidence` are the final round's.
     `usage.input_tokens` is summed over every call; the other usage keys are the final call's.
 
-    A choice with `option_order`, or with a label that is not a string, keeps the one-pass path:
-    narrowing cannot carry an order over the full label set (#1062).
+    Which choices are narrowed, and when an `option_order` is kept or dropped, is
+    `_tournament_plan`'s; a dropped order is reported as `x_tournament.option_order_dropped`.
     """
-    from .shortlist import _criteria_items, predict_tournament
-    large = {}
-    for qid, question in questions.items():
-        if not (isinstance(question, dict) and question.get("type") == "choice"):
-            continue
-        criteria = question.get("criteria")
-        if isinstance(criteria, (dict, list)) and len(criteria) > group:
-            large[qid] = [label for label, _ in _criteria_items(criteria)]
-    if not large or any(questions[qid].get("option_order") is not None
-                        or not all(isinstance(label, str) for label in labels)
-                        for qid, labels in large.items()):
+    from .shortlist import predict_tournament
+    large = _tournament_plan(questions, group)
+    if large is None:
         return router.predict(state, questions, **predict_kwargs)
 
     calls = []
@@ -289,9 +314,12 @@ def _predict_with_tournament(router: Any, state: Any, questions: Dict[str, Any],
         if not isinstance(answer, dict) or not meta.get("rounds"):
             continue
         final = answer.get("probabilities") or {}
+        report = {"finalists": list(meta["labels"]), "rounds": meta["rounds"]}
+        if questions[qid].get("option_order") is not None:
+            report["option_order_dropped"] = True
         answers[qid] = {**answer,
                         "probabilities": {label: final.get(label, 0.0) for label in labels},
-                        "x_tournament": {"finalists": list(meta["labels"]), "rounds": meta["rounds"]}}
+                        "x_tournament": report}
     usage = dict(result.get("usage") or {})
     usage["input_tokens"] = sum((call.get("usage") or {}).get("input_tokens", 0) for call in calls)
     return {**result, "answers": answers, "usage": usage}
@@ -908,7 +936,7 @@ def _batch_chunk_size(n_states: int, n_questions: int, max_len: Any = None) -> O
     return max(1, min(n_states, rows_per_pass // n_questions))
 
 
-def _check_batch_limits(states: Any, questions: Any) -> None:
+def _check_batch_limits(states: Any, questions: Any, max_choice_options: int = MAX_CHOICE_OPTIONS) -> None:
     """Validate batch states and questions before inference (400/413)."""
     from fastapi import HTTPException
 
@@ -920,7 +948,7 @@ def _check_batch_limits(states: Any, questions: Any) -> None:
             detail="too many states in batch (%d > %d)" % (len(states), MAX_BATCH_STATES),
         )
     for state in states:
-        _check_request_limits(state, questions)
+        _check_request_limits(state, questions, max_choice_options)
 # One surrogate code point in a Python string. Compiled once: a nested body can hold many
 # strings, and `re.search` scans each at C speed, where the per-character Python loop this
 # replaced cost ~170 ms on a near-cap body on the event loop.
@@ -1359,7 +1387,8 @@ def create_app(router: Optional[Any] = None):
             )
         states = body["states"]
         questions = body["questions"]
-        _check_batch_limits(states, questions)
+        _check_batch_limits(states, questions, MAX_TOURNAMENT_CHOICE_OPTIONS if tournament_group
+                            else MAX_CHOICE_OPTIONS)
         # Same refusal policy as the single endpoint: hooks and the two hook-execution knobs
         # belong to the deployment, not the caller. `predict_batch` does take `hooks_timeout`,
         # so without this call a batch body would silently hand a caller a shorter deadline for
@@ -1437,7 +1466,14 @@ def create_app(router: Optional[Any] = None):
                 loop = asyncio.get_running_loop()
 
                 def _do_batch():
-                    if hasattr(router, "predict_batch"):
+                    # A batch shares one question set, so whether it is narrowed is decided once.
+                    # Narrowing runs its rounds per state, so `batch_size` and `sort_by_length`,
+                    # which shape one batched pass, have nothing to apply to on that path.
+                    if tournament_group and _tournament_plan(questions, tournament_group) is not None:
+                        results = [_predict_with_tournament(router, s, questions, tournament_group,
+                                                            model=model, **predict_kwargs)
+                                   for s in states]
+                    elif hasattr(router, "predict_batch"):
                         reqs = [dict(state=s, questions=questions, model=model, **item_overrides)
                                 for s in states]
                         results = router.predict_batch(reqs, **call_kwargs)

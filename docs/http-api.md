@@ -43,7 +43,7 @@ Everything is environment variables, so one image serves a laptop dev run and a 
 | `LAYA_MAX_CONCURRENT` | requests admitted past auth at once; excess gets `503` | `16` |
 | `LAYA_MAX_BATCH_TOKENS` | tokens one `/v1/systemone/batch` FORWARD PASS may collate (`states` x questions x row width); a larger batch is split into several passes, not refused | `131072` |
 | `LAYA_JEV_STRICT` | serve the strict Jev wire contract: no root `routing`, no per-answer `action` / `answer_confidence`, no `confidence` on noul answers, and `usage` reduced to `input_tokens` + `output_tokens`. For clients that validate the response against the Jev contract with no extra fields | `0` |
-| `LAYA_TOURNAMENT_GROUP` | answer a `choice` with more options than this by elimination, in groups of this size, on `/v1/systemone`, and raise its option cap from 100 to 255. See [Large choices](#large-choices-laya_tournament_group). Unset, or outside 2 to 100, is off | `0` |
+| `LAYA_TOURNAMENT_GROUP` | answer a `choice` with more options than this by elimination, in groups of this size, on `/v1/systemone` and `/v1/systemone/batch`, and raise their option cap from 100 to 255. See [Large choices](#large-choices-laya_tournament_group). Unset, or outside 2 to 100, is off | `0` |
 
 For a deployment published under a prefix such as `/laya`, set `LAYA_ROOT_PATH=/laya`.
 FastAPI uses it when generating OpenAPI and Swagger UI URLs. Configure the reverse proxy to
@@ -294,10 +294,10 @@ Successful responses also carry `Server-Timing: inference;dur=<ms>` and `X-Infer
 
 One pass reads every option of a `choice` inside one option budget, so past a few dozen options
 they stop getting a token span each (`usage.options` reports when that happens), and past about 100
-the request is refused. Jev accepts up to 255. With `LAYA_TOURNAMENT_GROUP=16`, `/v1/systemone`
-answers a choice with more than 16 options the way `laya.predict_tournament` does: the options are
+the request is refused. Jev accepts up to 255. With `LAYA_TOURNAMENT_GROUP=16`, both decision routes
+answer a choice with more than 16 options the way `laya.predict_tournament` does: the options are
 cut into groups of at most 16, each group is answered in one shared call, and the group winners go
-to a final call. Its option cap becomes 255. A choice of 16 or fewer, and every other question,
+to a final call. Their option cap becomes 255. A choice of 16 or fewer, and every other question,
 takes the usual path unchanged. The group size is limited to 2 to 100, the one-pass cap, so every
 choice the raised cap newly admits is always narrowed rather than read in one pass it cannot fit.
 A larger group is not a better one: each group is still read in one pass, and one pass loses
@@ -314,9 +314,17 @@ The answer keeps the Jev shape, so the official SDK parses it:
 - `confidence` and `answer_confidence` are the final round's, over the finalists;
 - `usage.input_tokens` is summed over every call; the other `usage` keys are the final call's.
 
-A choice that sets `option_order`, or uses a non-string label, keeps the one-pass path, since an order
-over the full label set cannot be carried through a narrowing (#1062). `/v1/systemone/batch` is not
-covered and keeps the 100-option cap.
+Narrowing drops an `option_order`, since an order over the full label set no longer fits a group
+(#1062). So a choice that sets one keeps the one-pass path while one pass can read it. Once a
+request has a choice over 100 options, which only the raised cap admits, it is narrowed, and a
+narrowed choice that carried an order reports `x_tournament.option_order_dropped: true`. A label
+that is not a string cannot be mapped back onto the answer: such a choice keeps one pass, and a
+request that has to be narrowed is refused with a `422` naming it.
+
+On `/v1/systemone/batch` the question set is shared, so the decision is made once: a batch with
+nothing to narrow is the single batched pass it has always been, and one with a large choice runs
+the elimination state by state. `batch_size` and `sort_by_length` shape one batched pass, so they
+do not apply on that path; `total_usage` still sums every call.
 
 Measured on the `english` checkpoint (CPU) with one test query per intent from CLINC150 (150
 intents, `random_state=0`), the question listing every intent and the instruction "Which intent does
@@ -338,7 +346,7 @@ it answers `503` with `Retry-After: 1`.
 | `state` | 50,000 characters of the text the model is given -- the string itself for a string state, `json.dumps(state, ensure_ascii=False)` for an object or array |
 | questions per request | 64 |
 | `states` per batch request | 64 |
-| options per `choice` question | 100; 255 on `/v1/systemone` with `LAYA_TOURNAMENT_GROUP` set |
+| options per `choice` question | 100; 255 with `LAYA_TOURNAMENT_GROUP` set |
 | levels per `score` question | 32 |
 | options across all questions | 512 |
 | concurrent admitted requests (`503`, not `413`) | `LAYA_MAX_CONCURRENT` (16) |

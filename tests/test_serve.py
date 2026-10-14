@@ -427,11 +427,96 @@ def test_option_order_keeps_the_one_pass_path(monkeypatch):
     assert "x_tournament" not in answer
 
 
-def test_batch_keeps_the_one_pass_cap_with_a_tournament_group(monkeypatch):
+def _large_batch(n, states=("I was charged twice.", "Please refund one of the charges."), **question):
+    req = _large_req(n, **question)
+    return {"states": list(states), "questions": req["questions"]}
+
+
+def test_batch_answers_a_large_choice_per_state(monkeypatch):
+    client, fake = _tournament_client(monkeypatch, "16")
+    r = client.post("/v1/systemone/batch", json=_large_batch(128))
+    assert r.status_code == 200
+    data = r.json()
+    for item in data["results"]:
+        answer = item["answers"]["queue"]
+        assert list(answer["probabilities"]) == list(_queues(128))
+        assert answer["choice"] == "Queue 077" and answer["x_tournament"]["rounds"] == 1
+        assert item["usage"]["input_tokens"] == 90
+    # each state ran its own round and final call, and the envelope sums every call
+    assert [len(call) for call in fake.calls] == [8, 1, 8, 1]
+    assert data["total_usage"] == {"input_tokens": 180, "output_tokens": 0}
+
+
+def test_batch_cap_follows_the_tournament_group(monkeypatch):
+    client, _ = _tournament_client(monkeypatch, None)
+    r = client.post("/v1/systemone/batch", json=_large_batch(128))
+    assert r.status_code == 413 and "128 > 100" in r.json()["detail"]
     client, _ = _tournament_client(monkeypatch, "16")
-    req = _large_req(128)
-    r = client.post("/v1/systemone/batch", json={"states": [req["state"]], "questions": req["questions"]})
-    assert r.status_code == 413
+    r = client.post("/v1/systemone/batch", json=_large_batch(256))
+    assert r.status_code == 413 and "256 > 255" in r.json()["detail"]
+
+
+def test_batch_under_strict_keeps_only_the_contracted_keys(monkeypatch):
+    client, _ = _tournament_client(monkeypatch, "16", strict=True)
+    data = client.post("/v1/systemone/batch", json=_large_batch(128)).json()
+    for item in data["results"]:
+        answer = item["answers"]["queue"]
+        assert set(answer) == {"type", "choice", "confidence", "probabilities"}
+        assert len(answer["probabilities"]) == 128
+
+
+def test_batch_without_a_large_choice_keeps_the_batched_pass(monkeypatch):
+    """A batch with nothing to narrow is the one `predict_batch` call it has always been."""
+
+    class BatchingRouter(EliminationRouter):
+        def __init__(self):
+            super().__init__()
+            self.batches = []
+
+        def predict_batch(self, requests, **kwargs):
+            self.batches.append(len(requests))
+            return [self.predict(item["state"], item["questions"]) for item in requests]
+
+    monkeypatch.setenv("LAYA_TOURNAMENT_GROUP", "16")
+    monkeypatch.delenv("LAYA_API_KEY", raising=False)
+    monkeypatch.delenv("LAYA_JEV_STRICT", raising=False)
+    fake = BatchingRouter()
+    client = TestClient(create_app(router=fake))
+    data = client.post("/v1/systemone/batch", json=_large_batch(12)).json()
+    assert fake.batches == [2]
+    assert all("x_tournament" not in item["answers"]["queue"] for item in data["results"])
+
+
+def test_an_order_on_a_choice_over_the_one_pass_cap_is_dropped_and_reported(monkeypatch):
+    """Over 100 options one pass was never an option, so the choice is narrowed and says so."""
+    client, fake = _tournament_client(monkeypatch, "16")
+    with pytest.warns(RuntimeWarning, match="option_order"):
+        r = client.post("/v1/systemone", json=_large_req(150, option_order=list(range(150))[::-1]))
+    assert r.status_code == 200
+    report = r.json()["answers"]["queue"]["x_tournament"]
+    assert report["option_order_dropped"] is True and report["rounds"] == 1
+    assert len(fake.calls[0]) == 10
+
+
+def test_a_large_choice_narrows_an_ordered_choice_beside_it(monkeypatch):
+    client, fake = _tournament_client(monkeypatch, "16")
+    req = _large_req(150)
+    req["questions"]["team"] = {"type": "choice", "instructions": "Which team?",
+                                "criteria": {"Team %02d" % i: None for i in range(32)},
+                                "option_order": list(range(32))[::-1]}
+    with pytest.warns(RuntimeWarning, match="'team': 'option_order'"):
+        answers = client.post("/v1/systemone", json=req).json()["answers"]
+    assert answers["team"]["x_tournament"]["option_order_dropped"] is True
+    assert "option_order_dropped" not in answers["queue"]["x_tournament"]
+
+
+def test_non_string_labels_over_the_one_pass_cap_are_refused(monkeypatch):
+    client, fake = _tournament_client(monkeypatch, "16")
+    req = {"state": "refund", "questions": {"code": {"type": "choice", "instructions": "Which code?",
+                                                     "criteria": list(range(150))}}}
+    r = client.post("/v1/systemone", json=req)
+    assert r.status_code == 422 and "string" in r.json()["detail"]
+    assert fake.calls == []
 
 
 @pytest.mark.parametrize("raw, want", [(None, 0), ("", 0), ("abc", 0), ("0", 0), ("1", 0), ("-4", 0),
