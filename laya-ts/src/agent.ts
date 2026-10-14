@@ -17,8 +17,9 @@ import {
   serializeState,
   softmax,
   tempBucket,
+  unpermuteProbs,
 } from "./common.js";
-import type { BinningMap, MinConfidence, OptionStats, SequenceStats } from "./common.js";
+import type { BinningMap, InternalQ, MinConfidence, OptionStats, SequenceStats } from "./common.js";
 import type { Batch, SessionProvider } from "./providers.js";
 import { encodeWithData, parseTokenizerJson, type TokenizerLike } from "./tokenizer.js";
 import { decide, type DecideOptions, type DecisionResult } from "./structured.js";
@@ -170,6 +171,15 @@ function qidStr(qid: string): string {
   return JSON.stringify(qid);
 }
 
+/** How many options a validated question definition renders to -- `laya.agent._option_count`
+ * (`laya/agent.py:321-330`): a choice has one per criterion, a score one per level, a noul is always
+ * the pair [false, true]. */
+function optionCount(qdef: Record<string, unknown>): number {
+  if (qdef["type"] === "noul") return 2;
+  const crit = qdef["criteria"];
+  return Array.isArray(crit) || (typeof crit === "object" && crit !== null) ? Object.keys(crit).length : 0;
+}
+
 export function checkQuestion(qid: string, qdef: unknown): void {
   if (typeof qid !== "string" || !qid.trim()) {
     throw new Error(`question id must be a non-empty string, got ${qidStr(qid)}`);
@@ -290,6 +300,29 @@ export function checkQuestion(qid: string, qdef: unknown): void {
       );
     }
   }
+  // Slot `s` of the head's row shows option `order[s]`, so an order that is not a permutation of the
+  // option indices would either drop an option or show one twice. Python refuses it here
+  // (`laya/agent.py:1088-1099`) rather than let it reach the encoder, and the same numbers say why:
+  // the decoder un-permutes by the same list, so a short order leaves slots unmapped.
+  if (Object.hasOwn(q, "option_order")) {
+    const order = q["option_order"];
+    const n = optionCount(q);
+    const ints = Array.isArray(order)
+      // Python keeps `isinstance(i, int) and not isinstance(i, bool)`, which rejects a float option
+      // index; JavaScript has one number type, so an integral value is the closest match, and
+      // `[1.0, 0.0]` is not a value a caller can even write here.
+      ? order.filter((i) => typeof i === "number" && Number.isInteger(i))
+      : null;
+    const isPermutation =
+      ints !== null && ints.length === n &&
+      [...ints].sort((a, b) => a - b).join(",") === Array.from({ length: n }, (_, i) => i).join(",");
+    if (!isPermutation) {
+      throw new Error(
+        `question ${qidStr(qid)}: 'option_order' must be a permutation of range(${n}) -- one slot per ` +
+          `option, each option once -- got ${JSON.stringify(order)}`,
+      );
+    }
+  }
   if ("labels" in q && t !== "noul") {
     throw new Error(`question ${qidStr(qid)}: 'labels' is only supported for noul questions`);
   }
@@ -332,7 +365,7 @@ function isEmptyOverride(v: unknown): boolean {
   return Array.isArray(v) && v.length === 0; // [] -- truthy in JavaScript
 }
 
-export function toInternal(qdef: QuestionDef): { t: "choice" | "score" | "noul"; ins: string; crit: unknown; labels?: { false: string; true: string } } {
+export function toInternal(qdef: QuestionDef): InternalQ {
   const t = qdef["type"] as "choice" | "score" | "noul";
   let crit: unknown = qdef["criteria"];
   if (t === "choice" && Array.isArray(crit)) {
@@ -342,12 +375,18 @@ export function toInternal(qdef: QuestionDef): { t: "choice" | "score" | "noul";
   }
   let ins: unknown = qdef["instructions"];
   if (typeof ins !== "string") ins = serializeState(ins);
-  const out: { t: "choice" | "score" | "noul"; ins: string; crit: unknown; labels?: { false: string; true: string } } = {
+  const out: InternalQ = {
     t, ins: ins as string, crit,
   };
   if (t === "noul" && qdef["labels"] && typeof qdef["labels"] === "object" && !Array.isArray(qdef["labels"])) {
     const labels = qdef["labels"] as Record<string, unknown>;
     out.labels = { false: String(labels["false"]).trim(), true: String(labels["true"]).trim() };
+  }
+  // `Agent._to_internal` carries the validated order onto the internal question (`laya/agent.py:1128-1129`),
+  // which is what lets one object drive both halves: `_encodeItems` presents options in it and
+  // `_decodeRow` inverts the row back out of it.
+  if (Object.hasOwn(qdef, "option_order")) {
+    out.optionOrder = (qdef["option_order"] as number[]).map((i) => Math.trunc(Number(i)));
   }
   return out;
 }
@@ -593,7 +632,7 @@ export class Agent extends HookRegistry {
   private _encodeItems(
     state: unknown,
     ids: string[],
-    internals: { t: "choice" | "score" | "noul"; ins: string; crit: unknown }[],
+    internals: InternalQ[],
     maxLen: number,
     headMaxLen: number,
   ): { items: { ids: number[]; markers: number[]; qtype: number }[]; nTokens: number; stats: SequenceStats[] } {
@@ -605,7 +644,7 @@ export class Agent extends HookRegistry {
     for (let qi = 0; qi < ids.length; qi++) {
       const qid = ids[qi];
       const q = internals[qi];
-      const prefix = buildQuestionPrefix(this.tok, q, maxLen, headMaxLen);
+      const prefix = buildQuestionPrefix(this.tok, q, maxLen, headMaxLen, q.optionOrder);
       const seq = sequenceWithState(
         prefix,
         stAll,
@@ -737,7 +776,7 @@ export class Agent extends HookRegistry {
   private _decodeRow(
     logitsRow: number[],
     actRow: number[],
-    q: { t: "choice" | "score" | "noul"; ins: string; crit: unknown },
+    q: InternalQ,
     k: number,
     lang: string | null = null,
   ): SystemAnswer {
@@ -751,7 +790,10 @@ export class Agent extends HookRegistry {
       ? (langCfg.temperatureByOptions[bucket] ?? langCfg.temperature[qt] ?? 1.0)
       : (this.temperatureByOptions[bucket] ?? this.temperature[qt] ?? 1.0);
     const z = logitsRow.slice(0, k).map((v) => v / scale);
-    const p = softmax(z);
+    // The row comes back in slot order and everything below indexes by option, so invert it
+    // here -- `p.argmax()`/`keys[best]`, `i * p[i]` and `p[1]` are all option-indexed. Same
+    // position as `laya/agent.py:1350`, immediately after the softmax.
+    const p = unpermuteProbs(softmax(z), q.optionOrder);
     // Read, not re-normalised: the row arrives as probabilities. The `slice(0, Math.max(2, ...))`
     // this replaces could only pad an Act row that validation had already refused for being empty.
     const ext = { act_probability: r4(actRow[0]) };
