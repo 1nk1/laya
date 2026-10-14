@@ -689,7 +689,13 @@ export class Agent extends HookRegistry {
         for (let qi = 0; qi < ids.length; qi++) {
           answers[ids[qi]] = this._decodeRow(
             logits[row] as number[],
-            (act[row] as number[]) ?? [1, 0],
+            // The action head is normalised here, at the model boundary, as `laya/agent.py`'s
+            // `_forward` (agent.py:1329) and `laya/onnx_agent.py` (onnx_agent.py:805) do: the decode
+            // layer's contract -- the Java decoder's `actionProbabilities`, and the `act` rows in
+            // `laya-java/fixtures/decode.json` -- is a probability row. Softmaxing it a second time
+            // inside `_decodeRow` reported 0.6899 for the row `[0.9, 0.1]`, where the reference
+            // reports 0.9.
+            softmax((act[row] as number[]) ?? [1, 0]),
             internals[qi],
             built[s].items[qi].markers.length,
             opts.lang ?? null,
@@ -723,7 +729,11 @@ export class Agent extends HookRegistry {
     return out;
   }
 
-  /** Decode one head row into the answer for its question. */
+  /**
+   * Decode one head row into the answer for its question. `actRow` is the model boundary's
+   * normalised action-probability row, so its first entry is the reported `act_probability` --
+   * exactly what `Agent._decode_answers` reads as `act[r, 0]`.
+   */
   private _decodeRow(
     logitsRow: number[],
     actRow: number[],
@@ -742,8 +752,9 @@ export class Agent extends HookRegistry {
       : (this.temperatureByOptions[bucket] ?? this.temperature[qt] ?? 1.0);
     const z = logitsRow.slice(0, k).map((v) => v / scale);
     const p = softmax(z);
-    const actP = softmax(actRow.slice(0, Math.max(2, actRow.length)));
-    const ext = { act_probability: r4(actP[0]) };
+    // Read, not re-normalised: the row arrives as probabilities. The `slice(0, Math.max(2, ...))`
+    // this replaces could only pad an Act row that validation had already refused for being empty.
+    const ext = { act_probability: r4(actRow[0]) };
     // Same quantity on every question type (max(p)), so callers can gate across types on
     // one number; `confidence` stays as-is for existing callers (entropy for choice/score).
     // Histogram-binning recalibration (issue #871, Python parity) recalibrates ans_raw
