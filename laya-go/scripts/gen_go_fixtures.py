@@ -974,24 +974,53 @@ def _unnumber(value):
     return value
 
 
+def _key(value):
+    """value spelled as json.dumps writes it as an object key, or None if it cannot be a key."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return json.dumps(value)
+    return None
+
+
+def _answer_shape(answer):
+    """One answer's type, key sets and order and legend, with no number and no chosen option.
+
+    A choice is blanked only when it is one of the answer's options, so a choice that names no
+    option, or is not a scalar, still differs. Anything that is not an answer is kept as it is.
+    """
+    if not isinstance(answer, dict):
+        return answer
+    shaped = _unnumber(answer)
+    probabilities = answer.get("probabilities")
+    if "choice" in answer and isinstance(probabilities, dict) and _key(answer["choice"]) in probabilities:
+        shaped["choice"] = None
+    return shaped
+
+
 def _answers_shape(answers):
-    """Each answer's type, key sets and order, legend and ids; no number, and no chosen value."""
-    out = {}
-    for question_id, answer in answers.items():
-        shaped = _unnumber(answer)
-        if "choice" in shaped:
-            shaped["choice"] = None
-        out[question_id] = shaped
-    return out
+    if not isinstance(answers, dict):
+        return answers
+    return {question_id: _answer_shape(answer) for question_id, answer in answers.items()}
+
+
+def _text_shape(text):
+    """answer_text, parsed and shaped; text that is not JSON is kept, so it differs."""
+    try:
+        return render(_answer_shape(json.loads(text))).rstrip("\n")
+    except (TypeError, ValueError):
+        return text
 
 
 def portable(payload):
     out = dict(payload)
     for name in EXP_DEPENDENT:
-        out[name] = {"cases": [{k: v for k, v in case.items() if k != "answer_text"}
+        out[name] = {"cases": [{**case, "answer_text": _text_shape(case.get("answer_text"))}
                                for case in payload[name]["cases"]]}
     out["predict_plan"] = {
-        name: ({"cases": [{**case, "results": [{**r, "answers": _answers_shape(r["answers"])}
+        name: ({"cases": [{**case, "results": [{**r, "answers": _answers_shape(r.get("answers"))}
                                               for r in case["results"]]}
                           for case in value["cases"]]} if name != "questions" else value)
         for name, value in payload["predict_plan"].items()}
@@ -1016,7 +1045,7 @@ def main(argv=None):
         try:
             with open(path, encoding="utf-8") as handle:
                 current = render(portable(json.load(handle)))
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError):
             current = None
         if current != render(portable(payload)):
             print("gen_go_fixtures: %s is stale or missing; run laya-go/scripts/gen_go_fixtures.py"

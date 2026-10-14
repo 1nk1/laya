@@ -127,3 +127,42 @@ func TestValidateNamesTheEmptyRow(t *testing.T) {
 		t.Fatalf("Validate = %v", err)
 	}
 }
+
+// TestNegativeDimensionsAreRefusedWithoutRows pins that the sign check does not depend on Rows.
+func TestNegativeDimensionsAreRefusedWithoutRows(t *testing.T) {
+	for name, b := range map[string]infer.Batch{
+		"markers": {Markers: -1},
+		"length":  {Length: -1},
+		"both":    {Length: 4, Markers: -3},
+		"rows":    {Rows: -1, Length: 4, Markers: 2},
+	} {
+		err := b.Validate()
+		var se *infer.ShapeError
+		if err == nil || errors.As(err, &se) || !strings.Contains(err.Error(), "negative") {
+			t.Errorf("%s: Validate = %v, want the negative-dimensions error", name, err)
+		}
+	}
+}
+
+// TestOverflowGuardBoundary pins the exact edge: the largest dimension whose product with Rows
+// does not overflow passes the guard, and is then refused by the slice-length check.
+func TestOverflowGuardBoundary(t *testing.T) {
+	cases := []struct {
+		name string
+		b    infer.Batch
+		want string // the ShapeError's tensor
+	}{
+		{"length at the edge, 1 row", infer.Batch{Rows: 1, Length: math.MaxInt, Markers: 2}, infer.NameInputIDs},
+		{"length at the edge, 2 rows", infer.Batch{Rows: 2, Length: math.MaxInt / 2, Markers: 2}, infer.NameInputIDs},
+		{"markers at the edge, 1 row", infer.Batch{Rows: 1, Length: 1, Markers: math.MaxInt,
+			InputIDs: make([]int64, 1), AttentionMask: make([]int64, 1)}, infer.NameMarkerPos},
+		{"markers at the edge, 2 rows", infer.Batch{Rows: 2, Length: 1, Markers: math.MaxInt / 2,
+			InputIDs: make([]int64, 2), AttentionMask: make([]int64, 2)}, infer.NameMarkerPos},
+	}
+	for _, c := range cases {
+		var se *infer.ShapeError
+		if err := c.b.Validate(); !errors.As(err, &se) || se.Name != c.want {
+			t.Errorf("%s: Validate = %v, want a ShapeError for %s", c.name, err, c.want)
+		}
+	}
+}

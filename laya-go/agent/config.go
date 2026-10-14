@@ -44,6 +44,8 @@ func (e *ConfigError) Error() string {
 	if e.Err != nil {
 		cause = e.Err.Error()
 	}
+	// One prefix: a cause may carry its own package's ("agent: " from a sentinel, "decode: ").
+	cause = strings.TrimPrefix(strings.TrimPrefix(cause, "agent: "), "decode: ")
 	switch e.Field {
 	case "":
 		return "agent: " + configFile + ": " + cause
@@ -178,7 +180,8 @@ func loadConfig(checkpoint fs.FS) (Config, *decode.Temperatures, error) {
 }
 
 // sameNumber is float(raw) == applied: false for anything float() refuses. A string is read as
-// decode.Clamp reads it: stripped, and without the hex and underscore spellings Python rejects.
+// the string rule of decode's toFloat (internal/decode/temperature.go), which this mirrors: stripped,
+// and without the x and p spellings of a Go hex float, which Python's float() rejects.
 func sameNumber(raw any, applied float64) bool {
 	switch x := raw.(type) {
 	case string:

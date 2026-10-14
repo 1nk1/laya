@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -28,7 +29,14 @@ type StateError struct {
 }
 
 // Error names the state and the cause.
-func (e *StateError) Error() string { return fmt.Sprintf("agent: state %d: %v", e.Index, e.Err) }
+func (e *StateError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("agent: state %d", e.Index)
+	}
+	// The cause is a complete message ("agent: state is nil; ..."); keep one prefix and one subject.
+	msg := strings.TrimPrefix(strings.TrimPrefix(e.Err.Error(), "agent: "), "state ")
+	return fmt.Sprintf("agent: state %d: %s", e.Index, msg)
+}
 
 // Unwrap returns the cause.
 func (e *StateError) Unwrap() error { return e.Err }
@@ -43,8 +51,12 @@ type Agent struct {
 	temps *decode.Temperatures
 	sess  infer.Session
 
-	mu     sync.RWMutex // held for reading by every call, for writing by Close
-	closed atomic.Bool  // set when Close starts, so new and queued calls return at once
+	mu       sync.Mutex     // guards shut, so a call enters or is refused without waiting
+	shut     bool           // set by Close under mu
+	inflight sync.WaitGroup // calls that entered
+	closed   atomic.Bool    // mirrors shut, for the check between chunks
+	once     sync.Once      // runs Close's body
+	closeErr error          // the session's Close error, read after once.Do
 }
 
 // Option adjusts an Agent at Open. No options exist yet; the parameter is here so adding one is
@@ -58,7 +70,7 @@ type options struct{}
 // The tokenizer must name the pad, CLS, SEP and mask tokens. The session must run the graph
 // exported from that same checkpoint; nothing here can tell.
 func Open(checkpoint fs.FS, s infer.Session, opts ...Option) (*Agent, error) {
-	if s == nil {
+	if hasNilValue(s) {
 		return nil, errors.New("agent: Open needs a session")
 	}
 	var o options
@@ -109,18 +121,37 @@ func (a *Agent) Config() Config {
 	return cfg
 }
 
-// Close marks the agent closed, so new and queued calls return ErrClosed at once, then waits for
-// calls in flight and closes the session. Close blocks until calls in flight return; cancel
-// their contexts to bound it. It is idempotent.
+// Close marks the agent closed, waits for calls in flight and closes the session. Close blocks
+// until calls in flight return; cancel their contexts to bound it. A call that has not yet
+// entered returns ErrClosed without waiting. Close is idempotent: a second call, concurrent or
+// not, waits for the first and returns the same error.
 func (a *Agent) Close() error {
-	first := a.closed.CompareAndSwap(false, true)
+	a.once.Do(func() {
+		a.mu.Lock()
+		a.shut = true
+		a.closed.Store(true)
+		a.mu.Unlock()
+		a.inflight.Wait()
+		if a.sess != nil {
+			a.closeErr = a.sess.Close()
+		}
+	})
+	return a.closeErr
+}
+
+// enter registers a call, or reports ErrClosed. It never waits for a call in flight. Every
+// successful enter is paired with leave.
+func (a *Agent) enter() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !first || a.sess == nil {
-		return nil
+	if a.shut || a.sess == nil {
+		return ErrClosed
 	}
-	return a.sess.Close()
+	a.inflight.Add(1)
+	return nil
 }
+
+func (a *Agent) leave() { a.inflight.Done() }
 
 // CallOption adjusts one Predict or PredictBatch call.
 type CallOption func(*call)
@@ -150,8 +181,7 @@ func WithSortByLength(on bool) CallOption { return func(c *call) { c.sort = on }
 func (a *Agent) Predict(ctx context.Context, state any, qs schema.Questions, opts ...CallOption) (schema.Prediction, error) {
 	preds, err := a.PredictBatch(ctx, []any{state}, qs, opts...)
 	if err != nil {
-		var se *StateError
-		if errors.As(err, &se) {
+		if se, ok := err.(*StateError); ok { // the top-level error only, never one inside a RunError
 			err = se.Err
 		}
 		return schema.Prediction{}, err
@@ -182,17 +212,13 @@ func (a *Agent) PredictBatch(ctx context.Context, states []any, qs schema.Questi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if a.sess == nil || a.closed.Load() {
-		return nil, ErrClosed
+	if err := a.enter(); err != nil {
+		return nil, err
 	}
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	if a.closed.Load() {
-		return nil, ErrClosed
-	}
+	defer a.leave()
 	for i, state := range states {
 		if isNil(state) {
-			return nil, &StateError{Index: i, Err: fmt.Errorf("is nil; pass a string, a map or a slice: %w", sequence.ErrUnsupportedState)}
+			return nil, &StateError{Index: i, Err: fmt.Errorf("agent: state is nil; pass a string, a map or a slice: %w", sequence.ErrUnsupportedState)}
 		}
 	}
 	if len(states) == 0 {
@@ -216,4 +242,17 @@ func isNil(state any) bool {
 	}
 	rv := reflect.ValueOf(state)
 	return rv.Kind() == reflect.Pointer && rv.IsNil()
+}
+
+// hasNilValue reports an untyped nil or an interface holding a nil pointer, map, slice, func or
+// chan, which a method call would trip over.
+func hasNilValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return rv.IsNil()
+	}
+	return false
 }

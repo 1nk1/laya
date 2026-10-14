@@ -122,7 +122,7 @@ func (a *Agent) run(ctx context.Context, qs schema.Questions, encoded [][]sequen
 	}
 	b, err := collate.Collate(rows, a.padID)
 	if err != nil {
-		return nil, fmt.Errorf("agent: %w", err)
+		return nil, fmt.Errorf("agent: %w", err) // unreachable through the API: questions are valid when built
 	}
 	fail := func(err error) error { return &RunError{Rows: b.Rows, Length: b.Length, Markers: b.Markers, Err: err} }
 	out, err := a.sess.Run(ctx, b)

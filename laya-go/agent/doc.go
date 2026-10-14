@@ -17,17 +17,18 @@
 //
 // # Differences from Python
 //
-// With no questions, Python writes a usage of two keys (input_tokens, output_tokens); schema.Usage
-// writes all seven, and so does this package.
+// With no questions, Python writes a usage of two keys (input_tokens, output_tokens); this package
+// writes six: input_tokens, output_tokens, state_tokens, state_tokens_dropped, truncated and
+// truncated_questions. The seventh, options, is omitted when empty.
 //
-// A nil state is refused, with or without questions, where Python raises a TypeError only when
-// there are questions. A nil slice or map is an empty list or dict, as in Python.
+// A nil slice or map is an empty list or dict, as in Python; a nil state is refused, as there.
 //
 // max_len and head_max_len are checked at load and must be positive integers; Python reads them
 // with cfg.get and checks nothing until a call uses them.
 //
-// A temperature that is not a list of exactly 3 numbers is refused at load, as Python's torch
-// Agent refuses it; ONNXAgent loads it.
+// A temperature that is not a list of exactly 3 numbers is refused at Open. Python's ONNXAgent
+// loads a list of the wrong length, a string or a dict and fails later or falls back (a scalar
+// such as 1.5 raises a TypeError at load); this package refuses all of them.
 //
 // A NaN or infinite logit is refused, including a -Inf for a real option, where Python would
 // answer probability 0 for that option. A model that emits one is broken.

@@ -68,7 +68,8 @@ func (e *ShapeError) Error() string {
 //   - every slice's length matches Rows, Length and Markers, else a *ShapeError;
 //   - every MarkerPos lies in [0, Length).
 //
-// All but the ShapeError are plain errors.
+// All but the ShapeError are plain errors. Token ids, question types and mask values are not
+// checked: a backend passes them to the graph, which rejects an out-of-range index.
 func (b Batch) Validate() error {
 	if b.Rows < 0 || b.Length < 0 || b.Markers < 0 {
 		return fmt.Errorf("infer: batch has negative dimensions %d x %d x %d", b.Rows, b.Length, b.Markers)
