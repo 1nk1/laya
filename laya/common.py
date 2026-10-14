@@ -854,6 +854,26 @@ def clamp_temperature(t, lo: float = TEMP_MIN, hi: float = TEMP_MAX) -> float:
     return min(hi, max(lo, t))
 
 
+def temperature_rejected(raw, applied: float) -> bool:
+    """Whether `raw` is not the number `clamp_temperature` turned into `applied`.
+
+    Loaders use this to name the entries they had to replace. The obvious test, `float(raw) !=
+    applied`, misses the bool case: `clamp_temperature(True)` returns the neutral 1.0 and
+    `float(True)` *is* 1.0, so a checkpoint or calibration file shipping `true` where a number
+    belongs read as an accepted temperature and loaded in silence, while `false` floated to 0.0,
+    mismatched and was reported. So ask the question `clamp_temperature` itself asks -- is this a
+    number at all -- instead of re-deriving its answer. A value that will not convert is rejected
+    the same way: it has a neutral fallback to report, and the diagnostic must never raise for it.
+    """
+    if isinstance(raw, bool):
+        return True
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return True
+    return value != applied
+
+
 def resolve_lang_temperatures(raw: Optional[Dict[str, Any]],
                               base_temperature: Sequence[float]) -> Dict[str, Dict[str, Any]]:
     """Parse the `lang_temperatures` option into `{language: {temperature, temperature_by_options}}`.
