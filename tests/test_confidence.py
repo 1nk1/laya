@@ -433,7 +433,7 @@ check("export/laya re-exports the same tuple", laya.GATE_STATES, _confidence.GAT
 # --------------------------------- the two doc pages must attribute confidence per question type
 # `docs/structured.md` and `docs/questions-and-answers.md` each opened their confidence section with
 # "`confidence` is normalized entropy". Neither agent writes that for every type:
-# `Agent._decode_answers` (`laya/agent.py:1367-1404`) and `ONNXAgent._decode_answers`
+# `Agent._decode_answers` (`laya/agent.py:1369-1398`) and `ONNXAgent._decode_answers`
 # (`laya/onnx_agent.py:682-727`) put `confidence_from_probs(p, k)` = `1 - H(p) / log(k)` in the
 # `choice` and `score` answers and `max(p_true, 1 - p_true)` in the `noul` one. Each page printed a
 # `noul` in the very block its sentence introduces, so the sentence was falsifiable from the page
@@ -2228,7 +2228,7 @@ for _fn in (test_tl_kernels_drops_the_wrong_row_claim,
 # --------------------------------------- DecisionResult's docstring must split confidence by question type
 # `laya/structured.py`'s `DecisionResult` closed with "confidence keeps the **normalized-entropy
 # value** it has always had, because that is a different quantity on a scale that depends on the
-# label count". `Agent._decode_answers` (`laya/agent.py:1349-1402`) uses two different formulas:
+# label count". `Agent._decode_answers` (`laya/agent.py:1369-1398`) uses two different formulas:
 #   * `choice` and `score`  ->  `confidence_from_probs(p, k)` = `1 - H(p) / log(k)`
 #   * `noul`                ->  `max(p_true, 1 - p_true)`  (its own comment: "identical here:
 #                               over two options `max(p_true, 1 - p_true)` is `max(p)`")
