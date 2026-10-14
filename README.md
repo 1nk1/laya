@@ -94,25 +94,30 @@ The shipped checkpoints work zero-shot, but fine-tuning on decisions from your o
 
 **[nandhakishorm.github.io/laya](https://nandhakishorm.github.io/laya/)**: guides for [prediction hooks](https://nandhakishorm.github.io/laya/hooks/), [schema-driven decisions](https://nandhakishorm.github.io/laya/structured/), [Docker](https://nandhakishorm.github.io/laya/docker/) and [LangChain and LangGraph](https://nandhakishorm.github.io/laya/langchain/), plus a full [API reference](https://nandhakishorm.github.io/laya/reference/).
 
-## What's new in 0.4.6
+## What's new in 0.4.7
 
-* **`laya.load(..., backend="onnx")` is annotated as what it returns.** It builds an `ONNXAgent`,
-  which shares the hook machinery with `Agent` but is not a subclass of it, so a caller who trusted
-  the `-> Agent` annotation and reached for the PyTorch-side controls got an `AttributeError` the
-  type checker called impossible (#1166).
-* **`Router.route_batch` rejects a `None` state before loading a checkpoint**, naming the request
-  index instead of failing later inside `Agent.predict_batch` (#1165).
-
-Carried over from 0.4.5, an hour earlier, because they are the ones to read before upgrading:
-
-* **laya-ts routes unidentified text to multilingual**, matching Python since 0.4.0. This changes
-  the default: pass `new Router({ default: "english" })` for the old fallback (#1157). It also
-  clears a stale `low_confidence` marker on a reused result, gating on the same number Python does
-  (#1153, #910).
-* **A ragged calibration pool keeps its fit.** `fit_one_temperature` squared off rows of different
-  option counts with a pad value that then competed in the same softmax, so a question type pooled
-  across option-count bands could report the neutral `1.0`, or the ceiling, for a fit that ran.
-  Single-width fits are unchanged to twelve decimal places (#1158).
+* **`laya-ts` reports `act_probability` the way Python does.** The port softmaxed the action row a
+  second time inside the decoder, so a row the reference reads as 0.9 came back as 0.6899. It is
+  normalised once, at the model boundary (#1195). The same port now honours a question's
+  `option_order` end to end, validating it as a permutation and un-permuting the answer (#1196),
+  reads a temperature as `float()` does rather than as `Number()` does, so a `[2]` or a `" "` in a
+  checkpoint config no longer loads as a real temperature (#1192, #1191), and cleans an email body
+  on Python's Unicode character classes instead of JavaScript's ASCII-ish ones (#1188).
+* **A checkpoint or calibration file that ships `true` where a temperature belongs is named.**
+  `float(True)` is exactly the neutral 1.0 the clamp installs for it, so the old diagnostic compared
+  the two numbers and said nothing; `lang_temperatures` overrides now report a clamped value for
+  their language too (#1190, #1208). A calibration JSON whose `version` is `1.9` is refused instead
+  of truncated to 1, which used to skip the checkpoint-identity check (#1202).
+* **Large choices have two more routes.** `laya_tournament` answers them over MCP by elimination
+  with no embedding pass (#1178), and `LAYA_TOURNAMENT_GROUP` now covers
+  `POST /v1/systemone/batch` as well as `/v1/systemone` (#1204). For a labelled set,
+  `laya.evals_tournament.evaluate_tournament` says whether a miss lost the gold label during
+  elimination or among the finalists (#1175).
+* **An interactive session exits with the code its requests earned.** `laya < requests.txt` used to
+  exit 0 with every answer missing (#1184), and `laya-evals run --json`/`--markdown` to a path it
+  cannot write is exit 2 with a diagnostic, not exit 1 with a traceback (#1171).
+* **The Go port decodes answers.** `laya-go` gains the question schema, sequence building and answer
+  decoding, with goldens regenerated from Python in CI (#1169).
 
 Earlier releases are in the [GitHub releases](https://github.com/NandhaKishorM/laya/releases).
 
