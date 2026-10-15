@@ -1406,6 +1406,12 @@ def test_batch_tool_control_forwarding():
         server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=0)
         ok("batch_tool/hooks_timeout_zero_is_unset", seen["kwargs"]["hooks_timeout"] is None,
            repr(seen["kwargs"]["hooks_timeout"]))
+        # The collapse compares values rather than testing identity: `hooks_timeout` is declared a
+        # number, so a JSON client is free to send its default as `0.0`, and `0.0 == 0` while
+        # `0.0 is 0` is False.
+        server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=0.0)
+        ok("batch_tool/hooks_timeout_float_zero_is_unset", seen["kwargs"]["hooks_timeout"] is None,
+           repr(seen["kwargs"]["hooks_timeout"]))
         server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS)
         ok("batch_tool/hooks_timeout_default_is_unset", seen["kwargs"]["hooks_timeout"] is None,
            repr(seen["kwargs"]["hooks_timeout"]))
@@ -1415,6 +1421,10 @@ def test_batch_tool_control_forwarding():
         # marker too -- and a real cap is forwarded untouched.
         server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, batch_size=0)
         ok("batch_tool/batch_size_zero_is_unset", seen["kwargs"]["batch_size"] is None,
+           repr(seen["kwargs"]["batch_size"]))
+        # JSON has no integer type, so an eager client can send the declared-int default as `0.0`.
+        server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, batch_size=0.0)
+        ok("batch_tool/batch_size_float_zero_is_unset", seen["kwargs"]["batch_size"] is None,
            repr(seen["kwargs"]["batch_size"]))
         server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS)
         ok("batch_tool/batch_size_default_is_unset", seen["kwargs"]["batch_size"] is None,
