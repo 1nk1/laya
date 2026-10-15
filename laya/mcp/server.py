@@ -7,7 +7,18 @@ wired to any MCP client (OpenClaw, Claude Desktop, cursor, ...):
     python -m laya.mcp.server
 
 Environment (same meaning as laya.serve where it exists):
-  LAYA_DEVICE   torch device for the checkpoints (value goes straight to torch)
+  LAYA_DEVICE   the device the checkpoints are asked to build on. Not the value verbatim:
+                laya.mcp.device.env_device strips and lower-cases it (`CUDA:0` -> `cuda:0`)
+                and refuses a string torch cannot parse with a ValueError naming this variable
+                (`gpu`, `cuda:`, `cuda: 0`), so the failure reads as a bad environment value
+                rather than a torch internal one -- here as a `router construction failed` tool
+                error, because a stdio server has no startup to refuse. A preference, not a
+                guarantee: as in laya.serve an unavailable GPU falls back to CPU silently, and
+                laya_status then answers the loaded agent's real device (before any load it
+                answers this preference, flagged with `device_is_preference`). It answers one
+                device, though: with two checkpoints resident on different devices the top-level
+                `device` is the first entry of `loaded` (the least recently used), so
+                `checkpoint_devices` is the field that says where each one actually runs.
   LAYA_PRELOAD  "0" to build the checkpoints lazily instead of at startup (default on)
   LAYA_MODELS   comma list to preload; MCP default is "english,multilingual" so
                 typed-decisions stays lazy (in laya.serve an empty value preloads all)
