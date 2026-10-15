@@ -1196,9 +1196,10 @@ def _validate_hooks_timeout(value: Any) -> float | None:
     # ``validate_timeout`` decides what counts as a real deadline. Wrapping
     # its ValueError as a ToolError keeps a bad arg from surfacing as
     # ``internal_error: ValueError`` at the MCP boundary. Bools are refused
-    # here the same way _validate_batch_size refuses them -- core's
-    # float(True) == 1.0 would silently turn "True" into a one-second
-    # deadline, which is the kind of wrong-that-needs-to-shout.
+    # here the same way _validate_batch_size refuses them, so a wrong type
+    # reaches the caller as `invalid_hooks_timeout` instead of whichever of
+    # core's two refusals happens to fire. Core refuses a bool as well now:
+    # float(True) == 1.0 is no longer silently read as a one-second deadline.
     if value is None:
         return None
     if isinstance(value, bool):

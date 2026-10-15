@@ -1358,8 +1358,9 @@ def test_batch_predict():
        "min_confidence" not in kwargs and "sort_by_length" not in kwargs, repr(kwargs))
     
     # Call-level controls are validated up front like every sibling tool: a bad value is a clean
-    # ToolError, not an internal_error that escaped the TypeError-only handler, and not a silent
-    # 1-second hook deadline from core's float(True) == 1.0.
+    # ToolError, not an internal_error that escaped the TypeError-only handler. A bool is refused
+    # here before core sees it, so the caller hears `invalid_hooks_timeout` rather than the core
+    # refusal `laya/hooks.py::validate_timeout` raises for the same mistake.
     expect_tool_error("batch/min_confidence_out_of_range",
                       lambda: laya_predict_batch(BATCH_REQUESTS, min_confidence=1.5, router=BatchRouter()),
                       "invalid_min_confidence")
