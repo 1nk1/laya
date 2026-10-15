@@ -6,6 +6,7 @@ import io
 import json
 import re
 import sys
+import types
 import warnings
 
 import numpy as np
@@ -772,6 +773,11 @@ def test_dataset_rejects_malformed_json_and_empty(tmp_path):
     ("questions", ["a"], "'questions' must be an object, got list"),
     ("questions", None, "'questions' must be an object, got NoneType"),
     ("questions", "a", "'questions' must be an object, got str"),
+    # A read-only Mapping walked every reader on `4ac226d5`, so refusing it is the one place this
+    # guard narrows what a Python caller could pass. It is the narrowing `Example.from_dict` already
+    # applies to a JSONL row and the shape `docs/evals.md` documents -- "a Laya question dict" -- so
+    # the two routes now ask for the same thing, and a duck-typed check would quietly reopen this.
+    ("questions", types.MappingProxyType(Q), "'questions' must be an object, got mappingproxy"),
 ])
 def test_dataset_refuses_a_row_whose_maps_are_not_objects(field, value, fragment):
     row = {"state": "s1", "questions": Q, "expected": {"intent": "a"}}
