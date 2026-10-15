@@ -44,6 +44,15 @@ type Common struct {
 	// Window names the window that decided the answer in a PredictLong scan of several windows;
 	// nil everywhere else, where laya writes no "window" key.
 	Window *Window
+	// LowConfidence is laya's "low_confidence": true only on an answer a confidence gate flagged;
+	// false is written as no key, as laya removes it.
+	LowConfidence bool
+	// Abstention is the gate's verdict on the answer, "passed", "abstained" or "unevaluated";
+	// empty when no gate ran, where laya writes no "abstention" key.
+	Abstention string
+	// AbstentionThreshold is the threshold the answer was gated at; nil exactly when Abstention
+	// is empty.
+	AbstentionThreshold *float64
 }
 
 // Window is where in the tokenized state the deciding window sat. The probabilities of an
@@ -233,6 +242,21 @@ func finish(b *strings.Builder, c Common) ([]byte, error) {
 		fmt.Fprintf(b, `,"window":{"index":%d,"token_start":%d,"token_end":%d,"count":%d}`,
 			w.Index, w.TokenStart, w.TokenEnd, w.Count)
 	}
+	if c.LowConfidence {
+		b.WriteString(`,"low_confidence":true`)
+	}
+	if c.Abstention != "" {
+		b.WriteString(`,"abstention":`)
+		if err := writeString(b, c.Abstention); err != nil {
+			return nil, err
+		}
+	}
+	if t := c.AbstentionThreshold; t != nil {
+		b.WriteString(`,"abstention_threshold":`)
+		if err := writeFloat(b, *t); err != nil {
+			return nil, err
+		}
+	}
 	b.WriteByte('}')
 	return []byte(b.String()), nil
 }
@@ -317,6 +341,9 @@ func answerFrom(v any) (Answer, error) {
 		}
 		common.Window = w
 	}
+	if err := gateFrom(obj, &common); err != nil {
+		return nil, err
+	}
 	switch Type(typ) {
 	case TypeChoice:
 		a := &ChoiceAnswer{Common: common}
@@ -382,6 +409,35 @@ func optional(obj pyjson.Object, key string) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+// gateFrom reads the keys a confidence gate writes. An absent key is no gate; low_confidence is
+// true or absent, as laya writes it.
+func gateFrom(obj pyjson.Object, c *Common) error {
+	if raw, ok := optional(obj, "low_confidence"); ok {
+		if b, isBool := raw.(bool); !isBool || !b {
+			return errors.New(`schema: answer "low_confidence" must be true when present`)
+		}
+		c.LowConfidence = true
+	}
+	if raw, ok := optional(obj, "abstention"); ok {
+		s, isStr := raw.(string)
+		if !isStr || (s != "passed" && s != "abstained" && s != "unevaluated") {
+			return fmt.Errorf(`schema: answer "abstention" must be one of "passed", "abstained", "unevaluated", got %s`, pyvalue.Repr(raw))
+		}
+		c.Abstention = s
+	}
+	if _, ok := optional(obj, "abstention_threshold"); ok {
+		t, err := fieldFloat(obj, "abstention_threshold")
+		if err != nil {
+			return err
+		}
+		c.AbstentionThreshold = &t
+	}
+	if (c.Abstention == "") != (c.AbstentionThreshold == nil) {
+		return errors.New(`schema: answer "abstention" and "abstention_threshold" come together`)
+	}
+	return nil
 }
 
 func windowFrom(v any) (*Window, error) {
