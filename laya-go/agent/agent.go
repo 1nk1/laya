@@ -269,7 +269,7 @@ func (a *Agent) PredictBatch(ctx context.Context, states []any, qs schema.Questi
 	if hooks := a.composeHooks(c); len(hooks) > 0 {
 		return a.predictHooked(ctx, states, qs, c, g, hooks)
 	}
-	preds, err := a.predictStates(ctx, states, qs, c)
+	preds, err := a.inferStates(ctx, states, qs, c)
 	if err != nil {
 		return nil, err
 	}

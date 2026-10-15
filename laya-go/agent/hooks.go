@@ -279,6 +279,9 @@ type hookState struct {
 	sem       chan struct{} // the serial lock, a channel so a waiter can give up
 	done      chan struct{} // closed by Close
 	closeOnce sync.Once
+
+	// stub replaces inference in tests; nil in production.
+	stub func(ctx context.Context, states []any, qs schema.Questions, c call) ([]schema.Prediction, error)
 }
 
 func newHookState(o options) *hookState {
@@ -473,12 +476,20 @@ func newRunID() string {
 
 // predictHooked is PredictBatch with hooks, as ONNXAgent.predict_batch: start, inference unless a
 // hook answered, then on any failure OnError, and always OnPredictEnd.
+// inferStates is predictStates, or the test stub standing in for it.
+func (a *Agent) inferStates(ctx context.Context, states []any, qs schema.Questions, c call) ([]schema.Prediction, error) {
+	if a.hk != nil && a.hk.stub != nil {
+		return a.hk.stub(ctx, states, qs, c)
+	}
+	return a.predictStates(ctx, states, qs, c)
+}
+
 func (a *Agent) predictHooked(ctx context.Context, states []any, qs schema.Questions, c call, g *gate, hooks []Hook) ([]schema.Prediction, error) {
 	pc := &PredictContext{States: states, Questions: qs, RunID: newRunID(), Model: schema.Model, Agent: a, StartedAt: time.Now()}
 	err := a.dispatch(ctx, evStart, hooks, pc)
 	if err == nil && pc.Results == nil {
 		c.maxLen, c.headMaxLen = pc.MaxLen, pc.HeadMaxLen
-		pc.Results, err = a.predictStates(ctx, pc.States, pc.Questions, c)
+		pc.Results, err = a.inferStates(ctx, pc.States, pc.Questions, c)
 	}
 	if err != nil {
 		pc.Err = err
