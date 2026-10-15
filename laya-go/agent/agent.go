@@ -69,7 +69,7 @@ type Agent struct {
 }
 
 // Option adjusts an Agent at Open: WithInstalledHooks, WithHookTimeout, WithHookErrors,
-// WithConcurrentHooks and WithHookWarnings.
+// WithConcurrentHooks, WithHookWarnings, WithLangTemperatures and WithExpectedSHA256.
 type Option func(*options)
 
 // Open loads rl_agent_config.json and the tokenizer from checkpoint, a directory holding a
@@ -100,7 +100,10 @@ func open(checkpoint fs.FS, s infer.Session, o options) (*Agent, error) {
 	if checkpoint == nil {
 		return nil, errors.New("agent: Open needs a checkpoint")
 	}
-	cfg, temps, err := loadConfig(checkpoint)
+	if err := verifyDigests(checkpoint, o.sha256); err != nil {
+		return nil, err
+	}
+	cfg, temps, err := loadConfig(checkpoint, o.langTemps)
 	if err != nil {
 		return nil, err
 	}

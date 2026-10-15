@@ -75,11 +75,11 @@ type Config struct {
 // LoadConfig reads and checks rl_agent_config.json from the root of checkpoint, as ONNXAgent
 // does: max_len, head_max_len and option_layout, and a warning for every temperature clamped.
 func LoadConfig(checkpoint fs.FS) (Config, error) {
-	cfg, _, err := loadConfig(checkpoint)
+	cfg, _, err := loadConfig(checkpoint, nil)
 	return cfg, err
 }
 
-func loadConfig(checkpoint fs.FS) (Config, *decode.Temperatures, error) {
+func loadConfig(checkpoint fs.FS, langs map[string]any) (Config, *decode.Temperatures, error) {
 	data, err := fs.ReadFile(checkpoint, configFile)
 	if err != nil {
 		return Config{}, nil, &ConfigError{Err: err}
@@ -154,6 +154,11 @@ func loadConfig(checkpoint fs.FS) (Config, *decode.Temperatures, error) {
 	temps, err := decode.NewTemperatures(byType, byOptions, nil)
 	if err != nil {
 		return Config{}, nil, &ConfigError{Field: "temperature", Err: err}
+	}
+	if len(langs) > 0 { // resolved against the raw base, as resolve_lang_temperatures is
+		if temps, err = decode.NewTemperatures(byType, byOptions, langs); err != nil {
+			return Config{}, nil, &ConfigError{Field: langTempsField, Err: err}
+		}
 	}
 
 	// ONNXAgent warns once about every entry the clamp changed, buckets first.

@@ -141,6 +141,8 @@ type options struct {
 	concurrent bool
 	warn       func(string)
 	err        error
+	langTemps  map[string]any    // WithLangTemperatures
+	sha256     map[string]string // WithExpectedSHA256
 }
 
 // WithInstalledHooks installs hooks on the agent, as AddHook does after Open.
