@@ -28,6 +28,7 @@ from laya.serve import (  # noqa: E402
     BODY_CONTROLS,
     BODY_REFUSALS,
     DEFAULT_MAX_TOKEN_BUDGET,
+    DEFAULT_PORT,
     MAX_BODY_BYTES,
     MAX_STATE_CHARS,
     _add_jev_confidence,
@@ -39,6 +40,7 @@ from laya.serve import (  # noqa: E402
     _resolve_idle_unload_seconds,
     _resolve_max_loaded,
     _resolve_model,
+    _resolve_port,
     _resolve_tournament_group,
     create_app,
 )
@@ -812,6 +814,84 @@ def test_helpers():
     import os
     os.environ.pop("X_FLAG", None)
     assert _env_bool("X_FLAG", True) is True
+
+
+def test_env_bool_reads_a_blank_value_as_unset(monkeypatch):
+    """`LAYA_X=` is "not set", the way most other readers of this family already read it.
+
+    A blank value is what a `.env` line, a Compose `KEY=` with nothing after it, or a CI matrix
+    writes when a variable is declared and left for the operator to fill in. Reading it as false
+    silently moved `LAYA_PRELOAD` off its documented default of `1` onto lazy loading -- the one
+    switch in the set whose default is True, and `docs/cli-mcp.md` names `0` as the spelling that
+    asks for it -- and `laya_status` then reported the blank back as the operator's own choice.
+    The truthy spelling set is unchanged: anything that is a value and is not one of the four is
+    still false.
+    """
+    for blank in ("", " ", "  \t ", "\n"):
+        monkeypatch.setenv("X_FLAG", blank)
+        assert _env_bool("X_FLAG", True) is True, repr(blank)
+        assert _env_bool("X_FLAG", False) is False, repr(blank)
+
+    monkeypatch.delenv("X_FLAG", raising=False)
+    assert _env_bool("X_FLAG", True) is True
+    assert _env_bool("X_FLAG", False) is False
+
+    for on in ("1", "true", "TRUE", " yes ", "on"):
+        monkeypatch.setenv("X_FLAG", on)
+        assert _env_bool("X_FLAG", False) is True, repr(on)
+    for off in ("0", "no", "off", "false", "ture", "2"):
+        monkeypatch.setenv("X_FLAG", off)
+        assert _env_bool("X_FLAG", True) is False, repr(off)
+
+    # The live case: the preload switch keeps its documented default when the value is blank.
+    monkeypatch.setenv("LAYA_PRELOAD", "")
+    assert _env_bool("LAYA_PRELOAD", True) is True
+    monkeypatch.setenv("LAYA_PRELOAD", "0")
+    assert _env_bool("LAYA_PRELOAD", True) is False
+
+
+def test_resolve_port_reads_a_blank_value_as_unset(monkeypatch):
+    """`LAYA_PORT=` is the same "not set" as an absent variable, and only that.
+
+    `_resolve_port` was the last reader in this module that treated a blank as a value. Every other
+    one answers "unset": `_env_bool` above, `_default_model_option`, `_resolve_max_concurrent`,
+    `_resolve_max_loaded`, `_resolve_max_batch_tokens`, `_resolve_max_token_budget`,
+    `_resolve_tournament_group` and `_resolve_idle_unload_seconds` -- and outside the server,
+    `laya.mcp.server._remote_base_url`, whose own documentation says "Blank or unset means the
+    default." On the base commit the startup path answered the same `SystemExit` it gives a bad
+    port, so a declared-but-unfilled `.env` line stopped the server from starting and the message
+    blamed the operator for a value they never wrote. Blank carries no number for a fallback to
+    contradict, so the documented default is the only honest answer -- and `int()` ignores the
+    whitespace around `" 8000 "`, so a value of nothing *but* that whitespace was fatal while its
+    content was not.
+
+    A value that does name a port is still refused loudly, because binding somewhere other than
+    the requested place leaves the server unreachable rather than merely wrong.
+    """
+    assert DEFAULT_PORT == 8000, "the default the README and docs/http-api.md tables print"
+
+    for blank in ("", " ", "  \t ", "\n"):
+        monkeypatch.setenv("LAYA_PORT", blank)
+        assert _resolve_port() == DEFAULT_PORT, repr(blank)
+
+    monkeypatch.delenv("LAYA_PORT", raising=False)
+    assert _resolve_port() == DEFAULT_PORT
+
+    # The leniency the blank case was dying on, unchanged: whitespace around a number is noise.
+    for text, expected in (("8000", 8000), (" 9000 ", 9000), ("+8080", 8080),
+                           ("1", 1), ("65535", 65535)):
+        monkeypatch.setenv("LAYA_PORT", text)
+        assert _resolve_port() == expected, repr(text)
+
+    # Every non-blank misvalue still exits, naming the value as written rather than as stripped.
+    for bad in ("0", "-1", "70000", "http", "8000.0", "8000px"):
+        monkeypatch.setenv("LAYA_PORT", bad)
+        try:
+            port = _resolve_port()
+        except SystemExit as exc:
+            assert str(exc) == "invalid LAYA_PORT %r: must be an integer 1-65535" % bad, str(exc)
+        else:
+            raise AssertionError("%r was accepted as port %r" % (bad, port))
 
 
 def test_resolve_model_follows_the_router_registry(monkeypatch):

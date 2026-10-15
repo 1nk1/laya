@@ -136,6 +136,10 @@ MAX_TOTAL_OPTIONS = 512
 # the worker even though every request is individually valid (#330).
 DEFAULT_MAX_CONCURRENT = 16
 
+# The bind port a `LAYA_PORT` with no value in it asks for -- the default `README.md`,
+# `docs/http-api.md` and this module's own environment table all print as `8000`.
+DEFAULT_PORT = 8000
+
 # What `GET /health` answers an unauthenticated caller when `LAYA_API_KEY` is set. Liveness is
 # the half of that endpoint a container probe needs and the half the page promises is always
 # open; the rest of the payload names checkpoints, revision SHAs and host device state, so it
@@ -181,8 +185,19 @@ BATCH_BODY_OUT_PARAMETERS = ("diagnostics",)
 
 
 def _env_bool(name: str, default: bool) -> bool:
+    """A `LAYA_*` switch. An unset or blank value means `default`; only the four spellings turn it on.
+
+    Blank is not false here because blank is what a `.env` line, a Compose `KEY=` with nothing
+    after it, and a CI matrix write when a variable is declared and left for the operator to fill
+    in, and most other readers of this family already read it that way -- `mcp.device.env_device`
+    returns None for it, `mcp.remote._timeout_from_env` returns its default, and the numeric and
+    name resolvers below strip and fall back too. `LAYA_PRELOAD=` is the case that costs something:
+    `docs/cli-mcp.md` names `0` as how to ask for lazy loading, a declared-but-unfilled
+    `LAYA_PRELOAD=` gets it anyway, and `laya_status` then echoes the blank back as
+    `preload: false`.
+    """
     v = os.environ.get(name)
-    if v is None:
+    if v is None or not v.strip():
         return default
     return v.strip().lower() in ("1", "true", "yes", "on")
 
@@ -727,8 +742,21 @@ def _default_model_option(extra_models: Optional[Dict[str, Any]] = None) -> Dict
 
 
 def _resolve_port() -> int:
-    """Port from LAYA_PORT, validated. Exits with a message instead of a traceback."""
-    raw = os.environ.get("LAYA_PORT", "8000")
+    """Port from LAYA_PORT, validated. Exits with a message instead of a traceback.
+
+    Unset and blank both mean the documented default. `LAYA_PORT=` is what a `.env` line with the
+    value left for the operator to fill in reads as, and a value that carries no number cannot be
+    contradicted by falling back -- unlike `LAYA_PORT=99999`, where answering 8000 would bind the
+    server somewhere its operator did not ask for. The rest of this family already reads blank as
+    unset: `_env_bool`, `_default_model_option`, `_resolve_max_concurrent` and the other numeric
+    resolvers here, and `laya.mcp.server`'s base URL, whose documentation says "Blank or unset means
+    the default." `int()` ignores the whitespace around `" 8000 "`, so a value made of nothing
+    *but* that whitespace was fatal while its content was not. A port that names a number and the
+    wrong one still exits loudly, because a server bound to the wrong port is simply unreachable.
+    """
+    raw = os.environ.get("LAYA_PORT")
+    if raw is None or not raw.strip():
+        return DEFAULT_PORT
     try:
         port = int(str(raw).strip())
     except (TypeError, ValueError):
