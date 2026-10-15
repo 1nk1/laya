@@ -169,21 +169,36 @@ def relate(config: Dict[str, Any], report: Dict[str, Any]) -> Dict[str, Any]:
     return _entry(UNKNOWN, "no immutable shared checkpoint identity between this checkpoint artifact and the report")
 
 
+def _read_json_object(path: str) -> Dict[str, Any]:
+    """One artifact's JSON object, or a failure that names the file it came from.
+
+    A `json.JSONDecodeError` says what is wrong with the text and nothing about which file, and a
+    `UnicodeDecodeError` says the same about the encoding. `inspect_checkpoint` reads two of them
+    from two different arguments, so a refusal that omits the path cannot say which artifact is
+    broken -- the only thing the caller can act on. Same reason `laya/evals.py:155` prefixes its
+    dataset rows with the path.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            document = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise ValueError("%s is not valid JSON: %s" % (path, exc)) from exc
+    except UnicodeDecodeError as exc:
+        raise ValueError("%s is not UTF-8 text: %s" % (path, exc)) from exc
+    if not isinstance(document, dict):
+        raise ValueError("%s is not a JSON object" % path)
+    return document
+
+
 def inspect_checkpoint(checkpoint_dir: str, report_path: Optional[str] = None) -> Dict[str, Any]:
     """Full read-only evidence inspection for one checkpoint (optionally one report)."""
     config_path = os.path.join(checkpoint_dir, "rl_agent_config.json")
     if not os.path.isdir(checkpoint_dir) or not os.path.isfile(config_path):
         raise FileNotFoundError("no rl_agent_config.json under %r" % checkpoint_dir)
-    with open(config_path, "r", encoding="utf-8") as handle:
-        config = json.load(handle)
-    if not isinstance(config, dict):
-        raise ValueError("%s is not a JSON object" % config_path)
+    config = _read_json_object(config_path)
     out: Dict[str, Any] = {"checkpoint": checkpoint_dir, "calibration": inspect_calibration(config)}
     if report_path is not None:
-        with open(report_path, "r", encoding="utf-8") as handle:
-            report = json.load(handle)
-        if not isinstance(report, dict):
-            raise ValueError("%s is not a JSON object" % report_path)
+        report = _read_json_object(report_path)
         out["report"] = inspect_report(report)
         out["relationship"] = relate(config, report)
     return out
