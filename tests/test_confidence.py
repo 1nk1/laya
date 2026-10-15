@@ -2464,9 +2464,57 @@ for _name, _answer in (
     ("non-numeric-probability", _choice(0.5, "high")),
     ("bool-probability", _choice(True, False)),
     ("nan-probability", _choice(float("nan"), 0.5)),
+    ("infinite-probability", _choice(float("inf"), 0.5)),
     ("non-integer-score-level", {"type": "score", "probabilities": {"low": 0.5, "high": 0.5}}),
+    # A negative probability is malformed, and at `432312b3` none of these five were refused: they
+    # returned 3.0, 2.0, 0.8, 121.0 (120.99999999999989) and 1.75. The third is the one that cannot
+    # be caught by inspection -- an all-negative document divides by its own negative total and
+    # comes back with the number its positive counterpart comes back with.
+    ("negative-probability", _choice(2.0, -1.0)),
+    ("mixed-sign-argmax-flips", _choice(0.5, -1.5)),
+    ("all-negative-probabilities", _choice(-0.9, -0.1)),
+    ("negative-total-near-zero", _choice(-0.61, 0.6)),
+    ("negative-score-level", _score(1.5, -0.5, 0.0)),
 ):
     check("jev_confidence/none-for-%s" % _name, jev_confidence(_answer), None)
+
+
+def _jev_measured(_answer):
+    """`jev_confidence`'s number, or the exception it raised instead, so a slip reports, not aborts."""
+    try:
+        return jev_confidence(_answer)
+    except BaseException as _exc:  # noqa: BLE001 -- the bare TypeError a misplaced check raises
+        return _exc
+
+
+# A probability written as the string "0.9" reads as a number through the function's own float()
+# coercion, so it is measured rather than refused -- and the finite and range checks run on that
+# coerced value, not on the JSON type it arrived as.
+_got = _jev_measured(_choice("0.9", "0.1"))
+check_true("jev_confidence/a numeric string probability is measured as a number",
+           isinstance(_got, float) and abs(_got - 0.8) < 1e-9, repr(_got))
+
+# The range the name promises: nothing this returns is outside [0, 1], and the negatives are
+# exactly what is refused. `x_jev_confidence` is served for a client to compare a threshold
+# against, so an out-of-range number is a gate that passes every answer it touches.
+_swept, _out_of_range, _refused = 0, [], []
+for _i in range(-200, 301):
+    for _answer in (_choice(_i / 100.0, 0.6), _score(_i / 100.0, 0.4, 0.2)):
+        _got = jev_confidence(_answer)
+        _swept += 1
+        if _got is None:
+            _refused.append(_i / 100.0)
+        elif not (0.0 <= _got <= 1.0):
+            _out_of_range.append((_i / 100.0, _got))
+check_true("jev_confidence/sweep kept every number inside [0, 1]", not _out_of_range,
+           "%d of %d outside, worst %r" % (len(_out_of_range), _swept, _out_of_range[:3]))
+check_true("jev_confidence/sweep refused exactly the negative probability",
+           sorted(set(_refused)) == [value / 100.0 for value in range(-200, 0)],
+           "%d refused: %r" % (len(_refused), _refused[:2] + _refused[-2:]))
+# 501 values x both answer types, and the 400 refusals are the 200 negatives twice over
+check_true("jev_confidence/sweep measured everything that is not negative",
+           (_swept, len(_refused), _swept - len(_refused)) == (1002, 400, 602),
+           "swept %d, refused %d, measured %d" % (_swept, len(_refused), _swept - len(_refused)))
 
 # --- the public name and the served field must be one computation (#302) --------------------
 # `/v1/systemone` publishes `x_jev_confidence`, but a caller running the checkpoint in-process
