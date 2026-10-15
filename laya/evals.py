@@ -94,6 +94,42 @@ def _metric_map(values: Any, label: str, *, allow_empty: bool = False) -> Dict[s
     return values
 
 
+def _tolerance_map(tolerances: Any) -> Dict[str, Any]:
+    """Return a caller's tolerance map, naming any entry `compare` cannot gate on.
+
+    Both metric maps go through ``_metric_map`` for this reason; the tolerances reach the same
+    subtraction as a dict the caller built -- a hand-edited `thresholds.json` for
+    `research/evals/check_regression.py`, a config module for a test -- and were read with a bare
+    ``float(tolerances.get(metric, 0.0))``. A string, null, list or dict there raised ``TypeError``
+    from inside the arithmetic and a list or string given as the whole map raised
+    ``AttributeError``, so the gate died with exit 1 -- the code `laya-evals` reserves for a
+    quality failure -- on what is a broken gate parameter. A bool was read as 1.0, which for a
+    metric that lives in [0, 1] accepts any drift the run can report.
+
+    ``Infinity`` is the one number that cannot fail a comparison: every finite drift is inside it,
+    so naming a metric with it turns that metric's gate into a no-op while the run still exits 0
+    -- the code that means "the gate ran and the numbers passed". A NaN or a negative tolerance
+    decides the opposite way (every comparison with NaN is False, and no absolute difference is
+    ``<=`` a negative number), so those stay results rather than refusals; see
+    ``test_compare_refuses_a_tolerance_that_cannot_fail``. An empty map is a complete answer here,
+    unlike an empty metric map: it means every shared metric must match exactly.
+    """
+    if tolerances is None:
+        return {}
+    if not isinstance(tolerances, dict):
+        raise EvalError("tolerances must be an object of metric name to number, got %s"
+                        % type(tolerances).__name__)
+    import math as _math
+    for name, value in tolerances.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise EvalError("tolerance for %r is not a number, got %s"
+                            % (name, type(value).__name__))
+        if _math.isinf(value) and value > 0:
+            raise EvalError("tolerance for %r is Infinity, so it accepts a drift of any size"
+                            % name)
+    return tolerances
+
+
 def compare_agreement(reference: Dict, repeat: Dict, student: Dict, *,
                       bootstrap_samples: int = 2000, seed: int = 0) -> Dict[str, Any]:
     """Compare saved teacher reference, teacher repeat, and student choice observations.
@@ -788,10 +824,11 @@ class EvalReport:
         pass the gate by having nothing left to compare. A NaN metric, baseline or tolerance
         fails the comparison too.
 
-        Either side that is not a metric name to number map, and a baseline with no metrics at
-        all, raises ``EvalError`` rather than reaching the subtraction: both documents are read
-        from a path the caller names, and a shape the gate cannot compare is a broken artifact.
-        See ``_metric_map``.
+        Either side that is not a metric name to number map, a baseline with no metrics at all,
+        and a tolerance that is not a number or is ``Infinity`` raise ``EvalError`` rather than
+        reaching the subtraction: both documents are read from a path the caller names, and a shape
+        the gate cannot compare -- or a limit that cannot fail -- is a broken artifact.
+        See ``_metric_map`` and ``_tolerance_map``.
         """
         # A baseline may be a full report document or the metric map on its own, which is the
         # shape `research/evals/check_regression.py` builds per language.
@@ -800,7 +837,7 @@ class EvalReport:
                             % type(baseline).__name__)
         base = _metric_map(baseline.get("overall", baseline), "baseline")
         overall = _metric_map(self.overall, "report", allow_empty=True)
-        tolerances = tolerances or {}
+        tolerances = _tolerance_map(tolerances)
         deltas: Dict[str, Dict[str, float]] = {}
         ok = True
         for metric, base_value in base.items():

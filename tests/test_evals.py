@@ -1729,6 +1729,68 @@ def test_compare_refuses_a_document_the_gate_cannot_subtract_through():
     assert not ok and deltas["choice_accuracy"]["missing"]
 
 
+def test_compare_refuses_a_tolerance_that_cannot_fail():
+    """The caller's tolerance map is the third document the gate does arithmetic on.
+
+    The metric maps have refused broken shapes since ``_metric_map``; the tolerances were read with
+    a bare ``float(tolerances.get(metric, 0.0))`` inside the loop. They arrive as a dict the caller
+    built -- `research/evals/check_regression.py` reads them from a committed thresholds.json with
+    ``json.load``, which parses an ``Infinity`` literal -- so this is the same artifact class, on the
+    side that decides whether the gate can fail at all.
+    """
+    report = EvalReport(overall={"choice_accuracy": 0.8})
+    baseline = {"overall": {"choice_accuracy": 0.90}}
+
+    # The harm: a limit every possible drift fits inside greens a 0.10 drop, and the run still
+    # exits 0 with the line that says the gate ran. `1e999` is the spelling that arrives without
+    # anyone typing "inf" -- it overflows to Infinity and raises nothing.
+    for value in (float("inf"), 1e999):
+        with pytest.raises(EvalError, match="accepts a drift of any size") as exc:
+            report.compare(baseline, {"choice_accuracy": value})
+        assert "'choice_accuracy'" in str(exc.value), "the message names the metric it refuses"
+
+    # A bool was the quietest of the rest: `float(True)` is 1.0, which is a tolerance no
+    # [0, 1] metric can breach. Everything else used to die in the subtraction as a TypeError.
+    for value, kind in ((True, "bool"), (False, "bool"), ("0.1", "str"), (None, "NoneType"),
+                        ([0.1], "list"), ({"v": 1}, "dict"), (0j, "complex")):
+        with pytest.raises(EvalError, match="is not a number, got %s" % kind):
+            report.compare(baseline, {"choice_accuracy": value})
+
+    # The map itself: a list or string of pairs, a number, and the empty tuple all used to reach
+    # `.get`, and the falsy ones (`0`, `()`) were read as "no tolerances" by `tolerances or {}`.
+    for bad in ([("choice_accuracy", 0.1)], "0.1", 5, 0, ()):
+        with pytest.raises(EvalError, match="tolerances must be an object"):
+            report.compare(baseline, bad)
+
+    # Checked for every entry, not only the ones this baseline happens to consult: a gate
+    # parameter that is broken is broken whether or not the run reaches it.
+    with pytest.raises(EvalError, match="accepts a drift of any size"):
+        report.compare(baseline, {"ece_ms": float("inf")})
+    # And not only the first entry: this is a committed thresholds.json where one metric's limit
+    # was replaced by a value that cannot fail, next to a limit the run does check and passes.
+    both = EvalReport(overall={"choice_accuracy": 0.8, "ece": 0.10})
+    with pytest.raises(EvalError, match="accepts a drift of any size"):
+        both.compare({"overall": {"choice_accuracy": 0.90, "ece": 0.08}},
+                     {"choice_accuracy": 0.2, "ece": float("inf")})
+
+    # `assert_regression` is the other public door, and it refuses rather than raising the
+    # AssertionError its callers catch on a real regression.
+    with pytest.raises(EvalError, match="accepts a drift of any size"):
+        assert_regression(report, baseline, {"choice_accuracy": float("inf")})
+
+    # The boundary that stays a comparison: NaN, -Infinity and a negative number each fail every
+    # `abs(diff) <= allowed` test, so they report a gate that did not pass rather than refuse one.
+    assert not report.compare(baseline, {"choice_accuracy": float("nan")})[0]
+    assert not report.compare(baseline, {"choice_accuracy": float("-inf")})[0]
+    assert not report.compare(baseline, {"choice_accuracy": -0.5})[0]
+
+    # And no tolerances at all is a complete answer: everything shared must match exactly.
+    assert not report.compare(baseline)[0]
+    assert not report.compare(baseline, {})[0]
+    assert not report.compare(baseline, None)[0]
+    assert report.compare({"overall": {"choice_accuracy": 0.8}}, {"choice_accuracy": 0.2})[0]
+
+
 def test_cli_exits_2_for_a_malformed_baseline_or_report(tmp_path, capsys):
     """A broken artifact is exit code 2; exit 1 is what a quality failure is worth.
 
@@ -1818,20 +1880,19 @@ def test_cli_rejects_an_infinite_limit_or_tolerance(capsys):
 def test_an_infinite_limit_would_have_decided_nothing():
     """The harm the guard above prevents, pinned so relaxing it cannot go quiet.
 
-    Without the refusal these are the values `_check_thresholds` and `compare` compute from a
-    non-finite limit, and each one is a pass: `laya-evals` would exit 0 having gated nothing. A
-    test that asserts them is not asserting correct behaviour -- it is the witness that the
-    guard's absence was a defect.
+    Without the refusal these are the values `_check_thresholds` computes from a non-finite limit,
+    and each one is a pass: `laya-evals` would exit 0 having gated nothing. A test that asserts them
+    is not asserting correct behaviour -- it is the witness that the guard's absence was a defect.
+
+    `compare` had the same hole on its tolerance map, one layer below the CLI guard, and it no
+    longer computes a pass from Infinity: it refuses it. See
+    `test_compare_refuses_a_tolerance_that_cannot_fail`.
     """
     from laya import evals_cli
 
     inf = float("inf")
     assert evals_cli._check_thresholds({"ece": 0.42}, {}, {"ece": inf}) == []
     assert evals_cli._check_thresholds({"choice_accuracy": 0.10}, {"choice_accuracy": -inf}, {}) == []
-    ok, deltas = EvalReport(config={}, overall={"choice_accuracy": 0.10}).compare(
-        {"overall": {"choice_accuracy": 0.90}}, {"choice_accuracy": inf})
-    assert ok, "an 0.80 drop passed a gate whose tolerance was inf"
-    assert deltas["choice_accuracy"]["diff"] == pytest.approx(-0.8)
 
 
 def test_default_evaluators_cover_the_three_types():

@@ -548,7 +548,9 @@ caller driving `laya.evals.evaluate` directly gets the same identity a CLI run d
 
 - Keep the dataset, a baseline report (`--json` output you have reviewed), and the tolerances
   together, committed, so a change is a reviewable diff. `--tolerance METRIC=VALUE` is the
-  maximum absolute drift allowed for that metric.
+  maximum absolute drift allowed for that metric. It has to be a limit that can fail: `Infinity`
+  is one every finite drift fits inside, so it is refused rather than read as no gate for that
+  metric.
 - `laya-evals run ... --baseline baseline.json --tolerance ...` exits non-zero on drift, so it
   drops into CI unchanged. `laya.evals.EvalReport.compare` and `assert_regression` expose the
   same logic for tests.
