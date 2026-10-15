@@ -617,10 +617,10 @@ laya-evals evidence --checkpoint ./my-checkpoint [--report report.json]
 A checkpoint directory must contain `rl_agent_config.json`. Calibration evidence is derived from
 the persisted `training.laya_train_calibration` block: a legacy checkpoint with no training
 metadata is `UNKNOWN`; an entry whose `items` is not an integer count — a missing key, a string, a
-JSON `true` — is `UNKNOWN` rather than a count of one; a question type with zero items is `MISSING`; a type whose entry records
-any upstream `issues` text (not fitted, below `MIN_TYPE_N`/`CALIB_WARN_N`, clamped, unchanged
-fit) is `INSUFFICIENT`; a clean fit is `PRESENT`. The helper trusts the persisted `issues`
-written by #933 instead of keeping a second numeric threshold source.
+JSON `true` — is `UNKNOWN` rather than a count of one; a question type with zero items is `MISSING`;
+a type whose entry records any upstream `issues` text (not fitted, below `MIN_TYPE_N`/`CALIB_WARN_N`,
+clamped, unchanged fit) is `INSUFFICIENT`; a clean fit is `PRESENT`. The helper trusts the persisted
+`issues` written by #933 instead of keeping a second numeric threshold source.
 
 The eval report's identity fields (`schema`, `dataset_sha256`, `questions_sha256`, `laya_version`)
 are reported with the same semantics as `run`. The checkpoint↔report relationship is claimed only
