@@ -11,8 +11,40 @@ import (
 
 func TestFileRefusesTrailingSlash(t *testing.T) {
 	fsys := fstest.MapFS{"a/b.bin": {Data: []byte("graph")}}
-	err := File(fsys, "a/b.bin/", hexOf("graph"))
-	if !errors.Is(err, fs.ErrNotExist) {
+	for _, rel := range []string{"a/b.bin/", "a/b.bin/."} {
+		if err := File(fsys, rel, hexOf("graph")); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("%s: err = %v", rel, err)
+		}
+	}
+}
+
+// swapFS reports a regular file at Stat, then opens a device: the path swapped between the two.
+type swapFS struct{ fstest.MapFS }
+
+type deviceFile struct{ fs.File }
+
+func (d deviceFile) Stat() (fs.FileInfo, error) {
+	st, err := d.File.Stat()
+	return deviceInfo{st}, err
+}
+
+type deviceInfo struct{ fs.FileInfo }
+
+func (deviceInfo) Mode() fs.FileMode { return fs.ModeDevice | fs.ModeCharDevice }
+
+func (s swapFS) Open(name string) (fs.File, error) {
+	f, err := s.MapFS.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return deviceFile{f}, nil
+}
+
+func (s swapFS) Stat(name string) (fs.FileInfo, error) { return s.MapFS.Stat(name) }
+
+func TestFileRefusesADeviceSwappedInAfterStat(t *testing.T) {
+	fsys := swapFS{fstest.MapFS{"g.onnx": {Data: []byte("graph")}}}
+	if err := File(fsys, "g.onnx", hexOf("graph")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("err = %v", err)
 	}
 }

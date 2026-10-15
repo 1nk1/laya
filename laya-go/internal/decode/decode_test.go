@@ -710,7 +710,7 @@ func TestQuotientOverflowIsRefused(t *testing.T) {
 }
 
 func TestNewTemperaturesFalsyByOptionsIsEmpty(t *testing.T) {
-	for _, v := range []any{false, 0, 0.0, "", []any{}, map[string]any{}, nil} {
+	for _, v := range []any{false, 0, 0.0, "", []any{}, map[string]any{}, nil, json.Number("0"), json.Number("0.0")} {
 		if _, err := NewTemperatures(nil, nil, map[string]any{"de": map[string]any{"temperature_by_options": v}}); err != nil {
 			t.Errorf("%#v: %v", v, err)
 		}

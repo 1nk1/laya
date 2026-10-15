@@ -248,6 +248,10 @@ func isRange(err error) bool {
 // falsy is Python truthiness for the values `cfg.get(...) or {}` meets: None, False, zero, "" and
 // an empty container.
 func falsy(v any) bool {
+	if n, ok := v.(json.Number); ok { // a string kind: checked before the reflect switch
+		f, err := n.Float64()
+		return err == nil && f == 0
+	}
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
 	case reflect.Invalid:
@@ -262,10 +266,6 @@ func falsy(v any) bool {
 		return rv.Float() == 0
 	case reflect.String, reflect.Slice, reflect.Array, reflect.Map:
 		return rv.Len() == 0
-	}
-	if n, ok := v.(json.Number); ok {
-		f, err := n.Float64()
-		return err == nil && f == 0
 	}
 	return false
 }

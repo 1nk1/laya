@@ -64,7 +64,7 @@ func File(fsys fs.FS, rel, want string) error {
 	if err != nil {
 		return err
 	}
-	if strings.HasSuffix(strings.ReplaceAll(rel, "\\", "/"), "/") { // "x/" names a directory, never the file x
+	if r := strings.ReplaceAll(rel, "\\", "/"); strings.HasSuffix(r, "/") || strings.HasSuffix(r, "/.") { // "x/", "x/." name a directory, never the file x
 		return fmt.Errorf("laya: cannot verify %q: not a file: %w", rel, fs.ErrNotExist)
 	}
 	// Stat before Open: opening a FIFO blocks, and a device never ends. Python's isfile refuses both.
@@ -78,6 +78,12 @@ func File(fsys fs.FS, rel, want string) error {
 		return fmt.Errorf("laya: cannot verify %q: %w", rel, err)
 	}
 	defer f.Close()
+	// Again after Open: the path can be swapped for a device between Stat and Open.
+	if st, err := f.Stat(); err != nil {
+		return fmt.Errorf("laya: cannot verify %q: %w", rel, err)
+	} else if !st.Mode().IsRegular() {
+		return fmt.Errorf("laya: cannot verify %q: not a regular file: %w", rel, fs.ErrNotExist)
+	}
 	got, err := Sum(f)
 	if err != nil {
 		return fmt.Errorf("laya: cannot verify %q: %w", rel, err)
