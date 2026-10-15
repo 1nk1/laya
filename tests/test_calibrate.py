@@ -1229,6 +1229,71 @@ check("binning/numpy floor reads as the int floor",
                       bins=12, min_bucket_n=MIN_BINNING_BUCKET_N))
 
 
+# --------------------------------------------------------------- the seed is this module's count
+
+# `seed` was the one numeric parameter of `fit_temperature_map` handed straight to
+# `numpy.random.RandomState`, so on the `compute_ece=True` path a `10.0` came back as numpy's
+# `TypeError: Cannot cast scalar from dtype('float64') to dtype('int64') according to the rule
+# 'safe'` -- which names only dtypes -- and a `-1` as numpy's `ValueError: Seed must be between 0
+# and 2**32 - 1`, neither of them this module's own contract. On the `compute_ece=False` path every
+# one of them was ignored in silence, because that path never builds a RandomState. `True`/`False`
+# were accepted on both paths and numpy used them as 1/0 (measured: base's `seed=True` report is
+# byte-identical to its `seed=1` report), so a flag-shaped value picked a data split. Message and
+# both paths are checked, because "raised the wrong thing" and "raised nothing" were each half of
+# what was wrong.
+# `1e999` is a source literal that overflows to `inf`, so it and `float("inf")` are the same value
+# and their arm labels print alike -- both spellings stay, because the reachable mistake is the
+# literal one.
+_SEED_REFUSED = (10.0, 2.5, float("nan"), float("inf"), 1e999, "7", "0", True, False, -1, 2 ** 32,
+                 -2 ** 32, [7], (7,), 7 + 0j)
+for _ece in (True, False):
+    for _bad in _SEED_REFUSED:
+        try:
+            fit_temperature_map(mixed, compute_ece=_ece, seed=_bad)
+            _res = "no ValueError"
+        except ValueError as _exc:
+            _res = str(_exc)
+        except Exception as _exc:
+            _res = "raised %s" % type(_exc).__name__
+        check("seed/%s refused on the compute_ece=%s path" % (repr(_bad), _ece), _res,
+              "seed must be None or an integer in [0, 2**32-1], got %r" % (_bad,))
+
+# What a real seed still buys, unchanged: a numpy integer is an `Integral`, so a seed that came out
+# of an array expression keeps working and splits identically to the Python int it equals; the whole
+# range numpy itself accepts is reachable; and `None` stays numpy's entropy seed rather than being
+# refused for a capability nobody asked to remove. (`ece/off ignores seed` above already pins that a
+# valid seed changes nothing on the `compute_ece=False` path, so nothing here restates it.)
+check("seed/numpy int splits like the Python int",
+      fit_temperature_map(mixed, compute_ece=True, seed=np.int64(7))["report"],
+      fit_temperature_map(mixed, compute_ece=True, seed=7)["report"])
+check("seed/top of numpy's range is accepted",
+      type(fit_temperature_map(mixed, compute_ece=True, seed=2 ** 32 - 1)["report"]).__name__,
+      "dict")
+check("seed/None is still the entropy seed",
+      type(fit_temperature_map(mixed, compute_ece=True, seed=None)["report"]).__name__, "dict")
+# A seed that is a seed still changes the split *through the public fitter* -- `split/seed changes
+# holdout` above pins the private `_ece_split`, and `ece/fit deterministic` pins the same-seed half.
+# The `np.isfinite` terms are part of the assertion on purpose: `nan != nan` is True, so a bare
+# inequality would pass on a report whose ECE was never scored.
+_e7 = fit_temperature_map(mixed, compute_ece=True, seed=7)["report"]["ece_after"]
+_e11 = fit_temperature_map(mixed, compute_ece=True, seed=11)["report"]["ece_after"]
+check_true("seed/public fitter still splits by the seed",
+           _e7 != _e11 and bool(np.isfinite(_e7)) and bool(np.isfinite(_e11)),
+           "ece_after seed=7 %r, seed=11 %r" % (_e7, _e11))
+# The forwarding path is `Agent.fit_temperatures`, which passes `seed` through untouched; a refusal
+# there must be this refusal, not a new one.
+_stub = type("Stub", (), {})()
+try:
+    Agent.fit_temperatures(_stub, mixed, compute_ece=True, seed=10.0)
+    _res = "no ValueError"
+except ValueError as _exc:
+    _res = str(_exc)
+except Exception as _exc:
+    _res = "raised %s" % type(_exc).__name__
+check("seed/agent forwards the refusal", _res,
+      "seed must be None or an integer in [0, 2**32-1], got 10.0")
+
+
 print("\n%d passed, %d failed" % (len(PASS), len(FAIL)))
 for f in FAIL:
     print("  FAIL " + f)
