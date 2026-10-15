@@ -22,8 +22,13 @@ package agent
 // WithHookTimeout bounds the wait for each hook. Go cannot stop a goroutine, so a hook that
 // overruns keeps running after the call has returned an error: the timeout protects the request,
 // not the process. Such a hook must not touch the PredictContext it was given (the call has moved
-// on and owns it), and it no longer holds the serial lock. Close does not wait for a running
-// hook: a call that is waiting on one gives up with ErrClosed.
+// on and owns it), and it no longer holds the serial lock. Each overrun leaks one goroutine until
+// the hook returns, so "a hook needs no locking" holds only while no timeout has fired. A started
+// hook is waited for until it returns or times out, whatever Close or the caller's context does,
+// so a hook that may block needs a timeout; OnError and OnPredictEnd still run after a cancelled
+// context. A hook that calls back into its own agent hangs on the serial lock, where Python's
+// lock is re-entrant.
+// A hook's MaxLen or HeadMaxLen of 0 or less means "no override", as Go has no None.
 
 import (
 	"context"
@@ -429,10 +434,18 @@ func (a *Agent) dispatch(ctx context.Context, ev hookEvent, hooks []Hook, pc *Pr
 func (a *Agent) callHook(ctx context.Context, ev hookEvent, h Hook, pc *PredictContext) error {
 	hk := a.hk
 	if hk.serial {
+		// OnError and OnPredictEnd report on work already done: they wait for the lock however
+		// the call ends, as Python's always run.
+		var closed <-chan struct{}
+		if ev.name == evStart.name {
+			closed = hk.done
+		} else {
+			ctx = context.WithoutCancel(ctx)
+		}
 		select {
 		case hk.sem <- struct{}{}:
 			defer func() { <-hk.sem }()
-		case <-hk.done:
+		case <-closed:
 			return ErrClosed
 		case <-ctx.Done():
 			return ctx.Err()
@@ -440,8 +453,14 @@ func (a *Agent) callHook(ctx context.Context, ev hookEvent, h Hook, pc *PredictC
 	}
 	res := make(chan error, 1) // buffered: an abandoned hook still finishes without blocking
 	go func() {
+		returned := false
 		defer func() {
-			if r := recover(); r != nil {
+			r := recover()
+			switch {
+			case returned:
+			case r == nil: // runtime.Goexit, e.g. t.FailNow: no return and no panic
+				res <- fmt.Errorf("laya: hook %s exited without returning", hookName(h))
+			default:
 				if err, ok := r.(error); ok {
 					res <- err
 				} else {
@@ -450,6 +469,7 @@ func (a *Agent) callHook(ctx context.Context, ev hookEvent, h Hook, pc *PredictC
 			}
 		}()
 		ev.call(h, pc)
+		returned = true
 		res <- nil
 	}()
 	var expired <-chan time.Time
@@ -458,15 +478,13 @@ func (a *Agent) callHook(ctx context.Context, ev hookEvent, h Hook, pc *PredictC
 		defer t.Stop()
 		expired = t.C
 	}
+	// Once started, a hook is waited for until it returns or times out: abandoning it on Close
+	// or on the caller's context would leave it racing the next hook and the call's results.
 	select {
 	case err := <-res:
 		return err
 	case <-expired:
 		return fmt.Errorf("laya: hook %s exceeded %gs", hookName(h), hk.timeout.Seconds())
-	case <-hk.done:
-		return ErrClosed
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }
 

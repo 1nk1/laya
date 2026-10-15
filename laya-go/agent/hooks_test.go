@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -157,14 +158,66 @@ func TestCloseDuringRunningHookReturns(t *testing.T) {
 	closed := make(chan struct{})
 	go func() { a.Close(); close(closed) }()
 	select {
+	case err := <-done:
+		t.Fatalf("call returned %v while its hook still ran: it would race the next hook", err)
 	case <-closed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Close deadlocked behind a running hook")
-	}
-	if err := <-done; !errors.Is(err, ErrClosed) {
-		t.Fatalf("call err = %v, want ErrClosed", err)
+		t.Fatal("Close returned while a call was still running its hook")
+	case <-time.After(50 * time.Millisecond):
 	}
 	close(release)
+	for _, c := range []chan struct{}{closed} {
+		select {
+		case <-c:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Close did not return once the hook did")
+		}
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("call did not return once its hook did")
+	}
+}
+
+func TestGoexitInHookIsAnError(t *testing.T) {
+	h := &HookFuncs{OnStart: func(*PredictContext) { runtime.Goexit() }}
+	a := testAgent(t, options{raise: true, installed: []Hook{h}})
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.PredictBatch(context.Background(), []any{"s"}, questionsOf("q"))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "exited without returning") {
+			t.Fatalf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a hook that called Goexit hung the call and held the serial lock")
+	}
+}
+
+func TestEndAndErrorHooksRunAfterCancelAndQuit(t *testing.T) {
+	var errRan, endRan atomic.Int32
+	h := &HookFuncs{OnErr: func(*PredictContext) { errRan.Add(1) }, OnEnd: func(*PredictContext) { endRan.Add(1) }}
+	var cancel context.CancelFunc
+	a := testAgent(t, options{raise: true, installed: []Hook{h}})
+	a.hk.stub = func(context.Context, []any, schema.Questions, call) ([]schema.Prediction, error) {
+		cancel()
+		a.hk.quit()
+		return nil, errors.New("inference failed")
+	}
+	for i := 0; i < 50; i++ {
+		errRan.Store(0)
+		endRan.Store(0)
+		var ctx context.Context
+		ctx, cancel = context.WithCancel(context.Background())
+		_, _ = a.PredictBatch(ctx, []any{"s"}, questionsOf("q"))
+		cancel()
+		if errRan.Load() != 1 || endRan.Load() != 1 {
+			t.Fatalf("run %d: OnError ran %d, OnPredictEnd ran %d, want 1 and 1", i, errRan.Load(), endRan.Load())
+		}
+	}
 }
 
 func TestValidateTimeout(t *testing.T) {
@@ -228,5 +281,30 @@ func TestCallablesRunInTheOrderGiven(t *testing.T) {
 	}
 	if want := "s1 s2 e1 e2"; strings.Join(got, " ") != want {
 		t.Fatalf("order = %v, want %s", got, want)
+	}
+}
+
+func TestCancelledContextDoesNotAbandonARunningHook(t *testing.T) {
+	release, started := make(chan struct{}), make(chan struct{})
+	h := &HookFuncs{OnStart: func(*PredictContext) { close(started); <-release }}
+	a := testAgent(t, options{raise: true, installed: []Hook{h}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.PredictBatch(ctx, []any{"s"}, questionsOf("q"))
+		done <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		t.Fatalf("call returned %v while its hook still ran", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("call did not return once its hook did")
 	}
 }
