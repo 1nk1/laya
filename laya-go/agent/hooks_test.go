@@ -69,9 +69,20 @@ func TestTimeoutReturnsWhileHookRuns(t *testing.T) {
 	h := &HookFuncs{OnStart: func(*PredictContext) { close(started); <-release; close(finished) }}
 	a := testAgent(t, options{raise: true, timeout: 20 * time.Millisecond, installed: []Hook{h}})
 	t0 := time.Now()
-	_, err := a.PredictBatch(context.Background(), []any{"s"}, questionsOf("q"))
-	if err == nil || !strings.Contains(err.Error(), "exceeded") {
-		t.Fatalf("err = %v, want a timeout", err)
+	errc := make(chan error, 1)
+	go func() {
+		_, err := a.PredictBatch(context.Background(), []any{"s"}, questionsOf("q"))
+		errc <- err
+	}()
+	var err error
+	select {
+	case err = <-errc:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the call did not return while the hook ran: the timeout is not applied")
+	}
+	if err == nil || !strings.Contains(err.Error(), "exceeded 0.02s") {
+		t.Fatalf("err = %v, want a 0.02s timeout", err)
 	}
 	if d := time.Since(t0); d > 2*time.Second {
 		t.Fatalf("returned after %v", d)
@@ -203,5 +214,19 @@ func TestZeroAgentHookMethodsDoNotPanic(t *testing.T) {
 	}
 	if a.RemoveHook(&StubHook{}) || a.Hooks() != nil {
 		t.Error("zero Agent reports hooks")
+	}
+}
+
+func TestCallablesRunInTheOrderGiven(t *testing.T) {
+	var got []string
+	rec := func(s string) func(*PredictContext) { return func(*PredictContext) { got = append(got, s) } }
+	a := testAgent(t, options{raise: true})
+	_, err := a.PredictBatch(context.Background(), []any{"s"}, questionsOf("q"),
+		WithOnPredictStart(rec("s1"), rec("s2")), WithOnPredictEnd(rec("e1"), rec("e2")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "s1 s2 e1 e2"; strings.Join(got, " ") != want {
+		t.Fatalf("order = %v, want %s", got, want)
 	}
 }
