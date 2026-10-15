@@ -27,6 +27,7 @@ from laya.serve import (  # noqa: E402
     BATCH_BODY_ITEM_CONTROLS,
     BODY_CONTROLS,
     BODY_REFUSALS,
+    DEFAULT_LOG_LEVEL,
     DEFAULT_MAX_TOKEN_BUDGET,
     DEFAULT_PORT,
     MAX_BODY_BYTES,
@@ -36,6 +37,7 @@ from laya.serve import (  # noqa: E402
     _check_request_limits,
     _env_bool,
     _LONE_SURROGATE_DETAIL,
+    _resolve_log_level,
     _resolve_max_token_budget,
     _resolve_idle_unload_seconds,
     _resolve_max_loaded,
@@ -1722,6 +1724,81 @@ def test_resolve_max_token_budget_fallback(monkeypatch, caplog):
         assert _resolve_max_token_budget() == DEFAULT_MAX_TOKEN_BUDGET
     assert "invalid LAYA_MAX_TOKEN_BUDGET" in caplog.text
     assert "LAYA_MAX_TOKEN_BUDGET must be positive" in caplog.text
+
+
+def test_resolve_log_level_refuses_a_bad_value_by_name(monkeypatch):
+    """`LAYA_LOG_LEVEL` answers with a message about the variable, never a traceback.
+
+    uvicorn looks the value up in its own `LOG_LEVELS` with `.lower()` and no `.strip()`, so a typo,
+    a padded value copied out of a `.env`, and a blank `LAYA_LOG_LEVEL=` all raise a bare `KeyError`
+    from inside `configure_logging` -- and the key it prints is the lowercased one, which names
+    neither the variable nor the caller. The accepted names are read from `LOG_LEVELS` itself rather
+    than restated here, so the refusal cannot list a set uvicorn disagrees with.
+    """
+    from uvicorn.config import LOG_LEVELS
+
+    monkeypatch.delenv("LAYA_LOG_LEVEL", raising=False)
+    assert _resolve_log_level() == DEFAULT_LOG_LEVEL
+    for blank in ("", "  ", "\t"):
+        monkeypatch.setenv("LAYA_LOG_LEVEL", blank)
+        assert _resolve_log_level() == DEFAULT_LOG_LEVEL, repr(blank)
+
+    # Every spelling that worked before still works, case and padding included.
+    for name in sorted(LOG_LEVELS):
+        monkeypatch.setenv("LAYA_LOG_LEVEL", " %s " % name.upper())
+        assert _resolve_log_level() == name
+
+    for bad in ("verbose", "INFOO", "notset", "none", "0", "warn"):
+        monkeypatch.setenv("LAYA_LOG_LEVEL", bad)
+        with pytest.raises(SystemExit) as caught:
+            _resolve_log_level()
+        message = str(caught.value)
+        assert message == ("invalid LAYA_LOG_LEVEL %r: must be one of %s"
+                           % (bad, ", ".join(sorted(LOG_LEVELS)))), message
+
+
+def test_a_bad_log_level_is_refused_before_uvicorn_sees_it(monkeypatch):
+    """`main()` is where the level is handed over, so that is where the promise is checked."""
+    import uvicorn
+
+    import laya.serve
+
+    captured = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: captured.update(kwargs))
+    monkeypatch.setattr(laya.serve, "create_app", lambda: None)
+
+    monkeypatch.setenv("LAYA_LOG_LEVEL", "  WARNING  ")
+    laya.serve.main()
+    assert captured["log_level"] == "warning"
+
+    monkeypatch.setenv("LAYA_LOG_LEVEL", "")
+    captured.clear()
+    laya.serve.main()
+    assert captured["log_level"] == DEFAULT_LOG_LEVEL
+
+    captured.clear()
+    monkeypatch.setenv("LAYA_LOG_LEVEL", "verbose")
+    with pytest.raises(SystemExit, match=r"invalid LAYA_LOG_LEVEL 'verbose'"):
+        laya.serve.main()
+    assert captured == {}, "the refusal must happen before uvicorn.run is reached"
+
+
+def test_uvicorn_dies_on_the_values_the_resolver_refuses():
+    """The witness that the guard guards a real crash: this is uvicorn's own behaviour, unmediated.
+
+    No `laya` code is on this path, which is the point -- `laya-serve` passed the environment
+    straight through, so every `KeyError` here is one the CLI printed.
+    """
+    import uvicorn
+
+    async def app():
+        return None
+
+    for value in ("", " ", "verbose", "notset", "INFO "):
+        with pytest.raises(KeyError):
+            uvicorn.Config(app, host="127.0.0.1", port=0, log_level=value)
+    for accepted in ("info", "warning", "INFO"):
+        uvicorn.Config(app, host="127.0.0.1", port=0, log_level=accepted)
 
 BATCH_REQ = {
     "states": ["first state", "second state"],
