@@ -32,6 +32,16 @@ def check(name, got, want):
         FAIL.append("%s: got %r, want %r" % (name, got, want))
 
 
+# `tests (windows)` has killed this suite about three runs in thirty-five, and now that the runner
+# prints the exit status (#1172) the status says what it is: `exit 3221225501 (0xC000001D)`,
+# STATUS_ILLEGAL_INSTRUCTION. Every `check` above collects into `PASS`/`FAIL` and nothing prints
+# until the report at the foot of the file, so a crash took the whole log with it: the lane showed
+# the suite's banner and then the next suite's. These markers go to stderr, unbuffered and
+# unconditional, so the next occurrence names the section it died in. They cost one write each.
+def stage(name):
+    print("[stage] %s" % name, file=sys.stderr, flush=True)
+
+
 # ------------------------------------------------------------------ fake tokenizer
 class FakeTok:
     """Just enough of a tokenizer for `build_sequence` / `system_one`."""
@@ -77,6 +87,7 @@ def _bare_agent(model, dtype=torch.float32, amp=False, tok=None):
 
 
 # ------------------------------------------------------------------ state reused once
+stage("state reused once")
 STATE = {"subject": "Duplicate charge", "body": "x" * 400}
 QUESTION = {"t": "choice", "ins": "pick", "crit": {"a": "x", "b": "y"}}
 
@@ -122,6 +133,7 @@ check("build_sequence/option segments stay <= 49 tokens",
 
 
 # ------------------------------------------------------------------ autocast
+stage("autocast")
 class DummyEnc(nn.Module):
     def __init__(self, d=16):
         super().__init__()
@@ -215,6 +227,7 @@ check("infer/non-autocast error propagates", raised, True)
 
 
 # ------------------------------------------------------------------ MPS autocast gating
+stage("MPS autocast gating")
 # MPS fp16 is slower than fp32 on one small row and only wins once the batch grows, so it is
 # gated by row count. These check the gate without an MPS device.
 def _mps_agent(amp=True, min_rows=None):
@@ -291,6 +304,7 @@ del os.environ["LAYA_CPU_AMP"]
 
 
 # ------------------------------------------------------------------ amp context shape
+stage("amp context shape")
 # A disabled gate must never construct torch.autocast: on torch builds without an MPS
 # autocast backend, entering it raises even with enabled=False, which broke MPS predict().
 mps = torch.device("mps")
@@ -311,6 +325,7 @@ check("amp-context/_infer disabled completes", True, True)
 
 
 # ------------------------------------------------------------------ OOM fallback observability (#351)
+stage("OOM fallback observability (#351)")
 class FakeCUDAInput:
     """An input_ids that fails the way a real CUDA OOM does when moved off CPU.
 
@@ -383,6 +398,7 @@ check("oom-fallback/plain CPU reason stays None", cpu_disabled.last_fallback_rea
 
 
 # ------------------------------------------------------------------ example 35 must teach this policy
+stage("example 35 must teach this policy")
 # examples/35 is the page a reader opens to ask "does my machine get mixed precision?", and on main
 # it answered no twice: "CPU and MPS run **fp32**; `torch.autocast` has no MPS backend here, so Laya
 # only wraps the forward pass on CUDA" in the banner, then, printed under the timings, "both legs
