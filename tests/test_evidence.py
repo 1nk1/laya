@@ -102,6 +102,18 @@ check("negative items are still reported, not judged", _neg["types"]["choice"]["
 check("negative items keep their own count in the reason", _neg["types"]["choice"]["reason"],
       "fitted with no recorded issues on -5 items")
 
+# The rest of the same door, which main already refuses but nothing pinned: a string or a float is
+# not a count, and an entry that is not an object cannot carry one. All three land on the same
+# `UNKNOWN` as a missing key, because none of them states a number the fit can be checked against.
+for _bad, _label in (("5", "a string"), (2.0, "a float")):
+    _t = calib({"training": {"laya_train_calibration": {
+        "choice": {"items": _bad, "temperature": 1.1, "issues": []}}}})
+    check("items=%s is not a count -> UNKNOWN" % _label, _t["types"]["choice"]["state"], evidence.UNKNOWN)
+_not_entry = calib({"training": {"laya_train_calibration": {"choice": "5"}}})
+check("entry that is not an object -> UNKNOWN", _not_entry["types"]["choice"]["state"], evidence.UNKNOWN)
+check("entry that is not an object keeps the malformed reason", _not_entry["types"]["choice"]["reason"],
+      "calibration entry is malformed")
+
 # ------------------------------------------------------ one numeric source of truth
 # `items` is reported here, never judged: #964 deleted the local `_thresholds()` that compared it
 # against copies of `MIN_TYPE_N`/`CALIB_WARN_N`, and the comment describing that mechanism stayed
