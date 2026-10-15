@@ -90,6 +90,21 @@ def test_invalid_inputs_fail_before_inference():
         evaluate_tournament(ChoiceAgent(), Dataset([row("ok", "a")]), checkpoint_id=" ")
 
 
+def test_a_row_built_in_python_names_the_row_instead_of_crashing():
+    # Same on this door: `Example.from_dict` makes these three checks for a JSONL row and
+    # `_validate_dataset` reads the same two fields as mappings, so a row built in Python died on
+    # `.items()` / `.get()` as an unhandled AttributeError, and an `expected` key with no question
+    # behind it was refused for the wrong reason ("tournament evaluation requires a choice question").
+    for row_shape, fragment in ((Example("ok", WIDE, True), "'expected' must be an object"),
+                                (Example("ok", ["intent"], {"intent": "a"}), "'questions' must be an object"),
+                                (Example("ok", WIDE, {"nope": "a"}), "'expected' names unknown question")):
+        agent = ChoiceAgent()
+        with pytest.raises(EvalError, match=r"example 0 " + fragment):
+            evaluate_tournament(agent, Dataset([row_shape]), group_size=2,
+                                checkpoint_id="checkpoint@123")
+        assert agent.received == [], row_shape
+
+
 def test_malformed_tournament_metadata_fails(monkeypatch):
     def malformed(*_args, **_kwargs):
         return {"answers": {"intent": {"type": "choice", "choice": "a"}},
