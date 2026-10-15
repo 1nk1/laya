@@ -4,7 +4,10 @@ Run: python -m pytest tests/test_evals.py -q
 """
 import io
 import json
+import os
+import pathlib
 import re
+import subprocess
 import sys
 import warnings
 
@@ -1929,6 +1932,86 @@ def test_questions_fingerprint_covers_the_instructions():
                                                      instructions="Judge whether a refund is justified ")},
                               {"verdict": "yes"})])
     assert evals.questions_fingerprint(spaced) != evals.questions_fingerprint(judged)
+
+
+def test_questions_fingerprint_hashes_every_distinct_question_not_the_last_row_per_id():
+    """One `qid` asked two ways is two questions, and both have to reach the digest.
+
+    `laya/evals.py::questions_fingerprint` collects each question's canonical JSON into a *set*,
+    not a `{qid: schema}` map. That distinction is load-bearing rather than incidental: a dataset
+    may carry the same `qid` under different bodies, because `laya/evals.py::Dataset.from_jsonl`
+    parses each row's `questions` on its own and never compares rows to rows -- verified against a
+    two-row file that reuses `intent` with different `criteria`, which loads -- and
+    `laya/evals.py::evaluate` groups rows by their own questions dict. A map would then keep only
+    the last row's spelling and drop the variant from the identity, so a run that asked both would
+    hash alike with a baseline that asked one. That is the comparison this key exists to refuse.
+
+    The two rows reversed must also digest alike: which variant a row order happens to hit last is
+    not part of what was asked.
+    """
+    variant = {"intent": dict(Q["intent"], criteria={"a": "x", "b": "y", "c": "z"})}
+    both = Dataset([Example("s1", Q, {"intent": "a"}), Example("s2", variant, {"intent": "a"})])
+    reversed_ = Dataset([Example("s1", variant, {"intent": "a"}), Example("s2", Q, {"intent": "a"})])
+    narrow = Dataset([Example("s1", Q, {"intent": "a"})])
+    last_row_only = Dataset([Example("s1", variant, {"intent": "a"})])
+
+    fingerprint = evals.questions_fingerprint
+    assert fingerprint(both) != fingerprint(narrow), "the added variant left the identity unchanged"
+    assert fingerprint(both) != fingerprint(last_row_only), \
+        "a question id-keyed digest would drop the first variant and collide here"
+    assert fingerprint(both) == fingerprint(reversed_), "row order moved the identity"
+
+
+def test_questions_fingerprint_is_the_same_digest_in_every_process():
+    """The schemas are hashed in sorted order, so two runs of one dataset agree.
+
+    CPython salts `str` hashes per process (`PYTHONHASHSEED`), and a `set` iterates in hash order,
+    so `laya/evals.py::questions_fingerprint` sorting its schemas before feeding `sha256` is what
+    makes the digest a run identity rather than a per-process artefact. Drop the `sorted()` and the
+    function still returns one value inside a process -- which is why an in-process test cannot see
+    it -- but the value moves between processes, and `questions_sha256` is the field
+    `laya/evals.py::EvalReport.comparable_to` refuses a baseline on. Two invocations of
+    `laya-evals run` over an unchanged dataset would then disagree with each other, so no run could
+    ever be compared to a baseline. The children below are the only part of this suite that can
+    observe that, and the committed literal is what they have to agree with.
+    """
+    def question(index):
+        return {"type": "choice", "instructions": "Question %d" % index,
+                "criteria": {"a": "alpha %d" % index, "b": "beta %d" % index}}
+
+    def dataset(order):
+        return Dataset([Example("s%d" % position, {"q%d" % index: question(index)},
+                                {"q%d" % index: "a"})
+                        for position, index in enumerate(order)])
+
+    orders = [list(range(8)), list(range(8))[::-1], [3, 0, 6, 1, 7, 2, 5, 4]]
+    parent = evals.questions_fingerprint(dataset(orders[0]))
+    for order in orders[1:]:
+        assert evals.questions_fingerprint(dataset(order)) == parent, \
+            "the order questions are encountered in moved the identity"
+
+    # An eight-question dataset, hashed by a fresh interpreter with a salted string hash.
+    root = pathlib.Path(laya.__file__).resolve().parent.parent
+    child = """
+from laya.evals import Dataset, Example, questions_fingerprint
+def question(index):
+    return {"type": "choice", "instructions": "Question %d" % index,
+            "criteria": {"a": "alpha %d" % index, "b": "beta %d" % index}}
+order = list(range(8))
+dataset = Dataset([Example("s%d" % position, {"q%d" % index: question(index)},
+                           {"q%d" % index: "a"}) for position, index in enumerate(order)])
+print(questions_fingerprint(dataset))
+"""
+    for seed in ("0", "1"):
+        result = subprocess.run([sys.executable, "-B", "-c", child], capture_output=True, text=True,
+                                cwd=str(root), env=dict(os.environ, PYTHONHASHSEED=seed,
+                                                         PYTHONPATH=str(root)))
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == parent, \
+            "PYTHONHASHSEED=%s produced a different digest than this process" % seed
+
+    # Measured on `main` with the eight-question dataset above.
+    assert parent == "b7f11c70d38341c0425f0297b88c4a3c155c1040de745f3363e51b278b49a990"
 
 
 def test_questions_fingerprint_normalizes_instructions_the_way_the_engine_does():
