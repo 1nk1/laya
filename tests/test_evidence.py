@@ -266,7 +266,7 @@ check("missing checkpoint dir -> usage error 2", rc_bad, 2)
 import contextlib
 import io
 
-_dir_report = os.path.join(tmp, "a-directory")
+_dir_report = os.path.join(tmp, "adir")
 os.makedirs(_dir_report)
 _not_object = os.path.join(tmp, "not-an-object.json")
 with open(_not_object, "w", encoding="utf-8") as f:
@@ -282,9 +282,16 @@ os.makedirs(_bad_config_ckpt)
 with open(os.path.join(_bad_config_ckpt, "rl_agent_config.json"), "w", encoding="utf-8") as f:
     f.write("{nope")
 
-for _label, _argv, _path in (
+# The last tuple element is the string the refusal must contain. For four rows that is the whole
+# path, because `laya/evidence.py` builds those messages from the argument the caller passed. The
+# directory row is the exception: its refusal is the operating system's own `OSError` text, and the
+# Windows CI runner reports that path in 8.3 form (`C:\Users\RUNNER~1\...` where the test holds
+# `C:\Users\runneradmin\...`), so an exact full-path match there tests the runner's temp layout
+# rather than the message. Its fixture is named `adir` -- short enough to be its own 8.3 name --
+# and the leaf is what the row asserts, because naming the file the caller passed is the property.
+for _label, _argv, _expect in (
         ("--report is a directory", ["evidence", "--checkpoint", ckpt, "--report", _dir_report],
-         _dir_report),
+         os.path.basename(_dir_report)),
         ("--report is JSON but not an object",
          ["evidence", "--checkpoint", ckpt, "--report", _not_object], _not_object),
         ("--report is not JSON", ["evidence", "--checkpoint", ckpt, "--report", _not_json],
@@ -299,7 +306,7 @@ for _label, _argv, _path in (
         _rc = evals_cli.main(_argv)
     check("evidence CLI: %s -> usage error 2" % _label, _rc, 2)
     check_true("evidence CLI: %s prints no traceback" % _label, "Traceback" not in _err.getvalue())
-    check_true("evidence CLI: %s names the path" % _label, _path in _err.getvalue())
+    check_true("evidence CLI: %s names the path" % _label, _expect in _err.getvalue())
 
 # ... and on the artifact the research harness actually writes: identity at the document's top
 # level, no `config` key. Read through `inspect_checkpoint`/`format_summary`, which is the whole of
