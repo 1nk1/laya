@@ -1,5 +1,5 @@
 // Package collate pads built sequences into the rectangular tensors the graph takes. The
-// tensor layout is the ONNX graph's contract, not a caller's, so this stays internal.
+// tensor layout is the ONNX graph's contract; callers see the result as an infer.Batch.
 //
 // One row per question, not per state: four questions about one document are four rows that
 // share a state. Rows are padded to the longest sequence and markers to the most options.
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/NandhaKishorM/laya/laya-go/infer"
 	"github.com/NandhaKishorM/laya/laya-go/schema"
 )
 
@@ -26,15 +27,8 @@ type Row struct {
 	Type    schema.Type
 }
 
-// Batch is the graph's five inputs, each flattened row-major, as onnxruntime tensors take them.
-type Batch struct {
-	InputIDs              []int64 // [Rows*Length]; padding is the pad id
-	AttentionMask         []int64 // [Rows*Length]; 1 for real tokens
-	MarkerPos             []int64 // [Rows*Markers]
-	MarkerMask            []bool  // [Rows*Markers]; true for real markers
-	QType                 []int64 // [Rows]; Type.Code
-	Rows, Length, Markers int
-}
+// Batch is the graph's five inputs, flattened row-major; it is infer.Batch, which a Session takes.
+type Batch = infer.Batch
 
 // Collate pads rows into one Batch. padID is fed to the encoder under a zero mask, so it must be
 // a real vocabulary id.

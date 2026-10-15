@@ -1,16 +1,19 @@
 # laya-go
 
-A pure-Go port of [laya](../README.md). Standard library only: no cgo, no third-party modules.
+A pure-Go port of [laya](../README.md). This module is standard library only: no cgo, no third-party
+modules. Running the model needs the nested `onnx` module, which uses cgo.
 
-This slice is the foundation the rest of the port stands on: `lang`, `schema`, `sequence` and
-`tokenizer`, on top of the pure-Go internals they share. The routing and model layers (ONNX, agent,
-router) come in later changes.
+The foundation (language detection, questions, sequences, the tokenizer) and the predict path
+(`infer`, `agent`) are here, and the `onnx` module runs the graph. The router comes in a later change.
 
 | Package | What it is |
 | --- | --- |
 | `lang` | Script and language detection, the port of `laya/lang.py`: `DetectScript`, `ScriptProfile`, `LatinProfileOf`, `GuessLatinLanguage`, `Analyze`, `DetectLanguage`, `IsEnglish`. |
 | `schema` | Questions (`Choice`, `ChoiceOf`, `Score`, `Noul`, `NoulWith`, `Questions`) and results (`Answer`, `Prediction`, `Usage`) every other package shares. Questions are refused with laya's own wording and read or written in the Python wire form. |
 | `sequence` | `build_sequence`, `build_head`, `state_room`, `window_budget` and `window_batch_cap`: `EncodeState`, `Build`, `StateRoom`, `PlanWindows`, `BatchCap`. |
+| `infer` | The seam to a model runtime: `Batch` (the graph's five inputs), `Output` (its two), `Session`, and the shape checks `Batch.Validate` and `Output.Check`. |
+| `agent` | `ONNXAgent.predict` and `predict_batch` over an `infer.Session`: `Open`, `Predict`, `PredictBatch`, `LoadConfig`, with batch size, sort-by-length and context cancellation between runs. |
+| `onnx` | A nested module (cgo, its own `go.mod`): `onnx.Open` runs a fused `laya.onnx` on ONNX Runtime and implements `infer.Session`, for `agent.Open`. Needs an ONNX Runtime 1.29+ shared library; `CGO_ENABLED=0` builds and `Open` returns `ErrNoCGO`. |
 | `tokenizer` | A reader and runner for Hugging Face `tokenizer.json` (BPE): normalizer, pre-tokenizer, added tokens, byte fallback, decoder. |
 | `internal/unicodedata` | The character predicates `laya/lang.py` leans on, recorded from CPython. |
 | `internal/pyjson` | `json.dumps` and `repr` spelled as CPython spells them. |
@@ -38,13 +41,15 @@ order-sensitive state. `Analyze` reads every leaf, so its cost grows with the nu
 ## Layout
 
 - No root package: the module path ends in `laya-go`, so tags are `laya-go/vX.Y.Z`.
-- The pure-Go packages are `lang`, `schema`, `sequence` and `tokenizer`; `router`, `presets` and
-  `shortlist` come later.
-- cgo, if ever needed, lives only in a future `onnx` package, with a `//go:build !cgo` stub.
-  Importing `lang` never compiles cgo.
-- `tokenizer` is public (`LoadFS`, `Parse`). `internal/unicodedata`, `internal/pyjson`,
+- Every package in this module is pure Go: `lang`, `schema`, `sequence`, `tokenizer`, `infer` and
+  `agent` now, and `router`, `presets` and `shortlist` later.
+- cgo lives only in `onnx`, a nested module with its own `go.mod`, so `go test ./...` here never
+  compiles it. `onnx` requires this module and `github.com/yalue/onnxruntime_go`; until this module has
+  a release tag, `onnx` builds only inside this repository (its `go.mod` points here with `replace`). Importing `lang` or `agent` never compiles cgo.
+- `tokenizer` is public (`LoadFS`, `Parse`); `internal/unicodedata`, `internal/pyjson`,
   `internal/pyvalue`, `internal/decode` and `internal/collate` stay internal, and
-  `internal/fixtures` and `internal/goldens` exist for the parity tests alone.
+  `internal/fixtures` and `internal/goldens` exist for the parity tests alone. `infer.Batch` is the
+  public name of what `collate` builds.
 
 ## Parity
 

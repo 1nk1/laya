@@ -31,6 +31,9 @@ reference over far more input than a hand-written corpus, from a fixed seed:
   * questions       Agent._check_question over question definitions, every refusal with its text,
                     and for the accepted ones render_options, the labels, the legend and the
                     normalized instructions and option order
+  * predict_plan    ONNXAgent._infer_batch on a stub session: which rows each run holds (shape and
+                    per-row checksums), the sort order, the result order, the answers and the
+                    usage, over batch sizes, sorting and question sets on both tokenizers
 
     python laya-go/scripts/gen_go_fixtures.py --out DIR      # needs LAYA_FIXTURE_CHECKPOINTS
     python laya-go/scripts/gen_go_fixtures.py --check        # fail if laya-go/fixtures differs
@@ -778,6 +781,153 @@ def marker_refusals_family(rng):
     return out
 
 
+# --- predict_plan: ONNXAgent._infer_batch with the session stubbed -------------------------------
+PLAN_WORDS = ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india",
+              "juliet", "kilo", "lima", "mike", "november", "oscar", "papa", "quebec", "romeo")
+
+PLAN_QUESTIONS = {
+    # three types, three head sizes
+    "mix": {
+        "intent": {"type": "choice", "instructions": "What does the customer want?",
+                   "criteria": {"refund": "asks for money back", "status": "asks where the order is",
+                                "other": "anything else"}},
+        "urgency": {"type": "score", "instructions": "How urgent is it?",
+                    "criteria": ["not at all", "slightly", "moderately", "very", "critical"]},
+        "angry": {"type": "noul", "instructions": "Is the customer angry?"},
+    },
+    # a tiny head beside a head that collapses its options (30 options share their first tokens)
+    "heads": {
+        "pair": {"type": "choice", "instructions": "Pick.", "criteria": {"a": "x", "b": "y"}},
+        "wide": {"type": "choice", "instructions": "Which of the many?",
+                 "criteria": {"the same long label prefix %02d" % i: "alpha beta gamma delta epsilon %d" % i
+                              for i in range(30)}},
+        "long": {"type": "noul", "instructions": " ".join(["Does the text mention the thing"] * 12)},
+    },
+    "one": {"only": {"type": "noul", "instructions": "Holds?"}},
+}
+
+
+def _plan_states(rng, count, low=1, high=40):
+    """Strings of random length, then a list state (end kept) and a dict state (order kept)."""
+    out = ["%s %s" % (rng.choice(PLAN_WORDS), " ".join(rng.choice(PLAN_WORDS)
+                                                       for _ in range(rng.randrange(low, high))))
+           for _ in range(count - 2)]
+    out.append(["hello there", "I was charged twice", "please refund me"])
+    out.append({"subject": "late order", "body": "it has not arrived", "n": 3})
+    return out
+
+
+def _plan_cases(rng):
+    mixed = _plan_states(rng, 7)
+    # equal lengths, 36 of them, so that an unstable sort has room to reorder them
+    ties = ["%s %s" % (w, n) for w in PLAN_WORDS[:12] for n in ("one", "two", "six")]
+    long_state = " ".join("word%d" % i for i in range(1500))     # past max_len on both checkpoints
+    # partial: enough to cut the wide question's room but not the tiny question's, per checkpoint;
+    # longest first, so a sort keyed on the first question's row reorders what the longest-row key ties
+    partial = [" ".join("word%d" % i for i in range(n)) for n in (330, 250, 200, 130)]
+    odd = ["", "x", long_state, "short one", ["a", "b"], "medium length state of text", ""] + partial
+    many = _plan_states(rng, 30, 1, 60)
+    cases = []
+
+    def add(name, states, questions, batch_size=None, sort=False, lang=None):
+        cases.append({"name": name, "states": states, "questions": questions,
+                      "batch_size": batch_size, "sort": sort, "lang": lang})
+
+    add("all in one", mixed, "mix")
+    add("all in one, sorted flag ignored", mixed, "mix", sort=True)
+    add("chunk 1", mixed, "mix", batch_size=1, sort=True)
+    add("chunk equals states", mixed, "mix", batch_size=7, sort=True)
+    add("chunk beyond states", mixed, "mix", batch_size=50, sort=True)
+    add("chunk between, unsorted", mixed, "mix", batch_size=3)
+    add("chunk between, sorted", mixed, "mix", batch_size=3, sort=True)
+    add("chunk 2, sorted", mixed, "mix", batch_size=2, sort=True)
+    add("negative chunk means all", mixed, "mix", batch_size=-1)
+    add("zero chunk means all", mixed, "mix", batch_size=0)
+    add("equal lengths, stable", ties, "mix", batch_size=4, sort=True)
+    add("equal lengths, unsorted", ties, "mix", batch_size=4)
+    add("more than 8 chunks, sorted", many, "mix", batch_size=2, sort=True)
+    add("more than 8 chunks, unsorted", many, "mix", batch_size=2)
+    add("lookahead boundary", many, "mix", batch_size=4, sort=True)
+    add("different head sizes", mixed, "heads", batch_size=3, sort=True)
+    add("different head sizes, one run", mixed, "heads")
+    add("truncated and empty states", odd, "mix", batch_size=3, sort=True)
+    add("truncated and empty, one run", odd, "heads")
+    add("truncated, different heads, sorted", odd, "heads", batch_size=3, sort=True)
+    add("single state", mixed[:1], "mix")
+    add("single state, chunk 5", mixed[:1], "mix", batch_size=5, sort=True)
+    add("one one-option question", mixed, "one", batch_size=3, sort=True)
+    add("language tag", mixed, "mix", batch_size=3, lang="yo-NG")
+    return cases
+
+
+def _plan_session(log):
+    """Stands in for onnxruntime. Its outputs are a function of the integers it is fed, exact in
+    float32, so what the Go port feeds it is what decides the answers."""
+    import numpy as np
+
+    class Session(object):
+        def run(self, names, feed):
+            ids, mask = feed["input_ids"], feed["attention_mask"]
+            pos, pmask = feed["marker_pos"], feed["marker_mask"]
+            rows, length = ids.shape
+            sums = [int(ids[r][mask[r] == 1].sum()) for r in range(rows)]
+            log.append({"rows": rows, "length": length, "markers": pos.shape[1],
+                        "id_sums": sums,
+                        "tokens": [int(mask[r].sum()) for r in range(rows)],
+                        "marker_sums": [int(pos[r][pmask[r]].sum()) for r in range(rows)],
+                        "qtypes": [int(q) for q in feed["qtype"]]})
+            logits = np.array([[((s + 31 * j) % 97 - 48) / 8 for j in range(pos.shape[1])]
+                               for s in sums], dtype=np.float32)
+            acts = np.array([[((s + 17 * c) % 97 - 48) / 8 for c in range(2)] for s in sums],
+                            dtype=np.float32)
+            return [logits, acts]
+
+    return Session()
+
+
+def predict_plan_family(rng):
+    """The real _infer_batch on a stub agent: chunking, sort order, row routing, answers, usage."""
+    from transformers import AutoTokenizer
+
+    from laya.onnx_agent import ONNXAgent
+
+    root = os.environ.get("LAYA_FIXTURE_CHECKPOINTS")
+    plan_rng = random.Random("predict_plan")
+    cases = _plan_cases(plan_rng)
+    out = {}
+    for name in ("english", "multilingual"):
+        with open(os.path.join(root, name, "rl_agent_config.json"), encoding="utf-8") as handle:
+            cfg = json.load(handle)
+        log = []
+        agent = ONNXAgent.__new__(ONNXAgent)
+        agent.tok = AutoTokenizer.from_pretrained(os.path.join(root, name, "tokenizer"))
+        agent.cfg = cfg
+        agent.session = _plan_session(log)
+        # what __init__ derives from the config: the clamp, not a re-implementation of it
+        from laya.common import clamp_temperature
+        agent.temperature = [clamp_temperature(t) for t in cfg.get("temperature", [1.0, 1.0, 1.0])]
+        agent.temperature_by_options = {k: clamp_temperature(v)
+                                        for k, v in cfg.get("temperature_by_options", {}).items()}
+        agent.lang_temperatures = {}
+        agent.binning_map = None
+        recorded = []
+        for case in cases:
+            del log[:]
+            results = agent._infer_batch(case["states"], PLAN_QUESTIONS[case["questions"]],
+                                         lang=case["lang"], batch_size=case["batch_size"],
+                                         sort_by_length=case["sort"])
+            recorded.append({
+                "name": case["name"], "states": case["states"], "questions": case["questions"],
+                "batch_size": case["batch_size"], "sort": case["sort"], "lang": case["lang"],
+                "runs": list(log),
+                "results": [{"model": r["model"], "answer_ids": list(r["answers"]),
+                             "answers": r["answers"], "usage": r["usage"]} for r in results]})
+        out[name] = {"cases": recorded}
+    out["questions"] = PLAN_QUESTIONS
+    return out
+
+
+
 def build():
     import tokenizers
 
@@ -801,6 +951,7 @@ def build():
         "label_answers": label_answers_family(rng),
         "answers_fuzz": decode_fuzz_family(rng),
         "marker_refusals": marker_refusals_family(rng),
+        "predict_plan": predict_plan_family(rng),
     }
 
 
@@ -810,11 +961,71 @@ def build():
 EXP_DEPENDENT = ("label_answers", "answers_fuzz")
 
 
+def _unnumber(value):
+    """value with every number replaced by 0, so only its structure is left."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return 0
+    if isinstance(value, dict):
+        return {k: _unnumber(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_unnumber(v) for v in value]
+    return value
+
+
+def _key(value):
+    """value spelled as json.dumps writes it as an object key, or None if it cannot be a key."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return json.dumps(value)
+    return None
+
+
+def _answer_shape(answer):
+    """One answer's type, key sets and order and legend, with no number and no chosen option.
+
+    A choice is blanked only when it is one of the answer's options, so a choice that names no
+    option, or is not a scalar, still differs. Option membership is by key spelling, so a label's
+    type (false against "false") is not compared here; the Go tests pin it against a golden
+    recorded where they run. Anything that is not an answer is kept as it is.
+    """
+    if not isinstance(answer, dict):
+        return answer
+    shaped = _unnumber(answer)
+    probabilities = answer.get("probabilities")
+    if "choice" in answer and isinstance(probabilities, dict) and _key(answer["choice"]) in probabilities:
+        shaped["choice"] = "<an option>"  # not None, so a choice changed to null still differs
+    return shaped
+
+
+def _answers_shape(answers):
+    if not isinstance(answers, dict):
+        return answers
+    return {question_id: _answer_shape(answer) for question_id, answer in answers.items()}
+
+
+def _text_shape(text):
+    """answer_text, parsed and shaped; text that is not JSON is kept, so it differs."""
+    try:
+        return render(_answer_shape(json.loads(text))).rstrip("\n")
+    except (TypeError, ValueError, RecursionError):
+        return text
+
+
 def portable(payload):
     out = dict(payload)
     for name in EXP_DEPENDENT:
-        out[name] = {"cases": [{k: v for k, v in case.items() if k != "answer_text"}
+        out[name] = {"cases": [{**case, "answer_text": _text_shape(case.get("answer_text"))}
                                for case in payload[name]["cases"]]}
+    out["predict_plan"] = {
+        name: ({"cases": [{**case, "results": [{**r, "answers": _answers_shape(r.get("answers"))}
+                                              for r in case["results"]]}
+                          for case in value["cases"]]} if name != "questions" else value)
+        for name, value in payload["predict_plan"].items()}
     return out
 
 
@@ -836,7 +1047,7 @@ def main(argv=None):
         try:
             with open(path, encoding="utf-8") as handle:
                 current = render(portable(json.load(handle)))
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError, RecursionError):
             current = None
         if current != render(portable(payload)):
             print("gen_go_fixtures: %s is stale or missing; run laya-go/scripts/gen_go_fixtures.py"
