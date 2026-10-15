@@ -302,12 +302,20 @@ def fit_temperature_map(records: Iterable, compute_ece: bool = False, seed: int 
     `compute_ece=True` holds out `ECE_HOLDOUT_FRAC` of each bucket, stratified by
     `temp_bucket`, using `seed` so the same records always split the same way. Temperatures
     are fit on the remainder only and ECE is scored only on the held-out records.
+    `seed` is this module's own count rule -- an integer in `[0, 2**32-1]`, which is what
+    `numpy.random.RandomState` can take -- so a `10.0`, a `"7"`, a `True` or an out-of-range
+    value is a `ValueError` naming `seed` on either path, not numpy's cast error on one path
+    and silence on the other. `seed=None` stays numpy's entropy seed: accepted, and the split
+    is then not reproducible.
     `report["n"]` is the number of records passed in; `report["n_eval"]` is the held-out
     count the ECE rests on. A bucket that would drop below `MIN_BUCKET_N` after the
     holdout is fit on all of its records, left out of the eval set, and named in
     `report["buckets_excluded_from_eval"]` instead of being dropped. `n_by_bucket`
     always counts the full input, including when the fit itself used a subset.
     """
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, Integral)
+                             or not 0 <= seed < 2 ** 32):
+        raise ValueError("seed must be None or an integer in [0, 2**32-1], got %r" % (seed,))
     recs = _iter_records(records)
     all_by_type, all_buckets = _group_records(recs)
     n_by_bucket = {key: len(pairs) for key, pairs in all_buckets.items()}
