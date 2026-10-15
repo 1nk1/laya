@@ -1562,6 +1562,11 @@ def test_route_batch_tool_hooks_timeout_forwarding():
         server_mod.laya_route_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=0)
         ok("route_batch_tool/hooks_timeout_zero_is_unset", seen["kwargs"]["hooks_timeout"] is None,
            repr(seen["kwargs"]["hooks_timeout"]))
+        # A JSON client is free to send the default as `0.0` for a declared float, and `0.0 == 0`
+        # while `0.0 is 0` is False -- the collapse has to compare, not test identity.
+        server_mod.laya_route_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=0.0)
+        ok("route_batch_tool/hooks_timeout_float_zero_is_unset",
+           seen["kwargs"]["hooks_timeout"] is None, repr(seen["kwargs"]["hooks_timeout"]))
         server_mod.laya_route_batch_tool(requests=BATCH_REQUESTS)
         ok("route_batch_tool/hooks_timeout_default_is_unset", seen["kwargs"]["hooks_timeout"] is None,
            repr(seen["kwargs"]["hooks_timeout"]))
