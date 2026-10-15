@@ -176,6 +176,11 @@ type call struct {
 	sort   bool
 	window int
 	stride int
+
+	// gated is set by WithMinConfidence or WithMinConfidenceMap; minConfidence is then a float64
+	// or a pyjson.Object, checked by checkMinConfidence.
+	gated         bool
+	minConfidence any
 }
 
 // WithLanguage names the request's language as a BCP 47 tag. Its primary subtag selects a
@@ -225,6 +230,14 @@ func (a *Agent) PredictBatch(ctx context.Context, states []any, qs schema.Questi
 			opt(&c)
 		}
 	}
+	// Validated up front, as laya does, so a bad threshold fails before any work.
+	var g *gate
+	if c.gated {
+		var err error
+		if g, err = checkMinConfidence(c.minConfidence); err != nil {
+			return nil, err
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -232,7 +245,14 @@ func (a *Agent) PredictBatch(ctx context.Context, states []any, qs schema.Questi
 		return nil, err
 	}
 	defer a.leave()
-	return a.predictStates(ctx, states, qs, c)
+	preds, err := a.predictStates(ctx, states, qs, c)
+	if err != nil {
+		return nil, err
+	}
+	if g != nil {
+		g.apply(preds)
+	}
+	return preds, nil
 }
 
 // predictStates is PredictBatch past the entry checks, for a caller that has already entered.
