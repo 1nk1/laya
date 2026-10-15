@@ -103,8 +103,9 @@ def _tolerance_map(tolerances: Any) -> Dict[str, Any]:
     ``float(tolerances.get(metric, 0.0))``. A string, null, list or dict there raised ``TypeError``
     from inside the arithmetic and a list or string given as the whole map raised
     ``AttributeError``, so the gate died with exit 1 -- the code `laya-evals` reserves for a
-    quality failure -- on what is a broken gate parameter. A bool was read as 1.0, which for a
-    metric that lives in [0, 1] accepts any drift the run can report.
+    quality failure -- on what is a broken gate parameter. The falsy shapes (`0`, `0.0`, `""`, `()`)
+    were quieter still: ``tolerances or {}`` read them as no tolerances at all. A bool was read as
+    1.0, which for a metric that lives in [0, 1] accepts any drift the run can report.
 
     ``Infinity`` is the one number that cannot fail a comparison: every finite drift is inside it,
     so naming a metric with it turns that metric's gate into a no-op while the run still exits 0

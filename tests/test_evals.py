@@ -1756,9 +1756,10 @@ def test_compare_refuses_a_tolerance_that_cannot_fail():
         with pytest.raises(EvalError, match="is not a number, got %s" % kind):
             report.compare(baseline, {"choice_accuracy": value})
 
-    # The map itself: a list or string of pairs, a number, and the empty tuple all used to reach
-    # `.get`, and the falsy ones (`0`, `()`) were read as "no tolerances" by `tolerances or {}`.
-    for bad in ([("choice_accuracy", 0.1)], "0.1", 5, 0, ()):
+    # The map itself: a list or string of pairs, a number, and the falsy shapes `0`, `0.0`, `""`
+    # and `()`, which `tolerances or {}` used to read as "no tolerances at all" -- a gate parameter
+    # silently replaced by its absence.
+    for bad in ([("choice_accuracy", 0.1)], "0.1", 5, 0, 0.0, "", ()):
         with pytest.raises(EvalError, match="tolerances must be an object"):
             report.compare(baseline, bad)
 
