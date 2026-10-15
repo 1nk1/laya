@@ -44,7 +44,11 @@ def inspect_calibration(config: Dict[str, Any]) -> Dict[str, Any]:
         return _entry(UNKNOWN, "training metadata present but no calibration block; checkpoint predates #933")
     types: Dict[str, Any] = {}
     for name, entry in calibration.items():
-        if not isinstance(entry, dict) or not isinstance(entry.get("items"), int):
+        # `isinstance(True, int)` is True, so a JSON `true` in `items` read as a count of one and a
+        # `false` as zero. Both are type errors, unlike a negative count, which stays reported
+        # because #964 deleted the floor that judged the number.
+        if (not isinstance(entry, dict) or isinstance(entry.get("items"), bool)
+                or not isinstance(entry.get("items"), int)):
             types[name] = _entry(UNKNOWN, "calibration entry is malformed")
             continue
         items = entry["items"]
