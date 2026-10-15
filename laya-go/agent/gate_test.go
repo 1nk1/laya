@@ -115,3 +115,17 @@ func TestPredictLongWritesNoGateField(t *testing.T) {
 		t.Fatalf("PredictLong carries a gate field: %s", s)
 	}
 }
+
+func TestPredictLongScanWritesNoGateField(t *testing.T) {
+	a, _ := open(t, longConfig)
+	lp, err := a.PredictLong(context.Background(), longState(900), questions(t), agent.WithMinConfidence(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lp.Usage.Windows < 3 {
+		t.Fatalf("not a scanned state: %d windows", lp.Usage.Windows)
+	}
+	if s := jsonOf(t, lp.Prediction); strings.Contains(s, "abstention") || strings.Contains(s, "low_confidence") {
+		t.Fatalf("a scanned PredictLong carries a gate field: %s", s)
+	}
+}
