@@ -287,7 +287,7 @@ the server is ready.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LAYA_DEVICE` | automatic | The device checkpoints are asked to build on, such as `cpu` or `cuda`. Not the value verbatim: `laya.mcp.device.env_device` strips and lower-cases it, so `CUDA:0` works, and a string PyTorch cannot parse is refused with an error naming this variable. Because there is no startup to refuse, that comes back as a `router construction failed` tool error. It is a preference, not a guarantee: a GPU that cannot be had falls back to CPU silently, and `laya_status` reports the loaded checkpoint's real device. |
+| `LAYA_DEVICE` | automatic | The device checkpoints are asked to build on, such as `cpu` or `cuda`. Not the value verbatim: `laya.mcp.device.env_device` strips and lower-cases it, so `CUDA:0` works, and a string PyTorch cannot parse is refused with an error naming this variable. So is a string PyTorch parses into a *different* device: an index it cannot keep is read back as another one (`cuda:258` builds GPU 2), and the same refusal names both the value and what PyTorch would have used. Because there is no startup to refuse, that comes back as a `router construction failed` tool error. It is a preference, not a guarantee: a GPU that cannot be had falls back to CPU silently, and `laya_status` reports the loaded checkpoint's real device. |
 | `LAYA_PRELOAD` | `1` | Build the configured checkpoints at startup. Set to `0` for lazy loading. |
 | `LAYA_MODELS` | `english,multilingual` | Comma-separated checkpoints to preload. An empty value keeps the MCP default rather than preloading every checkpoint. |
 | `LAYA_THREADS` | PyTorch default | Caps Torch intra-op threads for CPU inference; keep it at or below the physical core count. |

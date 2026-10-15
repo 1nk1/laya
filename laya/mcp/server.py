@@ -9,8 +9,9 @@ wired to any MCP client (OpenClaw, Claude Desktop, cursor, ...):
 Environment (same meaning as laya.serve where it exists):
   LAYA_DEVICE   the device the checkpoints are asked to build on. Not the value verbatim:
                 laya.mcp.device.env_device strips and lower-cases it (`CUDA:0` -> `cuda:0`)
-                and refuses a string torch cannot parse with a ValueError naming this variable
-                (`gpu`, `cuda:`, `cuda: 0`), so the failure reads as a bad environment value
+                and refuses with a ValueError naming this variable a string torch cannot parse
+                (`gpu`, `cuda:`, `cuda: 0`) or parses into some other device (`cuda:258` asks for
+                GPU 2), so the failure reads as a bad environment value
                 rather than a torch internal one -- here as a `router construction failed` tool
                 error, because a stdio server has no startup to refuse. A preference, not a
                 guarantee: as in laya.serve an unavailable GPU falls back to CPU silently, and
