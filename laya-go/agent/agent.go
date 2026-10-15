@@ -216,7 +216,12 @@ func (a *Agent) Predict(ctx context.Context, state any, qs schema.Questions, opt
 // list or dict. With no questions each state gets an empty answer and zero usage, with no model
 // run.
 //
+// WithMinConfidence or WithMinConfidenceMap gates every answer: it sets low_confidence,
+// abstention and abstention_threshold as laya does. An invalid threshold is refused first, as a
+// *MinConfidenceError, before any state is encoded or run.
+//
 // Errors may be wrapped; match them with errors.Is and errors.As:
+//   - *MinConfidenceError, for an invalid threshold, before anything else is checked;
 //   - ErrClosed, once Close has been called (a context already done is reported first);
 //   - ctx.Err(), checked on entry, before each state is encoded and between runs;
 //   - *StateError, naming the state, around sequence.ErrUnsupportedState (also for a nil
