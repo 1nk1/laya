@@ -1263,23 +1263,30 @@ for _ece in (True, False):
 # range numpy itself accepts is reachable; and `None` stays numpy's entropy seed rather than being
 # refused for a capability nobody asked to remove. (`ece/off ignores seed` above already pins that a
 # valid seed changes nothing on the `compute_ece=False` path, so nothing here restates it.)
-check("seed/numpy int splits like the Python int",
-      fit_temperature_map(mixed, compute_ece=True, seed=np.int64(7))["report"],
-      fit_temperature_map(mixed, compute_ece=True, seed=7)["report"])
-check("seed/top of numpy's range is accepted",
-      type(fit_temperature_map(mixed, compute_ece=True, seed=2 ** 32 - 1)["report"]).__name__,
-      "dict")
-check("seed/None is still the entropy seed",
-      type(fit_temperature_map(mixed, compute_ece=True, seed=None)["report"]).__name__, "dict")
+# Each of these goes through `_seed_fit`, which turns a refusal into a value: an acceptance arm that
+# raised would then be a `FAIL` line naming itself, not a traceback that aborts the remaining suite.
+def _seed_fit(seed):
+    try:
+        return fit_temperature_map(mixed, compute_ece=True, seed=seed)["report"]
+    except Exception as _exc:
+        return "raised %s: %s" % (type(_exc).__name__, _exc)
+
+
+check("seed/numpy int splits like the Python int", _seed_fit(np.int64(7)), _seed_fit(7))
+check_true("seed/top of numpy's range is accepted", isinstance(_seed_fit(2 ** 32 - 1), dict),
+           "%r" % (_seed_fit(2 ** 32 - 1),))
+check_true("seed/None is still the entropy seed", isinstance(_seed_fit(None), dict),
+           "%r" % (_seed_fit(None),))
 # A seed that is a seed still changes the split *through the public fitter* -- `split/seed changes
 # holdout` above pins the private `_ece_split`, and `ece/fit deterministic` pins the same-seed half.
 # The `np.isfinite` terms are part of the assertion on purpose: `nan != nan` is True, so a bare
 # inequality would pass on a report whose ECE was never scored.
-_e7 = fit_temperature_map(mixed, compute_ece=True, seed=7)["report"]["ece_after"]
-_e11 = fit_temperature_map(mixed, compute_ece=True, seed=11)["report"]["ece_after"]
+_r7, _r11 = _seed_fit(7), _seed_fit(11)
 check_true("seed/public fitter still splits by the seed",
-           _e7 != _e11 and bool(np.isfinite(_e7)) and bool(np.isfinite(_e11)),
-           "ece_after seed=7 %r, seed=11 %r" % (_e7, _e11))
+           isinstance(_r7, dict) and isinstance(_r11, dict)
+           and _r7["ece_after"] != _r11["ece_after"]
+           and bool(np.isfinite(_r7["ece_after"])) and bool(np.isfinite(_r11["ece_after"])),
+           "seed=7 %r, seed=11 %r" % (_r7, _r11))
 # The forwarding path is `Agent.fit_temperatures`, which passes `seed` through untouched; a refusal
 # there must be this refusal, not a new one.
 _stub = type("Stub", (), {})()
