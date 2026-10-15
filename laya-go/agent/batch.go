@@ -53,7 +53,7 @@ func (a *Agent) predictChunks(ctx context.Context, states []any, qs schema.Quest
 				return nil, err
 			}
 			var err error
-			if encoded[i], err = a.encode(state, qs); err != nil {
+			if encoded[i], err = a.encode(state, qs, c); err != nil {
 				return nil, &StateError{Index: start + i, Err: err}
 			}
 		}
@@ -91,12 +91,18 @@ func (a *Agent) predictChunks(ctx context.Context, states []any, qs schema.Quest
 }
 
 // encode is one state's question rows, tokenizing the state once for all of them.
-func (a *Agent) encode(state any, qs schema.Questions) ([]sequence.Sequence, error) {
+func (a *Agent) encode(state any, qs schema.Questions, c call) ([]sequence.Sequence, error) {
 	st, err := sequence.EncodeState(a.tok, state)
 	if err != nil {
 		return nil, err
 	}
 	budget := sequence.Budget{MaxLen: a.cfg.MaxLen, HeadMaxLen: a.cfg.HeadMaxLen}
+	if c.maxLen > 0 {
+		budget.MaxLen = c.maxLen
+	}
+	if c.headMaxLen > 0 {
+		budget.HeadMaxLen = c.headMaxLen
+	}
 	seqs := make([]sequence.Sequence, qs.Len())
 	for i := range seqs {
 		e := qs.At(i)
