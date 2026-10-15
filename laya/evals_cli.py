@@ -129,16 +129,35 @@ def _parse_revisions(pairs: Optional[Sequence[str]]) -> Tuple[Optional[str], Dic
     A bare value is the commit for every checkpoint this run loads; `NAME=SHA` pins one
     checkpoint, which is what an auto-routing run needs, because the three checkpoints are three
     Hub repositories and one commit cannot exist in all of them.
+
+    Repeating a pin is agreement, not a clash, and is accepted either way. Two different commits for
+    one checkpoint -- every checkpoint, or the same one -- are refused rather than resolved to
+    whichever pair came last: a run loads one commit per checkpoint, and the report's `revisions`
+    block records the commit that ANSWERED, so the dropped pin would leave no trace anywhere a
+    reader could see the ambiguity in.
     """
+    # The target is a checkpoint, not a spelling: `Router.resolve` folds case and aliases onto the
+    # key it loads, so `en=` beside `english=` asks for two commits of one checkpoint. Asking the
+    # same function the Router asks keeps the CLI's grouping and the Router's from diverging.
+    from .router import canonical_name
+
     shared: Optional[str] = None
     per_model: Dict[str, str] = {}
+    pinned: Dict[str, Tuple[str, str]] = {}    # checkpoint -> (spelling it arrived as, commit)
     for pair in pairs or []:
         name, sep, value = pair.partition("=")
         if sep:
             name, value = name.strip(), value.strip()
             if not name or not value:
                 raise EvalError("expected NAME=REVISION, got %r" % pair)
+            checkpoint = canonical_name(name)
+            earlier = pinned.get(checkpoint)
+            if earlier is not None and earlier[1] != value:
+                spelled = "" if earlier[0] == name else " (given as %r and %r)" % (earlier[0], name)
+                raise EvalError("--revision names two commits for %r%s: %r, %r"
+                                % (checkpoint, spelled, earlier[1], value))
             per_model[name] = value
+            pinned[checkpoint] = (name, value)
         else:
             value = pair.strip()
             if not value:

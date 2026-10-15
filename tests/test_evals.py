@@ -3127,6 +3127,9 @@ def test_slice_gate_fails_closed_on_identity_or_skipped_cases(tmp_path):
     ([SHA, SHA], (SHA, {})),                      # repeating one commit is agreement, not a clash
     (["en=" + SHA], (None, {"en": SHA})),
     (["en=" + SHA, SHA], (SHA, {"en": SHA})),     # both forms at once: Router lets the pair win
+    (["en=" + SHA, "en=" + SHA], (None, {"en": SHA})),           # one pin twice is agreement
+    (["en=" + SHA, "fr=" + SHA], (None, {"en": SHA, "fr": SHA})),  # two names are not a clash
+    (["en=" + SHA, "english=" + SHA], (None, {"en": SHA, "english": SHA})),  # one commit, two spellings
 ])
 def test_parse_revisions_accepts_both_forms(pairs, expected):
     from laya import evals_cli
@@ -3149,6 +3152,35 @@ def test_parse_revisions_rejects_half_a_pair(pair, fragment):
     with pytest.raises(EvalError) as exc:
         evals_cli._parse_revisions([pair])
     assert fragment in str(exc.value)
+
+
+@pytest.mark.parametrize("pairs, spelled", [
+    (["english=abc", "english=def"], None),
+    (["English=abc", "english=def"], ("English", "english")),    # case folds onto one checkpoint
+    (["en=abc", "english=def"], ("en", "english")),              # `en` is an alias of `english`
+    (["laya=abc", "default=def"], ("laya", "default")),          # two aliases, neither a real key
+])
+def test_parse_revisions_rejects_two_commits_for_one_checkpoint(pairs, spelled):
+    """The `NAME=SHA` form refuses the clash the bare form already refuses.
+
+    `--revision english=abc --revision english=def` named one checkpoint and two commits for it. The
+    run loads one commit, so one of them is dropped -- and the report's `revisions` block records the
+    commit that answered, never the request, so the survivor is the only thing left to read.
+    `Router.resolve` folds case and aliases onto the key it loads, so the same is true however the
+    checkpoint is spelled; the refusal follows the checkpoint, not the spelling.
+    """
+    from laya import evals_cli
+
+    with pytest.raises(EvalError) as exc:
+        evals_cli._parse_revisions(pairs)
+    message = str(exc.value)
+    assert "two commits" in message and "'english'" in message
+    # named in the order they were given, the way the bare-form message reports its two commits
+    assert message.index("'abc'") < message.index("'def'")
+    if spelled is None:
+        assert "given as" not in message
+    else:
+        assert "given as %r and %r" % spelled in message
 
 
 def test_parse_revisions_rejects_two_different_bare_commits():
