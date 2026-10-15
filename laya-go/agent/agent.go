@@ -132,10 +132,13 @@ func (a *Agent) Config() Config {
 }
 
 // Close marks the agent closed, waits for calls in flight and closes the session. Close blocks
-// until calls in flight return; cancel their contexts to bound it. A call that has not yet
-// entered returns ErrClosed without waiting. Close is idempotent: a second call, concurrent or
-// not, waits for the first and returns the same error. Close must not be called from inside a
-// call (from the session's Run): it would wait for that call, which waits for Close.
+// until calls in flight return. Cancelling a call's context ends it between chunks and releases a
+// call still queued for the serial hook lock, but a hook that has started is always waited for:
+// only WithHookTimeout bounds that wait. A call that has not yet entered returns ErrClosed without
+// waiting. Close is idempotent: a second call, concurrent or not, waits for the first and returns
+// the same error. Close must not be called from inside a call, from the session's Run or from a
+// hook: it would wait for that call, which waits for Close (with a hook timeout set, a hook's
+// Close returns only after the timeout releases its call).
 func (a *Agent) Close() error {
 	a.once.Do(func() {
 		defer func() {
@@ -148,7 +151,7 @@ func (a *Agent) Close() error {
 		a.shut = true
 		a.closed.Store(true)
 		a.mu.Unlock()
-		a.hk.quit() // a call waiting on a hook gives up, so the wait below ends
+		a.hk.quit() // releases calls queued for the serial lock before OnPredictStart
 		a.inflight.Wait()
 		if a.sess != nil {
 			a.closeErr = a.sess.Close()

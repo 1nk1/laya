@@ -429,8 +429,8 @@ func (a *Agent) dispatch(ctx context.Context, ev hookEvent, hooks []Hook, pc *Pr
 	return nil
 }
 
-// callHook runs one hook in its own goroutine, so a timeout, Close or the caller's context can
-// stop the wait. Under the serial lock the lock covers the wait, not the goroutine, as in Python.
+// callHook runs one hook in its own goroutine, so a timeout can stop the wait for a started
+// hook; Close and the caller's context only end a wait for the serial lock before OnPredictStart. Under the serial lock the lock covers the wait, not the goroutine, as in Python.
 func (a *Agent) callHook(ctx context.Context, ev hookEvent, h Hook, pc *PredictContext) error {
 	hk := a.hk
 	if hk.serial {
