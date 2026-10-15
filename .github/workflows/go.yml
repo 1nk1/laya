@@ -103,7 +103,7 @@ jobs:
           --only lang_tables.json --only lang_detect.json --only python_json.json
           --only tokenizer_ids.json --only decode_text.json
           --only sequences.json --only decode.json --only window_plan.json
-          --only predict_long.json
+          --only predict_long.json --only confidence_gate.json
       - name: Regenerate laya-go's own golden from Python
         env:
           LAYA_FIXTURE_CHECKPOINTS: ${{ github.workspace }}/laya-java/.work/checkpoints
