@@ -29,6 +29,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -305,6 +306,9 @@ func (a *Agent) AddHook(hooks ...Hook) error {
 	if err := checkHooks(hooks); err != nil {
 		return err
 	}
+	if a.hk == nil {
+		return errors.New("agent: hooks need an Agent from Open")
+	}
 	a.hk.mu.Lock()
 	a.hk.installed = append(a.hk.installed, hooks...)
 	a.hk.mu.Unlock()
@@ -315,6 +319,9 @@ func (a *Agent) AddHook(hooks ...Hook) error {
 // there was one. A hook whose dynamic type cannot be compared (a struct holding a func, used as
 // a value) is never found; pass a pointer.
 func (a *Agent) RemoveHook(hook Hook) bool {
+	if a.hk == nil {
+		return false
+	}
 	a.hk.mu.Lock()
 	defer a.hk.mu.Unlock()
 	kept := a.hk.installed[:0:0]
@@ -354,6 +361,9 @@ func (a *Agent) InstallHooks(hooks ...Hook) (undo func(), err error) {
 
 // Hooks returns a copy of the installed hooks.
 func (a *Agent) Hooks() []Hook {
+	if a.hk == nil {
+		return nil
+	}
 	a.hk.mu.RLock()
 	defer a.hk.mu.RUnlock()
 	return append([]Hook(nil), a.hk.installed...)

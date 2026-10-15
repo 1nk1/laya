@@ -192,3 +192,16 @@ func TestOpenOptionError(t *testing.T) {
 		t.Fatal("a negative timeout was accepted")
 	}
 }
+
+func TestZeroAgentHookMethodsDoNotPanic(t *testing.T) {
+	var a Agent
+	if err := a.AddHook(&StubHook{name: "h", rec: &recorder{}}); err == nil {
+		t.Error("AddHook on a zero Agent was accepted")
+	}
+	if _, err := a.InstallHooks(&StubHook{name: "h", rec: &recorder{}}); err == nil {
+		t.Error("InstallHooks on a zero Agent was accepted")
+	}
+	if a.RemoveHook(&StubHook{}) || a.Hooks() != nil {
+		t.Error("zero Agent reports hooks")
+	}
+}
