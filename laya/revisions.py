@@ -69,8 +69,10 @@ def resolve_revision(model_id_or_path: str, revision: Optional[str] = None) -> O
 
     ``reviewed`` for a repository the table has no entry for raises rather than loading it
     unpinned: a pin that quietly resolves to nothing is the failure mode this control exists to
-    prevent, and `verify_digests` refuses on the same principle. Everything else returns None so
-    huggingface_hub applies its normal default, preserving existing online/offline caches.
+    prevent, and `verify_digests` refuses on the same principle. The refusal names whichever of the
+    two asked for it, because telling a caller who passed `revision='reviewed'` to unset a variable
+    they never set sends them to the wrong file. Everything else returns None so huggingface_hub
+    applies its normal default, preserving existing online/offline caches.
     """
     value = (revision or os.environ.get("LAYA_REVISION", "")).strip()
     if not value:
@@ -78,6 +80,11 @@ def resolve_revision(model_id_or_path: str, revision: Optional[str] = None) -> O
     if value == REVIEWED:
         pinned = _reviewed_pin(model_id_or_path)
         if pinned is None:
+            if revision:
+                raise ValueError(
+                    "laya: revision= asked for 'reviewed', but %r has no reviewed SHA in "
+                    "PINNED_REVISIONS; pass a commit, branch or tag in revision= instead"
+                    % model_id_or_path)
             raise ValueError(
                 "laya: LAYA_REVISION=reviewed, but %r has no reviewed SHA in "
                 "PINNED_REVISIONS; set LAYA_REVISION to a commit or unset it"
