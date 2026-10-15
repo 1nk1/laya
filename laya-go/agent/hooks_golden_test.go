@@ -171,9 +171,14 @@ func behaviourOf(t testing.TB, v any) map[string]string {
 
 func TestHooksGoldenDispatch(t *testing.T) {
 	g := fixtures.Load(t, "hooks.json")
+	routed := 0
 	for _, cv := range fixtures.List(t, g.Must("dispatch")) {
 		c := fixtures.Obj(t, cv)
 		name := fixtures.Str(t, c.Must("case"))
+		if e := fixtures.Str(t, c.Must("event")); e == "on_route" {
+			routed++ // the router PR's event; Go has no router yet
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			event := fixtures.Str(t, c.Must("event"))
 			var ev hookEvent
@@ -185,7 +190,7 @@ func TestHooksGoldenDispatch(t *testing.T) {
 			case "on_error":
 				ev = evError
 			default:
-				t.Skipf("%s is the router PR's", event)
+				t.Fatalf("event %s is not ported", event)
 			}
 			rec := &recorder{}
 			a := testAgent(t, options{raise: fixtures.Bool(t, c.Must("raise_errors")), warn: rec.warn})
@@ -232,6 +237,9 @@ func TestHooksGoldenDispatch(t *testing.T) {
 			}
 		})
 	}
+	if routed != 2 { // a new on_route case, or one renamed, must be looked at, not silently dropped
+		t.Fatalf("%d on_route cases excluded, want 2", routed)
+	}
 }
 
 func TestHooksGoldenSkip(t *testing.T) {
@@ -268,15 +276,17 @@ func TestHooksGoldenSkip(t *testing.T) {
 }
 
 func TestHooksGoldenUsage(t *testing.T) {
+	pyNone := 0
 	for _, cv := range fixtures.List(t, fixtures.Load(t, "hooks.json").Must("usage")) {
 		c := fixtures.Obj(t, cv)
+		if usageIsNone(t, c) {
+			pyNone++ // a Go Prediction's Usage is a value, never None
+			continue
+		}
 		t.Run(fixtures.Str(t, c.Must("case")), func(t *testing.T) {
 			var rs []schema.Prediction
 			for _, rv := range fixtures.List(t, c.Must("results")) {
 				r := fixtures.Obj(t, rv)
-				if _, none := r.Get("__usage_is_none__"); none {
-					t.Skip("a Go Prediction's Usage is a value, never None")
-				}
 				tok := func(k string) int { // missing, null and float inputs are Python-only shapes
 					switch v, _ := r.Get(k); x := v.(type) {
 					case nil:
@@ -294,6 +304,9 @@ func TestHooksGoldenUsage(t *testing.T) {
 				t.Errorf("usage = %+v, want %+v", got, want)
 			}
 		})
+	}
+	if pyNone != 1 { // Python-only shape: a result whose usage is None
+		t.Fatalf("%d None-usage cases excluded, want 1", pyNone)
 	}
 }
 
@@ -693,4 +706,13 @@ func TestHooksGoldenPredictBatch(t *testing.T) {
 			}
 		})
 	}
+}
+
+func usageIsNone(t *testing.T, c fixtures.Object) bool {
+	for _, rv := range fixtures.List(t, c.Must("results")) {
+		if _, none := fixtures.Obj(t, rv).Get("__usage_is_none__"); none {
+			return true
+		}
+	}
+	return false
 }
