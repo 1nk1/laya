@@ -108,7 +108,7 @@ def _enum_field(path: str, name: str, values: Sequence[Any], description: Option
         raise SchemaError("%s: %d options exceeds MAX_OPTIONS=%d" % (path, len(values), MAX_OPTIONS))
     if not values:
         raise SchemaError("%s: 'enum' must not be empty" % path)
-    if all(isinstance(v, bool) for v in values):
+    if all(isinstance(v, bool) for v in values) and len(set(values)) == 2:
         return _noul_field(path, name, description)
     options = [(("null" if v is None else str(v)), v) for v in values]
     if len({label for label, _ in options}) != len(options):
