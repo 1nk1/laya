@@ -1,10 +1,12 @@
 """Model-free checks for paired agreement and case-level uncertainty."""
 from copy import deepcopy
+import collections
 import json
 from pathlib import Path
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
 from laya import confidence, evals
@@ -227,6 +229,91 @@ def test_malformed_runs_are_rejected(change):
         for run in runs:
             run["provenance"]["settings"]["temperature"] = float("nan")
     with pytest.raises(ValueError):
+        compare(runs)
+
+
+def _deep(value, dict_factory, list_factory):
+    """Rebuild every mapping as `dict_factory(...)` and every list as `list_factory(...)`.
+
+    Scalars are left alone: these arms are about the container spellings a caller reaches for
+    when it wants a JSON object whose key order it controls, not about scalar subclasses.
+    """
+    if isinstance(value, dict):
+        return dict_factory({k: _deep(v, dict_factory, list_factory) for k, v in value.items()})
+    if isinstance(value, list):
+        return list_factory([_deep(v, dict_factory, list_factory) for v in value])
+    return value
+
+
+class SubDict(dict):
+    pass
+
+
+class SubList(list):
+    pass
+
+
+@pytest.mark.parametrize("flavour", ["ordered", "pairs_hook", "defaultdict", "counter",
+                                     "subdict", "sublist"])
+def test_container_subclasses_encode_as_the_mapping_they_wrap(flavour):
+    """`_json` matched containers by exact type, so it refused payloads `json.dumps` encodes
+    byte-for-byte as the plain mapping. `object_pairs_hook=OrderedDict` is how a caller reads a
+    saved run *and* keeps the key order this module fingerprints, and `Counter`/`defaultdict` are
+    what a caller builds criteria and settings from; all of them reached
+    "unsupported value of type OrderedDict" while every `isinstance(..., dict)` guard in `_run`,
+    `_provenance` and `_labels` had already accepted the same object."""
+    expected = compare(documents())
+    runs = documents()
+    if flavour == "ordered":
+        runs = [_deep(run, collections.OrderedDict, list) for run in runs]
+    elif flavour == "pairs_hook":
+        runs = [json.loads(json.dumps(run), object_pairs_hook=collections.OrderedDict)
+                for run in runs]
+    elif flavour == "defaultdict":
+        runs = [_deep(run, lambda d: collections.defaultdict(dict, d), list) for run in runs]
+    elif flavour == "counter":
+        for run in runs:
+            for case in run["cases"]:
+                for question in case["questions"].values():
+                    question["criteria"] = collections.Counter(question["criteria"])
+    elif flavour == "subdict":
+        runs = [_deep(run, SubDict, list) for run in runs]
+    else:
+        runs = [_deep(run, dict, SubList) for run in runs]
+    report = compare(runs)
+    assert report == expected
+    assert report["config"]["input_fingerprints"] == expected["config"]["input_fingerprints"]
+
+
+@pytest.mark.parametrize("value,typed", [(("x", "y"), "tuple"), ({"x", "y"}, "set"),
+                                         (np.float64(0.5), "float64"), (np.int64(7), "int64"),
+                                         (np.str_("teacher"), "str_")])
+def test_scalars_stay_matched_by_exact_type(value, typed):
+    """The other half of the rule: a tuple is an array to `json.dumps` and a set is not
+    encodable, so exactness there protects the encoding; a scalar subclass would silently
+    substitute a type the writer did not declare (`np.int64` and `np.bool_` do not encode at
+    all). Containers are the only match relaxed."""
+    runs = documents()
+    runs[0]["provenance"]["settings"]["temperature"] = value
+    with pytest.raises(evals.EvalError,
+                       match="must be strict JSON: unsupported value of type %s" % typed):
+        compare(runs)
+
+
+def test_a_non_string_key_inside_a_subclass_is_still_refused():
+    runs = documents()
+    runs[0]["provenance"]["settings"] = collections.OrderedDict([(1, 0.5)])
+    with pytest.raises(evals.EvalError, match="must be strict JSON: object keys must be strings"):
+        compare(runs)
+
+
+def test_ordered_spellings_do_not_blind_the_order_check():
+    # `_align` compares the *encoding*, so a criteria mapping spelled as an OrderedDict in both
+    # runs must still fail when the two runs disagree on option order.
+    runs = [_deep(run, collections.OrderedDict, list) for run in documents()]
+    question = runs[1]["cases"][0]["questions"]["q0"]
+    question["criteria"] = collections.OrderedDict(reversed(list(question["criteria"].items())))
+    with pytest.raises(evals.EvalError, match="including option order"):
         compare(runs)
 
 
