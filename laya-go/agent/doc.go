@@ -36,6 +36,7 @@
 // # Scope
 //
 // Not here yet: per-language temperature overrides, the calibration file, min_confidence,
-// hooks, predict_long, digest checks and per-call max_len overrides. WithLanguage is accepted
+// hooks, digest checks and per-call max_len overrides. PredictLong ports predict_long for
+// aggregate="auto" and applies neither the gate nor hooks. WithLanguage is accepted
 // so callers need not change when overrides arrive; without overrides it does nothing.
 package agent

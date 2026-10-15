@@ -171,9 +171,11 @@ func (a *Agent) leave() { a.inflight.Done() }
 type CallOption func(*call)
 
 type call struct {
-	lang  string
-	batch int
-	sort  bool
+	lang   string
+	batch  int
+	sort   bool
+	window int
+	stride int
 }
 
 // WithLanguage names the request's language as a BCP 47 tag. Its primary subtag selects a
@@ -230,6 +232,11 @@ func (a *Agent) PredictBatch(ctx context.Context, states []any, qs schema.Questi
 		return nil, err
 	}
 	defer a.leave()
+	return a.predictStates(ctx, states, qs, c)
+}
+
+// predictStates is PredictBatch past the entry checks, for a caller that has already entered.
+func (a *Agent) predictStates(ctx context.Context, states []any, qs schema.Questions, c call) ([]schema.Prediction, error) {
 	for i, state := range states {
 		if isNil(state) {
 			return nil, &StateError{Index: i, Err: fmt.Errorf("agent: state is nil; pass a string, a map or a slice: %w", sequence.ErrUnsupportedState)}

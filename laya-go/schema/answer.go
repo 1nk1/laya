@@ -41,6 +41,22 @@ type Common struct {
 	AnswerConfidence float64
 	// Action is the head's second output.
 	Action Action
+	// Window names the window that decided the answer in a PredictLong scan of several windows;
+	// nil everywhere else, where laya writes no "window" key.
+	Window *Window
+}
+
+// Window is where in the tokenized state the deciding window sat. The probabilities of an
+// answer that carries one are that window's, not a calibrated number for the whole state.
+type Window struct {
+	// Index counts the windows from 0.
+	Index int `json:"index"`
+	// TokenStart is the first state token of the window.
+	TokenStart int `json:"token_start"`
+	// TokenEnd is one past its last, clamped to the end of the state.
+	TokenEnd int `json:"token_end"`
+	// Count is how many windows the scan ran.
+	Count int `json:"count"`
 }
 
 // Base returns c, so that every answer type satisfies Answer through the embedded Common.
@@ -213,6 +229,10 @@ func finish(b *strings.Builder, c Common) ([]byte, error) {
 	}
 	b.WriteString(`,"action":`)
 	b.Write(act)
+	if w := c.Window; w != nil {
+		fmt.Fprintf(b, `,"window":{"index":%d,"token_start":%d,"token_end":%d,"count":%d}`,
+			w.Index, w.TokenStart, w.TokenEnd, w.Count)
+	}
 	b.WriteByte('}')
 	return []byte(b.String()), nil
 }
@@ -290,6 +310,13 @@ func answerFrom(v any) (Answer, error) {
 	if common.Action.ActProbability, err = fieldFloat(actObj, "act_probability"); err != nil {
 		return nil, err
 	}
+	if raw, ok := optional(obj, "window"); ok {
+		w, err := windowFrom(raw)
+		if err != nil {
+			return nil, err
+		}
+		common.Window = w
+	}
 	switch Type(typ) {
 	case TypeChoice:
 		a := &ChoiceAnswer{Common: common}
@@ -346,6 +373,35 @@ func field(obj pyjson.Object, key string) (any, error) {
 		}
 	}
 	return nil, fmt.Errorf("schema: answer has no %q", key)
+}
+
+func optional(obj pyjson.Object, key string) (any, bool) {
+	for _, m := range obj {
+		if m.Key == key {
+			return m.Value, true
+		}
+	}
+	return nil, false
+}
+
+func windowFrom(v any) (*Window, error) {
+	obj, ok := v.(pyjson.Object)
+	if !ok {
+		return nil, errors.New(`schema: answer "window" must be an object`)
+	}
+	w := &Window{}
+	for key, dst := range map[string]*int{"index": &w.Index, "token_start": &w.TokenStart,
+		"token_end": &w.TokenEnd, "count": &w.Count} {
+		f, err := fieldFloat(obj, key)
+		if err != nil || f != math.Trunc(f) {
+			return nil, fmt.Errorf(`schema: answer window %q must be an integer`, key)
+		}
+		*dst = int(f)
+	}
+	if w.Count < 1 || w.Index < 0 || w.Index >= w.Count || w.TokenStart < 0 || w.TokenEnd < w.TokenStart {
+		return nil, errors.New(`schema: answer "window" is out of range`)
+	}
+	return w, nil
 }
 
 func fieldString(obj pyjson.Object, key string) (string, error) {

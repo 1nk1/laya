@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -586,4 +587,107 @@ func TestConcurrentReads(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestScanUsageAndWindowJSON(t *testing.T) {
+	scan := schema.Usage{InputTokens: 9, StateTokens: 4, Truncated: true, TruncatedWindows: 3,
+		TruncatedQuestions: []string{}, Windows: 5}
+	out, err := json.Marshal(scan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"input_tokens":9,"output_tokens":0,"state_tokens":4,"state_tokens_dropped":0,"truncated":3,"truncated_questions":[],"windows":5}`
+	if string(out) != want {
+		t.Errorf("scan usage\n got %s\nwant %s", out, want)
+	}
+	// One window keeps the flag; Python's single call writes a bool and then adds windows.
+	one, _ := json.Marshal(schema.Usage{Truncated: true, TruncatedQuestions: []string{"q"}, Windows: 1})
+	if !strings.Contains(string(one), `"truncated":true`) || !strings.HasSuffix(string(one), `"windows":1}`) {
+		t.Errorf("single-window usage = %s", one)
+	}
+	var back schema.Usage
+	if err := json.Unmarshal(out, &back); err != nil || back.TruncatedWindows != 3 || !back.Truncated || back.Windows != 5 {
+		t.Errorf("round trip = %+v, %v", back, err)
+	}
+	if err := json.Unmarshal(one, &back); err != nil || back.TruncatedWindows != 0 || !back.Truncated || back.Windows != 1 {
+		t.Errorf("flag round trip = %+v, %v", back, err)
+	}
+	for _, bad := range []string{`{"truncated":"yes"}`, `{"truncated":-1}`, `{"truncated":1.5}`} {
+		if err := json.Unmarshal([]byte(bad), &back); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+
+	a := &schema.NoulAnswer{Noul: 0.5, Common: schema.Common{Confidence: 0.5, AnswerConfidence: 0.5,
+		Window: &schema.Window{Index: 1, TokenStart: 380, TokenEnd: 1140, Count: 3}}}
+	b, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantAnswer = `{"type":"noul","noul":0.5,"confidence":0.5,"answer_confidence":0.5,"action":{"act_probability":0.0},` +
+		`"window":{"index":1,"token_start":380,"token_end":1140,"count":3}}`
+	if string(b) != wantAnswer {
+		t.Errorf("answer\n got %s\nwant %s", b, wantAnswer)
+	}
+	got, err := schema.UnmarshalAnswer(b)
+	if err != nil || !reflect.DeepEqual(got.Base().Window, a.Window) {
+		t.Errorf("window round trip = %+v, %v", got, err)
+	}
+	for _, bad := range []string{`"window":3`, `"window":{"index":1.5,"token_start":0,"token_end":1,"count":1}`, `"window":{"index":1}`} {
+		if _, err := schema.UnmarshalAnswer([]byte(strings.Replace(wantAnswer, `"window":{"index":1,"token_start":380,"token_end":1140,"count":3}`, bad, 1))); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+}
+
+func TestUsageTruncatedMatchesWindows(t *testing.T) {
+	for _, bad := range []string{`{"truncated":true,"windows":3}`, `{"truncated":2}`, `{"truncated":2,"windows":1}`} {
+		var u schema.Usage
+		if err := json.Unmarshal([]byte(bad), &u); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	for _, ok := range []string{`{"truncated":2,"windows":3}`, `{"truncated":true,"windows":1}`, `{"input_tokens":0,"output_tokens":0,"windows":3}`} {
+		var u schema.Usage
+		if err := json.Unmarshal([]byte(ok), &u); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+}
+
+func TestUsageOfScanWithoutQuestionsIsBare(t *testing.T) {
+	const want = `{"input_tokens":0,"output_tokens":0,"windows":3}`
+	b, err := json.Marshal(schema.Usage{TruncatedQuestions: []string{}, Windows: 3})
+	if err != nil || string(b) != want {
+		t.Fatalf("got %s, %v", b, err)
+	}
+	var u schema.Usage
+	if err := json.Unmarshal(b, &u); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := json.Marshal(u); string(again) != want {
+		t.Errorf("round trip %s", again)
+	}
+	full, _ := json.Marshal(schema.Usage{StateTokens: 1, TruncatedQuestions: []string{}, Windows: 3})
+	if !strings.Contains(string(full), `"truncated":0`) {
+		t.Errorf("a scan that read state lost its keys: %s", full)
+	}
+}
+
+func TestWindowRange(t *testing.T) {
+	const base = `{"type":"noul","noul":0.5,"confidence":0.5,"answer_confidence":0.5,"action":{"act_probability":0.0},"window":`
+	for _, bad := range []string{
+		`{"index":3,"token_start":0,"token_end":1,"count":3}`,
+		`{"index":-1,"token_start":0,"token_end":1,"count":3}`,
+		`{"index":0,"token_start":-1,"token_end":1,"count":3}`,
+		`{"index":0,"token_start":5,"token_end":4,"count":3}`,
+		`{"index":0,"token_start":0,"token_end":1,"count":0}`,
+	} {
+		if _, err := schema.UnmarshalAnswer([]byte(base + bad + `}`)); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	if _, err := schema.UnmarshalAnswer([]byte(base + `{"index":2,"token_start":4,"token_end":4,"count":3}}`)); err != nil {
+		t.Error(err)
+	}
 }
