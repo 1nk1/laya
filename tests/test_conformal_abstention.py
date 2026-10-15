@@ -269,6 +269,35 @@ check("floor/an integer below the shipped floor still fits",
                                        min_bucket_n=1)),
       ["choice:3-5"])
 
+# `target_error` is a rate, and a bool is the one value the range test cannot see: `0.0 <= True`
+# holds, so `False` was read as 0.0 and `True` as 1.0 -- the two failures this fit exists to keep
+# apart. Measured on the 480 `records` above at floor 50: 0.0 fits {'choice:2': 1.0,
+# 'choice:11+': 1.0}, which accepts 0 of 480 answers; 0.10 fits {'choice:2': 0.97,
+# 'choice:11+': 0.55}, which accepts 240 of them with 0 errors among the accepted; 1.0 fits
+# {'choice:2': 0.85, 'choice:11+': 0.33}, which accepts all 480 at 156 errors (32.5%). Either map is
+# something `check_min_confidence` accepts and `laya.train` writes into a checkpoint, so the caller
+# never heard about the coercion. `TrainConfig` refuses the same bool one call earlier, on its way
+# into this function; this is that arm, on the public surface.
+for _bad, _coerces in ((True, 1.0), (False, 0.0)):
+    try:
+        fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {}, target_error=_bad, min_bucket_n=1)
+        _res = "no ValueError (read as %r)" % (_coerces,)
+    except ValueError as _exc:
+        _res = str(_exc)
+    except Exception as _exc:
+        _res = "raised %s" % type(_exc).__name__
+    check("target_error/%r is refused by name" % (_bad,), _res,
+          "target_error must be in [0.0, 1.0], got %r" % (_bad,))
+
+# And the arm did not get stricter than the two ends it exists to protect: refusing 0.0 and 1.0
+# would refuse a caller genuinely asking for no tolerance, and those two are what the bools meant.
+check("target_error/0.0 still fits the abstain-on-everything cut",
+      fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {}, target_error=0.0, min_bucket_n=1),
+      {"choice:3-5": 1.0})
+check("target_error/1.0 still fits the ungated cut",
+      fit_abstention_thresholds(_small, [1.0, 1.0, 1.0], {}, target_error=1.0, min_bucket_n=1),
+      {"choice:3-5": 0.9})
+
 BOGUS = {
     "choice:2-5": "an invented band",
     "choice:12": "an option count, not a band",
