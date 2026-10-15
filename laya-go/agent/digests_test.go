@@ -12,8 +12,6 @@ import (
 	"github.com/NandhaKishorM/laya/laya-go/agent"
 )
 
-const zhOverride = `{"zh": {"temperature": [2.0, 1.5, 3.0], "temperature_by_options": {"choice:2": 2.5}}}`
-
 func withTemps(t *testing.T, langs map[string]map[string]any, tag string) string {
 	t.Helper()
 	s := &fakeSession{}
