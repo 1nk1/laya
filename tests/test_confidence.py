@@ -2479,6 +2479,30 @@ for _name, _answer in (
     check("jev_confidence/none-for-%s" % _name, jev_confidence(_answer), None)
 
 
+# The table above refuses a document whose probabilities are *all* boolean, which is the one shape a
+# `any(isinstance(v, bool) ...)` guard and an `all(...)` one agree on. The positions below are where
+# the two disagree, and they are the shapes a client actually sends: `{"spam": true, "ham": 0.4}`
+# mixes a JSON boolean with real numbers. Under `all` that document is measured -- `float(True)` is
+# 1.0, so the answer comes back as the most confident option the caller never scored -- and
+# `/v1/systemone` publishes the number as `x_jev_confidence` for a client to threshold against.
+_swept, _measured = 0, []
+for _k in (2, 3, 4, 5, 8, 12):
+    for _i in range(_k):
+        for _flag in (True, False):
+            _vals = [1.0 / _k] * _k
+            _vals[_i] = _flag
+            for _answer in (_choice(*_vals), _score(*_vals)):
+                _got = jev_confidence(_answer)
+                _swept += 1
+                if _got is not None:
+                    _measured.append((_k, _i, _flag, _answer["type"], _got))
+check_true("jev_confidence/a bool in any position of any option count is refused",
+           not _measured, "%d of %d measured: %r" % (len(_measured), _swept, _measured[:3]))
+# Every one of those documents differs from its all-float twin by exactly one entry, so the count
+# is the witness that the sweep ran over the positions it claims.
+check("jev_confidence/position sweep size", _swept, sum(2 * 2 * _k for _k in (2, 3, 4, 5, 8, 12)))
+
+
 def _jev_measured(_answer):
     """`jev_confidence`'s number, or the exception it raised instead, so a slip reports, not aborts."""
     try:
