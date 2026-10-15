@@ -714,6 +714,27 @@ def _answered_model(result: Any) -> Optional[Any]:
     return result.get("model")
 
 
+def _markdown_cell(value: Any) -> str:
+    """One slice label, written as a Markdown table cell rather than as table syntax.
+
+    The group key is caller data straight off the dataset: `tags` and question ids are any string
+    the author wrote, and `Example.from_dict` coerces them with `str` rather than restricting them.
+    A table reader takes an unescaped `|` as the start of the next column and a newline as the end
+    of the row, so a group labelled `risk|high` shifts every number in its row one header to the
+    left and drops the last, and a label containing a newline takes its number out of the table
+    altogether. The label is what a reader of `laya-evals run --markdown` matches a number against,
+    so a shifted row is a wrong figure rather than a typo -- and only that group's row moves, which
+    is what makes it hard to spot in a rendered report.
+
+    `\\` is escaped before `|` so a backslash at the end of a label cannot swallow the escape that
+    follows it. `\\|` is the repository's own convention for a literal pipe inside a cell: the
+    parity table in `BENCHMARKS.md` spells its `max |p_fast - p_stock|` columns that way, and
+    `tests/test_doc_tables.py` turns the escape back into a pipe to read the header.
+    """
+    return (str(value).replace("\\", "\\\\").replace("|", "\\|")
+            .replace("\r", " ").replace("\n", " "))
+
+
 # --------------------------------------------------------------------------- evaluation
 @dataclass
 class EvalReport:
@@ -742,7 +763,7 @@ class EvalReport:
             for value in sorted(self.slices[dimension]):
                 cells = ["%.4f" % self.slices[dimension][value].get(m, float("nan"))
                          if m in self.slices[dimension][value] else "" for m in metrics]
-                lines.append("| %s | %s |" % (value, " | ".join(cells)))
+                lines.append("| %s | %s |" % (_markdown_cell(value), " | ".join(cells)))
         return "\n".join(lines) + "\n"
 
     def comparable_to(self, baseline: Dict[str, Any]) -> Tuple[bool, List[str]]:
