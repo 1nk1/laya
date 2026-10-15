@@ -2,8 +2,9 @@
 
 A pure-Go port of [laya](../README.md). Standard library only: no cgo, no third-party modules.
 
-This first slice is the foundation the rest of the port stands on. The routing and model layers
-(ONNX, agent, router) come in later changes.
+This slice is the foundation the rest of the port stands on: `lang`, `schema`, `sequence` and
+`tokenizer`, on top of the pure-Go internals they share. The routing and model layers (ONNX, agent,
+router) come in later changes.
 
 | Package | What it is |
 | --- | --- |
@@ -37,13 +38,14 @@ order-sensitive state. `Analyze` reads every leaf, so its cost grows with the nu
 ## Layout
 
 - No root package: the module path ends in `laya-go`, so tags are `laya-go/vX.Y.Z`.
-- Pure-Go packages are `lang` now and `router`, `presets` and `shortlist` later.
+- The pure-Go packages are `lang`, `schema`, `sequence` and `tokenizer`; `router`, `presets` and
+  `shortlist` come later.
 - cgo, if ever needed, lives only in a future `onnx` package, with a `//go:build !cgo` stub.
   Importing `lang` never compiles cgo.
-- `tokenizer` is public (`LoadFS`, `Parse`); `internal/unicodedata`, `internal/pyjson`,
-  `internal/decode` and `internal/collate` stay internal.
+- `tokenizer` is public (`LoadFS`, `Parse`). `internal/unicodedata`, `internal/pyjson`,
+  `internal/pyvalue`, `internal/decode` and `internal/collate` stay internal, and
+  `internal/fixtures` and `internal/goldens` exist for the parity tests alone.
 
-## Parity
 ## Parity
 
 Python is the source of truth. The tests compare against goldens recorded from it, and the Unicode
