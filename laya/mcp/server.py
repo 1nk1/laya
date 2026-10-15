@@ -363,10 +363,15 @@ def laya_predict_batch_tool(requests: list, batch_size: int = 0, hooks_timeout: 
     # for had been dropped.
     if not isinstance(hooks_timeout, bool) and hooks_timeout == 0:
         hooks_timeout = None
+    # `batch_size` gets the same boolean-aware collapse for the same reason: `False == 0`, so a plain
+    # `or None` fold turned a caller's explicit `batch_size=false` into "no cap" and hid the
+    # `_validate_batch_size` refusal that a `batch_size=true` already reaches.
+    if not isinstance(batch_size, bool) and batch_size == 0:
+        batch_size = None
     return _wrap(
         laya_predict_batch,
         requests=requests,
-        batch_size=batch_size or None,
+        batch_size=batch_size,
         hooks_timeout=hooks_timeout,
         min_confidence=min_confidence,
         sort_by_length=sort_by_length,
@@ -393,11 +398,15 @@ def laya_route_batch_tool(requests: list, hooks_timeout: float = 0) -> str:
     """Route many requests to checkpoints without a forward pass."""
     router = _router_or_error()
     # hooks_timeout=0 means "unset": MCP clients send defaults eagerly, and
-    # None is what Router.route_batch takes as "use my own timeout".
+    # None is what Router.route_batch takes as "use my own timeout". Only a numeric 0 collapses:
+    # `False == 0`, and `laya_route_batch` refuses a boolean timeout the way `laya_predict_batch`
+    # does, so folding `false` into unset here would answer the caller's request with silence.
+    if not isinstance(hooks_timeout, bool) and hooks_timeout == 0:
+        hooks_timeout = None
     return _wrap(
         laya_route_batch,
         requests=requests,
-        hooks_timeout=hooks_timeout or None,
+        hooks_timeout=hooks_timeout,
         router=router,
     )
 
