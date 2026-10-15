@@ -105,9 +105,8 @@ func TestInvalidThresholdFailsBeforeAnyWork(t *testing.T) {
 
 func TestPredictLongWritesNoGateField(t *testing.T) {
 	a, _ := open(t, `{}`)
-	// PredictLong has no gate: laya calls it with None, which writes nothing, so even a given
-	// option leaves the answers as ungated.
-	lp, err := a.PredictLong(context.Background(), "hello", questions(t), agent.WithMinConfidence(1))
+	// PredictLong has no gate: laya calls it with None, which writes nothing.
+	lp, err := a.PredictLong(context.Background(), "hello", questions(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +117,7 @@ func TestPredictLongWritesNoGateField(t *testing.T) {
 
 func TestPredictLongScanWritesNoGateField(t *testing.T) {
 	a, _ := open(t, longConfig)
-	lp, err := a.PredictLong(context.Background(), longState(900), questions(t), agent.WithMinConfidence(1))
+	lp, err := a.PredictLong(context.Background(), longState(900), questions(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,5 +126,25 @@ func TestPredictLongScanWritesNoGateField(t *testing.T) {
 	}
 	if s := jsonOf(t, lp.Prediction); strings.Contains(s, "abstention") || strings.Contains(s, "low_confidence") {
 		t.Fatalf("a scanned PredictLong carries a gate field: %s", s)
+	}
+}
+
+func TestPredictLongRefusesTheGate(t *testing.T) {
+	// Python's predict_long raises TypeError for min_confidence; ignoring it would hand back
+	// ungated answers to a caller who asked for a gate.
+	for name, opt := range map[string]agent.CallOption{
+		"threshold": agent.WithMinConfidence(0.5),
+		"map":       agent.WithMinConfidenceMap(map[string]float64{"default": 0.5}),
+	} {
+		for _, state := range []any{"hello", longState(900)} {
+			a, s := open(t, longConfig)
+			_, err := a.PredictLong(context.Background(), state, questions(t), opt)
+			if err == nil || !strings.Contains(err.Error(), "PredictLong takes no confidence gate") {
+				t.Fatalf("%s: want the gate refused, got %v", name, err)
+			}
+			if len(s.seen()) != 0 {
+				t.Fatalf("%s: the session ran", name)
+			}
+		}
 	}
 }
