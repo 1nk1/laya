@@ -100,7 +100,11 @@ func open(checkpoint fs.FS, s infer.Session, o options) (*Agent, error) {
 	if checkpoint == nil {
 		return nil, errors.New("agent: Open needs a checkpoint")
 	}
-	if err := verifyDigests(checkpoint, o.sha256); err != nil {
+	want, err := expectedDigests(o.sha256)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyDigests(checkpoint, want); err != nil {
 		return nil, err
 	}
 	cfg, temps, err := loadConfig(checkpoint, o.langTemps)

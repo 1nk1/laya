@@ -5,10 +5,12 @@ package digest
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"path"
 	"strings"
 )
@@ -54,24 +56,61 @@ func Safe(rel string) (string, error) {
 	return n, nil
 }
 
-// File hashes the regular file rel in fsys and compares it with want. A file that is absent or
-// is a directory is an error wrapping fs.ErrNotExist.
+// File hashes the regular file rel in fsys and compares it with want. A file that is absent, a
+// directory, a device or a FIFO, or a name ending in "/", is an error wrapping fs.ErrNotExist.
+// Python raises FileNotFoundError for "a/.." and "."; here they are ErrUnsafePath (both refuse).
 func File(fsys fs.FS, rel, want string) error {
 	n, err := Safe(rel)
 	if err != nil {
 		return err
+	}
+	if strings.HasSuffix(strings.ReplaceAll(rel, "\\", "/"), "/") { // "x/" names a directory, never the file x
+		return fmt.Errorf("laya: cannot verify %q: not a file: %w", rel, fs.ErrNotExist)
+	}
+	// Stat before Open: opening a FIFO blocks, and a device never ends. Python's isfile refuses both.
+	if st, err := fs.Stat(fsys, n); err != nil {
+		return fmt.Errorf("laya: cannot verify %q: %w", rel, err)
+	} else if !st.Mode().IsRegular() {
+		return fmt.Errorf("laya: cannot verify %q: not a regular file: %w", rel, fs.ErrNotExist)
 	}
 	f, err := fsys.Open(n)
 	if err != nil {
 		return fmt.Errorf("laya: cannot verify %q: %w", rel, err)
 	}
 	defer f.Close()
-	if st, err := f.Stat(); err != nil || st.IsDir() {
-		return fmt.Errorf("laya: cannot verify %q: not a file: %w", rel, fs.ErrNotExist)
-	}
 	got, err := Sum(f)
 	if err != nil {
 		return fmt.Errorf("laya: cannot verify %q: %w", rel, err)
 	}
 	return Compare(rel, got, want)
+}
+
+// Env is the environment variable that carries expected digests when none are given in code.
+const Env = "LAYA_SHA256_DIGESTS"
+
+// FromEnv reads Env as a JSON object of artifact -> hex digest, as laya's verify_digests does when
+// no digests are given. A blank or unset variable is no expectation (nil). Anything that is not
+// an object of strings is an error.
+func FromEnv() (map[string]string, error) {
+	raw := strings.TrimSpace(os.Getenv(Env))
+	if raw == "" {
+		return nil, nil
+	}
+	var v any
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return nil, fmt.Errorf("%s must be a JSON object of artifact->sha256: %w", Env, err)
+	}
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be a JSON object of artifact->sha256, got %T", Env, v)
+	}
+	out := make(map[string]string, len(obj))
+	for k, x := range obj {
+		s, ok := x.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s: the digest of %q must be a string, got %T", Env, k, x)
+		}
+		out[k] = s
+	}
+	return out, nil
 }

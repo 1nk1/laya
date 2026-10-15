@@ -55,15 +55,32 @@ var ErrDigestMismatch = digest.ErrMismatch
 
 // WithExpectedSHA256 makes Open hash the graph file, as a stream, and refuse it unless its hex
 // SHA-256 is hexDigest, before ONNX Runtime loads it. The error wraps ErrDigestMismatch and names
-// the file and both digests. Only the graph is hashed, not its .data sidecar, as in Python.
+// the file and both digests. Without this option Open reads the "onnx" or "onnx_path" key of the
+// LAYA_SHA256_DIGESTS JSON object, as Python does. Only the graph is hashed, not its .data sidecar, as in Python.
 func WithExpectedSHA256(hexDigest string) Option {
 	return func(o *options) { o.sha256, o.checkSHA = hexDigest, true }
 }
 
 // verifyGraph is the check WithExpectedSHA256 asks for, or nil without it.
 func verifyGraph(path string, o options) error {
+	want := o.sha256
 	if !o.checkSHA {
-		return nil
+		env, err := digest.FromEnv()
+		if err != nil {
+			return fmt.Errorf("onnx: %w", err)
+		}
+		a, hasA := env["onnx"]
+		b, hasB := env["onnx_path"]
+		switch {
+		case hasA && hasB && !strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b)):
+			return fmt.Errorf("onnx: %s gives two different digests for the graph (onnx and onnx_path)", digest.Env)
+		case hasA:
+			want = a
+		case hasB:
+			want = b
+		default:
+			return nil
+		}
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -74,7 +91,7 @@ func verifyGraph(path string, o options) error {
 	if err != nil {
 		return fmt.Errorf("onnx: cannot verify %s: %w", path, err)
 	}
-	return digest.Compare(path, got, o.sha256)
+	return digest.Compare(path, got, want)
 }
 
 // resolve applies the options and rejects values that cannot be honored.
