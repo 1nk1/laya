@@ -1967,13 +1967,18 @@ def test_questions_fingerprint_is_the_same_digest_in_every_process():
 
     CPython salts `str` hashes per process (`PYTHONHASHSEED`), and a `set` iterates in hash order,
     so `laya/evals.py::questions_fingerprint` sorting its schemas before feeding `sha256` is what
-    makes the digest a run identity rather than a per-process artefact. Drop the `sorted()` and the
-    function still returns one value inside a process -- which is why an in-process test cannot see
-    it -- but the value moves between processes, and `questions_sha256` is the field
-    `laya/evals.py::EvalReport.comparable_to` refuses a baseline on. Two invocations of
-    `laya-evals run` over an unchanged dataset would then disagree with each other, so no run could
-    ever be compared to a baseline. The children below are the only part of this suite that can
-    observe that, and the committed literal is what they have to agree with.
+    makes the digest a run identity rather than a per-process artefact. Drop the `sorted()` and one
+    dataset still digests to a single value inside the process that asked for it, so nothing that only
+    re-reads its own fingerprint notices. What breaks is the identity between two builds of the *same*
+    schema set: a `set` iterates in hash-table order, so re-encountering the questions in another row
+    order can feed `sha256` in a different sequence -- but only when two of the canonical schemas share
+    a bucket, which depends on the process's salt. Measured on the mutant: at `PYTHONHASHSEED` 0, 1 and
+    7 the row-order asserts below fire, at 2 and 42 the process happens to avoid the collision and it is
+    the children that disagree with this one. Either way the digest is not portable, and
+    `questions_sha256` is the field `laya/evals.py::EvalReport.comparable_to` refuses a baseline on, so
+    two invocations of `laya-evals run` over an unchanged dataset would disagree and no run could be
+    compared to a baseline. That is why this test pins both the in-process order and a committed
+    literal read by fresh interpreters: neither alone fails at every salt.
     """
     def question(index):
         return {"type": "choice", "instructions": "Question %d" % index,
