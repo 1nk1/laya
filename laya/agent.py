@@ -40,7 +40,6 @@ from .common import (
     _disable_question_token_reuse,
     encode_text,
     render_criterion,
-    render_options,
     resolve_lang_temperatures,
     serialize_state,
     temp_bucket,
@@ -1154,7 +1153,7 @@ class Agent(HookRegistry):
                 self.tok, state, q, max_len, head_max_len, option_order=q.get("option_order"),
                 truncate_left=truncate_left, state_ids=state_ids, return_stats=True,
                 return_truncation_stats=True, return_layout=self.parallel_options)
-            n_opts = len(render_options(q))
+            n_opts = stats["options"]
             if len(markers) != n_opts:
                 # The markers are placed at absolute positions and `build_sequence` then drops the
                 # ones past `max_len`, so this is about the question fitting in the sequence --
