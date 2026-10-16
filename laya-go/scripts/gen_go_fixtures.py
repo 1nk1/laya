@@ -31,6 +31,9 @@ reference over far more input than a hand-written corpus, from a fixed seed:
   * questions       Agent._check_question over question definitions, every refusal with its text,
                     and for the accepted ones render_options, the labels, the legend and the
                     normalized instructions and option order
+  * calibration     apply_calibration_payload on an ONNXAgent-shaped object (every accepted and
+                    rejected shape: version, temperature, temperature_by_options, binning_map,
+                    identity), apply_binning_map, and calibration_payload
   * predict_plan    ONNXAgent._infer_batch on a stub session: which rows each run holds (shape and
                     per-row checksums), the sort order, the result order, the answers and the
                     usage, over batch sizes, sorting and question sets on both tokenizers
@@ -928,6 +931,174 @@ def predict_plan_family(rng):
 
 
 
+# --- calibration payload (runtime half) -------------------------------------------------------
+CALIB_CFG = {"max_len": 512, "head_max_len": 192, "option_layout": "sequential",
+             "temperature": [1.0, 1.0, 1.0], "temperature_by_options": {"choice:2": 2.0},
+             "extra": {"a": [1, 2.5, True], "b": None}}
+CALIB_IDENTITY = {k: v for k, v in CALIB_CFG.items() if k not in ("temperature", "temperature_by_options")}
+OK_T = "[1.5, 2, 0.75]"
+OK_BIN = '{"choice:2": {"bins": 3, "values": [0.1, 0.5, 1]}}'
+
+
+def _calib_cases():
+    ident = json.dumps(CALIB_IDENTITY)
+    cases = []
+
+    def add(name, text, cfg=None):
+        cases.append((name, text, CALIB_CFG if cfg is None else cfg))
+
+    def body(**kw):
+        parts = ['"%s": %s' % (k, v) for k, v in kw.items()]
+        return "{" + ", ".join(parts) + "}"
+
+    # payload shape
+    for name, text in [("array", "[]"), ("number", "1"), ("string", '"x"'), ("null", "null"),
+                       ("true", "true")]:
+        add("payload_" + name, text)
+    # version
+    for name, v in [("absent", None), ("null", "null"), ("one", "1"), ("two", "2"), ("three", "3"),
+                    ("str_two", '"2"'), ("str_padded", '" 2 "'), ("str_underscore", '"0_2"'),
+                    ("str_double_underscore", '"2__0"'), ("str_trailing_underscore", '"2_"'),
+                    ("str_plus", '"+2"'), ("str_word", '"abc"'), ("str_empty", '""'),
+                    ("str_float", '"2.0"'), ("float_two", "2.0"), ("float_high", "2.9"),
+                    ("float_low", "1.9"), ("exp", "2e0"), ("nan", "NaN"), ("inf", "Infinity"),
+                    ("huge_float", "1e999"), ("bool", "true"), ("false", "false"), ("list", "[2]"),
+                    ("object", "{}"), ("negative", "-1"), ("big", "1" + "0" * 30)]:
+        kw = {"temperature": OK_T}
+        if v is not None:
+            kw = {"version": v, **kw}
+        add("version_" + name, body(**kw))
+    # identity
+    v2 = lambda **kw: body(version=2, temperature=OK_T, **kw)
+    add("identity_match", v2(model_id_or_path="null", subfolder="null", config=ident))
+    add("identity_config_absent", v2())
+    add("identity_config_null", v2(config="null"))
+    add("identity_model", v2(model_id_or_path='"org/m"', subfolder="null", config=ident))
+    add("identity_subfolder", v2(model_id_or_path="null", subfolder='"sub"', config=ident))
+    add("identity_both", v2(model_id_or_path='"it\'s"', subfolder='"s"', config='{"max_len": 1}'))
+    add("identity_config_differs", v2(config='{"max_len": 256}'))
+    add("identity_equal_numbers", v2(config='{"extra": {"b": null, "a": [1.0, 2.5, 1]}, '
+        '"option_layout": "sequential", "head_max_len": 192.0, "max_len": 512}'))
+    add("identity_bool_as_int", v2(config='{"max_len": 512, "head_max_len": 192, '
+        '"option_layout": "sequential", "extra": {"a": [true, 2.5, 1], "b": null}}'))
+    add("identity_extra_key", v2(config=json.dumps({**CALIB_IDENTITY, "z": 1})))
+    add("identity_with_temps", v2(model_id_or_path="null", subfolder="null", config=json.dumps(CALIB_CFG)))
+    add("identity_list", v2(config="[]"))
+    add("identity_not_checked_v1", body(version=1, temperature=OK_T, model_id_or_path='"x"'))
+    add("identity_empty_cfg", v2(model_id_or_path="null", subfolder="null", config="{}"), {})
+    # temperature
+    for name, t in [("absent", None), ("null", "null"), ("two", "[1, 2]"), ("four", "[1, 2, 3, 4]"),
+                    ("string", '"abc"'), ("object", '{"a": 1, "b": 2, "c": 3}'), ("number", "3"),
+                    ("clamped", "[0.1, 9, 2.5]"), ("strings", '["2.5", "x", " 3 "]'),
+                    ("string_specials", '["nan", "inf", "0x1p1"]'),
+                    ("specials", "[null, NaN, Infinity]"), ("neg_inf", "[-Infinity, 1e999, -1e999]"),
+                    ("bools", "[true, false, 1]"), ("zero", "[0, -0.0, 0.5]"),
+                    ("nested", '[[1], {}, "1 0"]'), ("edges", "[0.5, 5, 5.0000001]"),
+                    ("ints", "[1, 5, 100000000000000000000000]"),
+                    ("plain_strings", '["+2", "1e1", "1.5"]')]:
+        add("temperature_" + name, body(version=1, **({} if t is None else {"temperature": t})))
+    # temperature_by_options
+    for name, b in [("absent", None), ("null", "null"), ("empty", "{}"), ("list", "[]"),
+                    ("string", '"x"'), ("number", "5"), ("false", "false"),
+                    ("mixed", '{"choice:2": 0.01, "choice:3-5": "3", "score:2": true, "noul:2": null, '
+                              '"choice:11+": 7, "choice:6-10": 2}'),
+                    ("duplicate", '{"choice:2": 9, "choice:2": 0.1}')]:
+        kw = {"version": 1, "temperature": OK_T}
+        if b is not None:
+            kw["temperature_by_options"] = b
+        add("by_options_" + name, body(**kw))
+    # binning
+    def bm(v):
+        return body(version=1, temperature=OK_T, binning_map=v)
+
+    for name, v in [("null", "null"), ("empty", "{}"), ("valid", OK_BIN), ("one_bin", '{"c": {"bins": 1, "values": [0.25]}}'),
+                    ("ints", '{"c": {"bins": 2, "values": [0, 1]}}'),
+                    ("two_buckets", '{"choice:2": {"bins": 2, "values": [0.2, 0.9]}, '
+                                    '"score:3-5": {"bins": 1, "values": [0.5]}}'),
+                    ("list", "[]"), ("string", '"x"'), ("number", "1"), ("true", "true"),
+                    ("entry_list", '{"c": []}'), ("entry_null", '{"c": null}'), ("entry_empty", '{"c": {}}'),
+                    ("bins_bool", '{"c": {"bins": true, "values": [0.5]}}'),
+                    ("bins_float", '{"c": {"bins": 2.0, "values": [0.5, 0.5]}}'),
+                    ("bins_exp", '{"c": {"bins": 1e0, "values": [0.5]}}'),
+                    ("bins_str", '{"c": {"bins": "2", "values": [0.5, 0.5]}}'),
+                    ("bins_zero", '{"c": {"bins": 0, "values": []}}'),
+                    ("bins_negative", '{"c": {"bins": -1, "values": []}}'),
+                    ("bins_missing", '{"c": {"values": [0.5]}}'),
+                    ("bins_huge", '{"c": {"bins": 100000000000000000000, "values": [0.5]}}'),
+                    ("values_short", '{"c": {"bins": 3, "values": [0.5, 0.5]}}'),
+                    ("values_long", '{"c": {"bins": 1, "values": [0.5, 0.5]}}'),
+                    ("values_missing", '{"c": {"bins": 1}}'),
+                    ("values_string", '{"c": {"bins": 1, "values": "a"}}'),
+                    ("values_object", '{"c": {"bins": 1, "values": {"a": 1}}}'),
+                    ("value_str", '{"c": {"bins": 1, "values": ["0.5"]}}'),
+                    ("value_bool", '{"c": {"bins": 1, "values": [true]}}'),
+                    ("value_null", '{"c": {"bins": 1, "values": [null]}}'),
+                    ("value_list", '{"c": {"bins": 1, "values": [[0.5]]}}'),
+                    ("value_nan", '{"c": {"bins": 1, "values": [NaN]}}'),
+                    ("value_inf", '{"c": {"bins": 1, "values": [Infinity]}}'),
+                    ("value_huge", '{"c": {"bins": 1, "values": [1e999]}}'),
+                    ("value_negative", '{"c": {"bins": 1, "values": [-0.1]}}'),
+                    ("value_high", '{"c": {"bins": 1, "values": [1.0000001]}}'),
+                    ("value_edges", '{"c": {"bins": 2, "values": [0.0, 1.0]}}'),
+                    ("second_entry_bad", '{"a": {"bins": 1, "values": [0.5]}, "b": {"bins": 1, "values": [2]}}')]:
+        add("binning_" + name, bm(v))
+    # the whole thing at once
+    add("full", body(version=2, temperature="[0.2, 3, 9]", temperature_by_options='{"choice:2": 0.1, "score:2": 2}',
+                     model_id_or_path="null", subfolder="null", config=ident, binning_map=OK_BIN))
+    add("duplicate_keys", '{"version": 1, "temperature": [9, 9, 9], "temperature": [2, 2, 2]}')
+    return cases
+
+
+class _CalibObj:
+    def __init__(self, cfg):
+        self.cfg = cfg   # an ONNXAgent keeps the parsed rl_agent_config.json and no model id
+
+
+def calibration_family():
+    import warnings
+
+    from laya.calibrate import apply_binning_map, apply_calibration_payload, calibration_payload
+
+    cases = []
+    for name, text, cfg in _calib_cases():
+        obj = _CalibObj(json.loads(json.dumps(cfg)))
+        obj.binning_map = "unset"
+        record = {"name": name, "payload": text, "config": json.dumps(cfg)}
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                apply_calibration_payload(obj, json.loads(text))
+            except ValueError as exc:
+                record["error"] = str(exc)
+            else:
+                record["temperature"] = obj.temperature
+                record["by_options"] = obj.temperature_by_options
+                record["binning"] = obj.binning_map
+        record["warnings"] = [[w.category.__name__, str(w.message)] for w in caught]
+        cases.append(record)
+
+    rng = random.Random(SEED + 8)
+    maps = [{"choice:2": {"bins": 3, "values": [0.1, 0.5, 1.0]}},
+            {"choice:2": {"bins": 1, "values": [0.25]}, "score:3-5": {"bins": 15, "values": [i / 15 for i in range(15)]}},
+            {}]
+    buckets = ["choice:2", "choice:3-5", "score:3-5", "noul:2", "choice:11+"]
+    confs = [0.0, 1.0, 0.5, 1 / 3, 2 / 3, 0.9999999, 1e-12, 0.3333333333333333, -0.5, 1.5]
+    confs += [rng.random() for _ in range(40)]
+    binning = [{"map": m, "bucket": b, "confidence": c, "result": apply_binning_map(c, b, m)}
+               for m in maps for b in buckets for c in confs]
+
+    writer = []
+    for model, sub, cfg, bmap in [(None, None, CALIB_CFG, None), ("org/m", "sub", CALIB_CFG, OK_BIN_MAP),
+                                  (None, None, None, {}), (None, None, {}, OK_BIN_MAP)]:
+        body = calibration_payload([1.5, 2, 0.75], {"choice:2": 2, "score:3-5": 0.5}, model, sub, cfg, bmap)
+        writer.append({"model": model, "subfolder": sub, "config": cfg, "binning_map": bmap,
+                       "payload": json.dumps(body)})
+    return {"cases": cases, "binning": binning, "writer": writer}
+
+
+OK_BIN_MAP = json.loads(OK_BIN)
+
+
 def build():
     import tokenizers
 
@@ -952,6 +1123,7 @@ def build():
         "answers_fuzz": decode_fuzz_family(rng),
         "marker_refusals": marker_refusals_family(rng),
         "predict_plan": predict_plan_family(rng),
+        "calibration": calibration_family(),
     }
 
 

@@ -93,6 +93,23 @@ func NewTemperatures(byType []any, byOptions map[string]any, byLanguage map[stri
 	return t, nil
 }
 
+// Calibrated is t with the type and bucket tables and the binning map replaced, as
+// apply_calibration_payload does: language overrides stay as Open resolved them. byType holds
+// three raw values; every value is clamped.
+func (t *Temperatures) Calibrated(byType []any, byOptions map[string]any, binning map[string]Bins) *Temperatures {
+	out := &Temperatures{ByOptions: make(map[string]float64, len(byOptions)), Binning: binning}
+	if t != nil {
+		out.ByLanguage = t.ByLanguage
+	}
+	for i, v := range byType {
+		out.ByType[i] = Clamp(v)
+	}
+	for bucket, v := range byOptions {
+		out.ByOptions[bucket] = Clamp(v)
+	}
+	return out
+}
+
 // primarySubtag is lang.split("-")[0].lower().
 func primarySubtag(lang string) string {
 	primary, _, _ := strings.Cut(lang, "-")

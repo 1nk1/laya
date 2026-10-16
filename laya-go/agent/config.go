@@ -70,6 +70,8 @@ type Config struct {
 	// Warnings are what loading changed without failing, such as temperatures outside
 	// [0.5, 5] that were clamped.
 	Warnings []string
+
+	identity pyjson.Object // the file without its temperature fields, for a calibration's check
 }
 
 // LoadConfig reads and checks rl_agent_config.json from the root of checkpoint, as ONNXAgent
@@ -100,7 +102,8 @@ func loadConfig(checkpoint fs.FS, langs map[string]any) (Config, *decode.Tempera
 		}
 		return nil, false
 	}
-	cfg := Config{MaxLen: defaultMaxLen, HeadMaxLen: defaultHeadMaxLen, OptionLayout: layoutSequential}
+	cfg := Config{MaxLen: defaultMaxLen, HeadMaxLen: defaultHeadMaxLen, OptionLayout: layoutSequential,
+		identity: configIdentity(obj)}
 	if raw, ok := get("option_layout"); ok {
 		if layout, isString := raw.(string); !isString || layout != layoutSequential {
 			return Config{}, nil, &ConfigError{Field: "option_layout",

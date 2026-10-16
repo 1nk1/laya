@@ -135,14 +135,15 @@ func aggregateUsage(results []schema.Prediction) HookUsage {
 // --- options ---
 
 type options struct {
-	installed  []Hook
-	timeout    time.Duration
-	raise      bool
-	concurrent bool
-	warn       func(string)
-	err        error
-	langTemps  map[string]any    // WithLangTemperatures
-	sha256     map[string]string // WithExpectedSHA256
+	installed   []Hook
+	timeout     time.Duration
+	raise       bool
+	concurrent  bool
+	warn        func(string)
+	err         error
+	langTemps   map[string]any    // WithLangTemperatures
+	sha256      map[string]string // WithExpectedSHA256
+	calibration []byte            // WithCalibration
 }
 
 // WithInstalledHooks installs hooks on the agent, as AddHook does after Open.
