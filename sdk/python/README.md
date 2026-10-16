@@ -108,7 +108,7 @@ batch, local routing, model loading or Python prediction hooks.
 
 ## Development and verification
 
-From the repository root, in a build environment:
+From the repository root, in a build environment using a current patched Python:
 
 ```bash
 python -m pip install build setuptools wheel
@@ -119,6 +119,10 @@ python sdk/python/tests/verify_package.py sdk/python/dist
 The verifier builds an isolated client environment, installs the wheel with
 normal dependency resolution and no package index, then runs the standard-library
 tests against that installed package. It also checks the sdist-built wheel.
+Source archives are extracted with `tarfile`'s `data` filter and must contain only
+regular files and directories within the extraction directory. The verifier
+refuses to extract on older Python builds without `tarfile.data_filter`; this
+requirement applies to the verification tool, not the installed client's runtime.
 
 For live integration, supply a Python with `laya[serve]` dependencies installed:
 

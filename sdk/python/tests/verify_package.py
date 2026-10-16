@@ -28,6 +28,20 @@ def check_wheel(path):
         assert all(n.startswith(("laya_client/", "laya_client-")) for n in names), names
 
 
+def extract_sdist(source, destination):
+    if not hasattr(tarfile, "data_filter"):
+        raise RuntimeError("Package verification requires a patched Python with tarfile.data_filter")
+    destination = destination.resolve()
+    with tarfile.open(source) as archive:
+        for entry in archive.getmembers():
+            target = (destination / entry.name).resolve()
+            if Path(entry.name).is_absolute() or not target.is_relative_to(destination):
+                raise ValueError("sdist member escapes the extraction directory")
+            if not (entry.isfile() or entry.isdir()):
+                raise ValueError("sdist must contain only regular files and directories")
+        archive.extractall(destination, filter="data")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("dist", type=Path)
@@ -54,12 +68,7 @@ def main():
 
         unpacked = root / "sdist"
         unpacked.mkdir()
-        with tarfile.open(sdists[0]) as archive:
-            for entry in archive.getmembers():
-                target = (unpacked / entry.name).resolve()
-                assert target.is_relative_to(unpacked.resolve())
-                assert entry.isfile() or entry.isdir(), "Unexpected link or device in sdist"
-            archive.extractall(unpacked)
+        extract_sdist(sdists[0], unpacked)
         projects = list(unpacked.iterdir())
         assert len(projects) == 1 and (projects[0] / "pyproject.toml").is_file()
         rebuilt = root / "rebuilt"
