@@ -12,14 +12,18 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-PASS, FAIL = [], []
+PASS, FAIL, SKIPPED = [], [], []
+_SUSPENDED = False
 
 
 def check(name, got, want):
+    if _SUSPENDED:
+        return
     if got == want:
         PASS.append(name)
     else:
@@ -27,6 +31,8 @@ def check(name, got, want):
 
 
 def check_true(name, cond, detail=""):
+    if _SUSPENDED:
+        return
     if cond:
         PASS.append(name)
     else:
@@ -34,12 +40,127 @@ def check_true(name, cond, detail=""):
 
 
 def read(name):
-    with open(os.path.join(ROOT, name), encoding="utf-8") as f:
+    path = os.path.join(ROOT, name)
+    # A suspended section is one require_repo already skipped; do not raise on its files.
+    if _SUSPENDED and not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as f:
         return f.read()
 
 
 def version_tuple(text):
     return tuple(int(part) for part in text.split("."))
+
+
+# The published sdist ships laya/, tests/, README.md, pyproject.toml, and setup.py. It does
+# not ship .github/workflows, the compose files, scripts/, nix/, docs/, or CONTRIBUTING.md.
+# require_repo skips just the section that reads those, so checks that only need
+# shipped files keep running (#1263).
+def _missing_repo(relative_paths, root):
+    return [rel for rel in relative_paths if not os.path.exists(os.path.join(root, rel))]
+
+
+def _repo_skip_reason(missing):
+    return ("repo-only file(s) absent from this tree "
+            "(the published sdist does not ship them): " + ", ".join(missing))
+
+
+class _SkipObj:
+    """Stand-in for a module the sdist did not ship. Attribute access does not raise."""
+
+    def __getattr__(self, name):
+        return self
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    def __getitem__(self, key):
+        return self
+
+    def __bool__(self):
+        return False
+
+
+class _SkipLoader:
+    def create_module(self, spec):
+        return _SkipObj()
+
+    def exec_module(self, module):
+        return None
+
+
+_real_listdir = os.listdir
+_real_spec_from_file_location = importlib.util.spec_from_file_location
+
+
+def _listdir(*args, **kwargs):
+    if not _SUSPENDED:
+        return _real_listdir(*args, **kwargs)
+    path = args[0] if args else kwargs.get("path")
+    if not path or not os.path.isdir(path):
+        if not path:
+            return _real_listdir(*args, **kwargs)
+        return []
+    return _real_listdir(*args, **kwargs)
+
+
+def _spec_from_file_location(name, location, *args, **kwargs):
+    if _SUSPENDED and location and not os.path.exists(location):
+        import importlib.machinery
+        spec = importlib.machinery.ModuleSpec(name, _SkipLoader())
+        spec.origin = location
+        return spec
+    return _real_spec_from_file_location(name, location, *args, **kwargs)
+
+
+os.listdir = _listdir
+importlib.util.spec_from_file_location = _spec_from_file_location
+
+
+def require_repo(*relative_paths, root=None, as_test=False):
+    """True when every path is in the tree. Missing paths skip that section, they do not raise.
+
+    At import time a missing path suspends check() until a later require_repo finds its
+    files, so sections that only need the sdist keep running. as_test=True raises
+    pytest.skip so a pytest test is reported skipped instead.
+    """
+    global _SUSPENDED
+    base = ROOT if root is None else root
+    missing = _missing_repo(relative_paths, base)
+    if not missing:
+        if root is None:
+            _SUSPENDED = False
+        return True
+    reason = _repo_skip_reason(missing)
+    if root is None and reason not in SKIPPED:
+        SKIPPED.append(reason)
+        print("SKIP: " + reason)
+    if root is None:
+        _SUSPENDED = True
+    if as_test:
+        import pytest
+        pytest.skip(reason)
+    return False
+
+
+_GUARD_SAMPLES = (
+    os.path.join(".github", "workflows", "ci.yml"),
+    os.path.join(".github", "workflows"),
+    os.path.join(".github", "workflows", "docker.yml"),
+    os.path.join(".github", "workflows", "release.yml"),
+    os.path.join(".github", "workflows", "docs.yml"),
+    os.path.join(".github", "workflows", "evals.yml"),
+    "compose.yaml",
+    "compose.http.yaml",
+    "compose.cuda.yaml",
+    "compose.modelscope.yaml",
+    "Dockerfile",
+    os.path.join("scripts", "test_suites.py"),
+    "CONTRIBUTING.md",
+    os.path.join("nix", "package.nix"),
+    "docs",
+    "BENCHMARKS.md",
+)
 
 
 pyproject = read("pyproject.toml")
@@ -198,6 +319,7 @@ for label, match in (("pyproject", static_version), ("laya/__init__", init_versi
     parts = value.split(".")
     check_true("%s/version is X.Y.Z" % label, len(parts) == 3 and all(p.isdigit() for p in parts), "got %r" % value)
 
+require_repo(os.path.join(".github", "workflows", "ci.yml"))
 workflow = read(os.path.join(".github", "workflows", "ci.yml"))
 ci_versions = [version_tuple(v) for v in re.findall(r'"(\d+\.\d+)"', workflow)]
 stale = [".".join(str(p) for p in v) for v in ci_versions if v < floor]
@@ -216,6 +338,7 @@ check("ci/tests every advertised Python version", missing_from_ci, [])
 # the supply-chain risk the pins exist to remove. Enforced here so the next `uses:` cannot float.
 _workflow_dir = os.path.join(ROOT, ".github", "workflows")
 _unpinned = []
+require_repo(os.path.join(".github", "workflows"))
 for _wf_name in sorted(os.listdir(_workflow_dir)):
     if not _wf_name.endswith((".yml", ".yaml")):
         continue
@@ -303,6 +426,9 @@ def _invoked_workflow_tests(yaml_text):
     return invoked
 
 
+require_repo(os.path.join(".github", "workflows", "docker.yml"),
+             os.path.join(".github", "workflows", "release.yml"),
+             os.path.join("scripts", "test_suites.py"))
 docker_workflow = read(os.path.join(".github", "workflows", "docker.yml"))
 release_workflow = read(os.path.join(".github", "workflows", "release.yml"))
 # The Linux `test` job and the release gate both invoke `scripts/test_suites.py` instead of naming
@@ -354,6 +480,7 @@ for label, source, job in (("ci/linux", workflow, "test"),
 # crash from a failed assertion, which is a red lane nobody can diagnose. Pinned on both halves:
 # the child runs unbuffered so its evidence reaches the log first, and the summary carries the exit
 # status.
+require_repo(os.path.join("scripts", "test_suites.py"))
 _runner_spec = importlib.util.spec_from_file_location(
     "laya_test_suites", os.path.join(ROOT, "scripts", "test_suites.py"))
 suites_runner = importlib.util.module_from_spec(_runner_spec)
@@ -440,6 +567,8 @@ check_true("harness/the summary says how it died",
 # the gate uses. This also keeps #374's trap off the page: `python tests/<name>.py` on a pytest suite
 # defines the test functions, asserts nothing and exits 0, so an example run in the wrong style is a
 # contributor who believes they tested something.
+require_repo("CONTRIBUTING.md", os.path.join(".github", "workflows"),
+             os.path.join("scripts", "test_suites.py"))
 _contrib = read("CONTRIBUTING.md")
 
 
@@ -557,6 +686,7 @@ for _dirpath, _dirnames, _filenames in os.walk("."):
 _md = sorted(_md)
 _heading_cache = {p: _headings(p) for p in _md}
 
+require_repo("BENCHMARKS.md", "docs")
 check_true("md/at least the README, BENCHMARKS and docs are scanned", len(_md) >= 8, _md)
 check_true("md/no build directory scanned",
            not any(".pytest_cache" in p for p in _md), _md)
@@ -583,6 +713,7 @@ check("md/no anchor that matches no heading", _broken_anchors, [])
 # repo-relative target 404s there; the same is true of the npm-published `sdk/typescript` and
 # `laya-ts` READMEs. The check above only proves the target exists in-repo, which is exactly why
 # this went unnoticed -- a relative link is a local success and a published failure.
+require_repo("README.md")
 for _pub in ("README.md", "sdk/typescript/README.md", "laya-ts/README.md"):
     if not os.path.exists(os.path.join(ROOT, _pub)):
         continue
@@ -595,6 +726,8 @@ for _pub in ("README.md", "sdk/typescript/README.md", "laya-ts/README.md"):
 # read on its own. These checks are textual because the suite takes no third-party
 # dependency and PyYAML is not one; the real validation is `docker compose config`,
 # which the Docker workflow runs for every file combination.
+require_repo("compose.http.yaml", "compose.yaml", "compose.cuda.yaml", "Dockerfile",
+             "compose.modelscope.yaml")
 http = read("compose.http.yaml")
 base = read("compose.yaml")
 cuda = read("compose.cuda.yaml")
@@ -705,6 +838,7 @@ check_true("docker/prefetch_modelscope.py exists", os.path.exists("docker/prefet
 # these textual checks are the only gate on the two files a NixOS host deploys from. Same style
 # as the compose checks above: no nix binary, no third-party dependency.
 
+require_repo(os.path.join("nix", "package.nix"), os.path.join("nix", "laya-serve.nix"))
 nix_pkg = read(os.path.join("nix", "package.nix"))
 nix_version = re.search(r'^\s*version\s*=\s*"([^"]+)"', nix_pkg, re.M)
 check_true("nix/package.nix declares a version", nix_version is not None, nix_pkg[:200])
@@ -957,6 +1091,7 @@ check_true("nix/CUDA and CPU accept different dtype spellings", _cuda != _cpu,
 # The runtime error in laya/structured.py tells users to install `laya[structured]`, and the
 # docs and README repeat it. A reference to an extra pyproject.toml does not declare is a dead
 # end for anyone who follows it, so every `laya[...]` in the code and docs must resolve (#348).
+require_repo("pyproject.toml")
 _extra_section = pyproject.split("[project.optional-dependencies]")[1].split("\n[")[0]
 _declared_extras = set(re.findall(r"^([a-z][\w-]*)\s*=\s*\[", _extra_section, re.M))
 _referenced_extras = {}
@@ -994,6 +1129,10 @@ def _concurrency_block(text):
 
 
 _concurrency_workflows = ["ci.yml", "docker.yml", "security.yml"]
+require_repo(os.path.join(".github", "workflows", "ci.yml"),
+             os.path.join(".github", "workflows", "docker.yml"),
+             os.path.join(".github", "workflows", "security.yml"),
+             os.path.join(".github", "workflows", "docs.yml"))
 _docs_workflow = read(os.path.join(".github", "workflows", "docs.yml"))
 _docs_concurrency = _concurrency_block(_docs_workflow)
 if _docs_concurrency and _PER_COMMIT in _docs_concurrency:
@@ -1027,6 +1166,7 @@ for _wf in _concurrency_workflows:
 # never collided: its ref is the tag (`refs/tags/<tag_name>`), so each release had its own group.
 # The job spends 60 minutes downloading weights and the dataset, and a cancelled run uploads no
 # report, so a cancellation reads as a clean gate.
+require_repo(os.path.join(".github", "workflows", "evals.yml"))
 _EVALS_WORKFLOW = read(os.path.join(".github", "workflows", "evals.yml"))
 # Non-vacuity, independent of the concurrency block: if evals.yml is renamed or its triggers
 # change, this reports instead of the check below passing on a file it did not understand.
@@ -1069,6 +1209,7 @@ def _exported_names():
     return []
 
 
+require_repo("docs")
 _docs_pages = [p for p in _md if p.split(os.sep)[0] == "docs"]
 _docs_text = "".join(read(p) for p in _docs_pages)
 _export_list = _exported_names()
@@ -1082,9 +1223,42 @@ _unreferenced = [n for n in _export_list if not re.search(r"\b%s\b" % re.escape(
 check_true("docs/every exported name appears on a docs page",
            not _unreferenced, "named nowhere in docs/: %s" % _unreferenced)
 
+def _prove_guard_skips_when_files_missing():
+    """An empty tree is the published-sdist shape: every repo-only path skips."""
+    with tempfile.TemporaryDirectory() as empty:
+        present = [rel for rel in _GUARD_SAMPLES if not _missing_repo((rel,), empty)]
+        check("guard/every repo-only path skips when the tree does not have it", present, [])
+        sample = os.path.join(".github", "workflows", "ci.yml")
+        reason = _repo_skip_reason(_missing_repo((sample,), empty))
+        check_true("guard/skip reason names the published sdist and the missing file",
+                   bool(reason) and "published sdist" in reason and sample in reason, reason)
+        with open(os.path.join(empty, "pyproject.toml"), "w", encoding="utf-8") as handle:
+            handle.write("")
+        check("guard/a file this tree ships is not skipped",
+              _missing_repo(("pyproject.toml",), empty), [])
+
+
+def test_guard_skips_when_repo_files_missing(tmp_path, monkeypatch):
+    """require_repo skips, and names the sdist, when the repo-only file is absent."""
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", str(tmp_path))
+    monkeypatch.setattr(sys.modules[__name__], "_SUSPENDED", _SUSPENDED)
+    import pytest
+    with pytest.raises(pytest.skip.Exception, match="published sdist"):
+        require_repo(os.path.join(".github", "workflows", "ci.yml"), as_test=True)
+    (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")
+    assert require_repo("pyproject.toml") is True
+    assert not FAIL, "\n".join(FAIL)
+
+
+require_repo("pyproject.toml")
+_prove_guard_skips_when_files_missing()
+
 print("\n%d passed, %d failed" % (len(PASS), len(FAIL)))
 for f in FAIL:
     print("  FAIL", f)
+for skipped in SKIPPED:
+    print("  SKIP", skipped)
 if not FAIL:
     print("all packaging tests passed")
-sys.exit(1 if FAIL else 0)
+if __name__ == "__main__":
+    sys.exit(1 if FAIL else 0)
