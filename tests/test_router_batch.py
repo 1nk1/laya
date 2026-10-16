@@ -558,3 +558,32 @@ def test_sort_by_length_is_dropped_for_agents_that_predate_it(monkeypatch):
     assert len(results) == 2
     assert [c["sort"] for c in calls] == ["unsupported"]  # one group, retry without the knob
     assert [r["routing"]["model"] for r in results] == ["english", "english"]
+
+
+def test_predict_batch_memoizes_identical_question_schema(monkeypatch):
+    """Router.predict_batch memoizes question schema serialization across consecutive requests
+    sharing the identical questions dictionary, avoiding redundant json.dumps() per item."""
+    import laya.router
+    calls = []
+    real_schema = laya.router._question_schema
+
+    def recording_schema(q):
+        calls.append(q)
+        return real_schema(q)
+
+    monkeypatch.setattr(laya.router, "_question_schema", recording_schema)
+    router, _ = _sort_recording_router(monkeypatch, accepts_sort=True)
+
+    shared_q = {"intent": {"type": "noul", "instructions": "Urgent?"}}
+    other_q = {"intent": {"type": "noul", "instructions": "Different?"}}
+
+    requests = [
+        {"state": "a", "questions": shared_q},
+        {"state": "b", "questions": shared_q},
+        {"state": "c", "questions": shared_q},
+        {"state": "d", "questions": other_q},
+    ]
+    results = router.predict_batch(requests)
+    assert len(results) == 4
+    # Exactly 2 schema serializations instead of 4
+    assert len(calls) == 2
