@@ -494,6 +494,12 @@ CONTROLS = (
     + tuple(_controls.HOOK_CONTROLS)
 )
 
+# `task` and `lang_guess` are kept out of `CONTROLS` on purpose: the checks below assert that
+# every name in it is read by `Agent.system_one` AND `Router.predict`, and these two are read by
+# the Router alone. They still have to reach this wrapper, so the signature checks use the union.
+ROUTER_CONTROLS = tuple(_controls.ROUTER_ONLY_CONTROLS)
+EVERY_CONTROL = CONTROLS + ROUTER_CONTROLS
+
 
 def _params(fn):
     return set(inspect.signature(fn).parameters)
@@ -516,14 +522,14 @@ for _c in CONTROLS:
 
 # Both public classes must accept all controls in __init__.
 for cls in (LayaAgnoRouter, LayaAgnoGuardrail):
-    for _c in CONTROLS:
+    for _c in EVERY_CONTROL:
         check_true("controls/%s takes %s" % (cls.__name__, _c), _c in _params(cls.__init__))
 
 # The agno _execute_decision must accept exactly the same set as the other integrations.
 check("controls/_execute_decision takes every control",
       set(_params(agno_module._execute_decision)) - {"state", "questions", "agent",
                                                      "base_url", "api_key", "model"},
-      set(CONTROLS))
+      set(EVERY_CONTROL))
 
 # All four integrations must agree on the _execute_decision signature.
 for _mod in (langchain_module, llamaindex_module, crewai_module):

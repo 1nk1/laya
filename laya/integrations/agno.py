@@ -86,6 +86,9 @@ except ImportError:
 from ._controls import budget_kwargs as _budget_kwargs, hook_kwargs as _hook_kwargs  # noqa: E402
 from ._controls import decision_kwargs as _decision_kwargs  # noqa: E402
 from ._controls import predict_kwargs as _predict_kwargs, reject_remote_hooks as _reject_remote_hooks  # noqa: E402
+from ._controls import reject_remote_lang_guess as _reject_remote_lang_guess  # noqa: E402
+from ._controls import require_router_controls as _require_router_controls  # noqa: E402
+from ._controls import router_kwargs as _router_kwargs  # noqa: E402
 from ._guard import score_violation_probability as _score_violation_probability  # noqa: E402
 from ..confidence import _gate_confidence  # noqa: E402
 
@@ -351,6 +354,8 @@ def _execute_decision(
     head_max_len: Optional[int] = None,
     lang: Optional[str] = None,
     min_confidence: Optional[float] = None,
+    task: Optional[str] = None,
+    lang_guess: Optional[Any] = None,
     hooks: Optional[Any] = None,
     on_predict_start: Optional[Any] = None,
     on_predict_end: Optional[Any] = None,
@@ -364,14 +369,17 @@ def _execute_decision(
     ``predict`` call and the same request body.
     """
     hook_kwargs = _hook_kwargs(hooks, on_predict_start, on_predict_end, hooks_raise, hooks_timeout)
+    router_kwargs = _router_kwargs(task, lang_guess)
     if base_url:
         _reject_remote_hooks(hook_kwargs, base_url)
+        _reject_remote_lang_guess(router_kwargs, base_url)
         budget = _budget_kwargs(max_len, head_max_len)
         decision = _decision_kwargs(lang, min_confidence)
         return _call_remote(base_url, state, questions, api_key=api_key, model=model,
-                            **budget, **decision)
+                            **budget, **decision, **router_kwargs)
     runner = agent if agent is not None else _get_default_router()
     kwargs = _predict_kwargs(model, max_len, head_max_len, lang, min_confidence)
+    kwargs.update(_require_router_controls(runner, "predict", router_kwargs))
     kwargs.update(hook_kwargs)
     return runner.predict(state, questions, **kwargs)
 
@@ -434,6 +442,8 @@ class LayaAgnoRouter:
         head_max_len: Optional[int] = None,
         lang: Optional[str] = None,
         min_confidence: Optional[float] = None,
+        task: Optional[str] = None,
+        lang_guess: Optional[Any] = None,
         hooks: Optional[Any] = None,
         on_predict_start: Optional[Any] = None,
         on_predict_end: Optional[Any] = None,
@@ -452,6 +462,8 @@ class LayaAgnoRouter:
         self.head_max_len = head_max_len
         self.lang = lang
         self.min_confidence = min_confidence
+        self.task = task
+        self.lang_guess = lang_guess
         self.hooks = hooks
         self.on_predict_start = on_predict_start
         self.on_predict_end = on_predict_end
@@ -510,6 +522,8 @@ class LayaAgnoRouter:
             head_max_len=self.head_max_len,
             lang=self.lang,
             min_confidence=self.min_confidence,
+            task=self.task,
+            lang_guess=self.lang_guess,
             hooks=self.hooks,
             on_predict_start=self.on_predict_start,
             on_predict_end=self.on_predict_end,
@@ -702,6 +716,8 @@ class LayaAgnoGuardrail:
         head_max_len: Optional[int] = None,
         lang: Optional[str] = None,
         min_confidence: Optional[float] = None,
+        task: Optional[str] = None,
+        lang_guess: Optional[Any] = None,
         hooks: Optional[Any] = None,
         on_predict_start: Optional[Any] = None,
         on_predict_end: Optional[Any] = None,
@@ -722,6 +738,8 @@ class LayaAgnoGuardrail:
         self.head_max_len = head_max_len
         self.lang = lang
         self.min_confidence = min_confidence
+        self.task = task
+        self.lang_guess = lang_guess
         self.hooks = hooks
         self.on_predict_start = on_predict_start
         self.on_predict_end = on_predict_end
@@ -761,6 +779,8 @@ class LayaAgnoGuardrail:
             head_max_len=self.head_max_len,
             lang=self.lang,
             min_confidence=self.min_confidence,
+            task=self.task,
+            lang_guess=self.lang_guess,
             hooks=self.hooks,
             on_predict_start=self.on_predict_start,
             on_predict_end=self.on_predict_end,
