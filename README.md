@@ -94,33 +94,21 @@ The shipped checkpoints work zero-shot, but fine-tuning on decisions from your o
 
 **[nandhakishorm.github.io/laya](https://nandhakishorm.github.io/laya/)**: guides for [prediction hooks](https://nandhakishorm.github.io/laya/hooks/), [schema-driven decisions](https://nandhakishorm.github.io/laya/structured/), [Docker](https://nandhakishorm.github.io/laya/docker/) and [LangChain and LangGraph](https://nandhakishorm.github.io/laya/langchain/), plus a full [API reference](https://nandhakishorm.github.io/laya/reference/).
 
-## What's new in 0.4.9
+## What's new in 0.4.10
 
-* **A standalone Python HTTP client.** `sdk/python` holds `laya-client`: synchronous `predict()`
-  and `health()` against a self-hosted `laya-serve`, written on the standard library with zero
-  dependencies, so an application server no longer installs torch to call one (#1264, issue
-  #1176). It refuses redirects so a bearer token is never forwarded, rejects a `base_url`
-  carrying credentials or whitespace, and blocks non-finite JSON in both directions. Install it
-  from this checkout with `python -m pip install ./sdk/python`; it is not on PyPI yet.
-* **`laya-go` gains the confidence gate, hooks and digest verification.** `WithMinConfidence`
-  applies the same abstention gate as the Python runtime, `OnPredictStart`/`End`/`Error` dispatch
-  with timeouts and panic isolation, per-language temperatures are read from the checkpoint, and
-  `laya-go/internal/digest` checks a checkpoint's SHA-256 before loading it, streamed, with path
-  traversal refused (#1247, #1260).
-* **`LAYA_DEVICE=cuda:258` is refused rather than silently asking for GPU 2.** torch keeps a CUDA
-  index in its low 8 bits, so it parses that string and builds `cuda:2`, and `cuda:128` builds
-  `cuda:-128`. A value whose parsed device is not the device it names now raises, naming the
-  variable (#1242).
-* **Three more gate parameters that could not fail.** A tolerance of `Infinity` accepts a drift of
-  any size while the run still exits 0 (#1250), `--revision` naming two different commits for one
-  checkpoint is refused instead of resolved to whichever came last (#1248), and a slice label
-  containing `|` is escaped so a tag like `risk|high` cannot shift every number in its row of a
-  `--markdown` report (#1241). A `Dataset` row built in Python now gets the checks a JSONL row
-  already had, before a single inference call rather than after (#1253).
-* **`LAYA_CPU_AMP=bf16` is documented as a hardware requirement, not a preference.** On a CPU
-  without native BF16 instructions the forward dies with an illegal instruction rather than
-  raising, so `_infer`'s autocast retry cannot catch it. `docs/reference/agent.md` now carries the
-  capability reading to check and a child-process probe to qualify a host.
+* **A clamped temperature fit says so instead of looking like a finished fit.**
+  `fit_temperature_map` now returns `temperature_clamped`, naming every bucket or question type
+  whose optimum fell outside `[0.5, 5.0]`, with the unclamped value beside the one installed. The
+  clamped value is still what to install, since checkpoint load applies the same bounds, but a
+  fitted 0.387 arriving as exactly 0.5 was indistinguishable from a fit that really wanted 0.5, so
+  anyone calibrating their own checkpoint could not tell the floor from an answer (issue #1245).
+* **The `labels` guidance in `docs/questions-and-answers.md` was backwards for one real case.** A
+  `noul` instruction asking whether something is "positive" answers no for every state at
+  confidence 1.0 on both PyTorch checkpoints, and naming the two options through `labels` is the
+  one thing that restores it; rewording does not reliably, and capitalising the word helps in some
+  wordings and not others. The doc said labels are not a way to fix a question the model gets
+  wrong, which is still true in the other direction, and both directions are now stated (issue
+  #1244).
 
 Earlier releases are in the [GitHub releases](https://github.com/NandhaKishorM/laya/releases).
 
