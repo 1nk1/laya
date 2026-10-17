@@ -6,6 +6,7 @@ Covers:
   * the autocast path works and degrades to full precision instead of failing
 """
 import os
+import subprocess
 import sys
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -150,13 +151,48 @@ am = torch.ones_like(iid)
 mp = torch.tensor([[1, 3]])
 mm = torch.ones_like(mp, dtype=torch.bool)
 qt = torch.tensor([0])
-with torch.no_grad():
-    logits32, act32 = model(iid, am, mp, mm, qt)
-    with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
-        logits16, act16 = model(iid, am, mp, mm, qt)
-check("autocast/shapes match", tuple(logits16.shape), tuple(logits32.shape))
-check("autocast/finite", bool(torch.isfinite(logits16).all() and torch.isfinite(act16).all()), True)
-check("autocast/close to fp32", float((logits32 - logits16).abs().max()) < 0.5, True)
+
+
+# Whether this CPU can execute a bf16 autocast forward at all, asked in a child process, because
+# the answer on some machines is a native fault that no `except` can see. `tests (windows)` has
+# killed this suite with `0xC000001D` (STATUS_ILLEGAL_INSTRUCTION) about three runs in
+# thirty-five, and the stage markers added for it narrowed the fault to this section: the lane
+# printed `[stage] state reused once` and `[stage] autocast` and then died. It is the same class
+# as issue #1065, where the fbgemm quantization engine raised SIGILL on a CPU with SSE4.2 and no
+# AVX2 -- oneDNN picks a kernel for an instruction set the CPU does not have. It is intermittent
+# on one runner label because the hosted fleet is not one CPU model.
+#
+# So the three checks below run only where the forward is executable, and where it is not the
+# suite says so with the capability torch reports instead of taking the process down. laya's own
+# behaviour is unchanged either way: `LAYA_CPU_AMP` is opt-in, and `_cpu_amp_dtype` documents that
+# it is for hardware with native BF16 instructions.
+_AMP_PROBE = (
+    "import torch, torch.nn as nn\n"
+    "m = nn.Linear(16, 16)\n"
+    "x = torch.ones(1, 16)\n"
+    "with torch.no_grad(), torch.autocast(device_type='cpu', dtype=torch.bfloat16, enabled=True):\n"
+    "    m(x)\n"
+    "print('ok')\n"
+)
+_probe = subprocess.run([sys.executable, "-c", _AMP_PROBE], capture_output=True, text=True)
+_amp_runs = _probe.returncode == 0 and _probe.stdout.strip() == "ok"
+if not _amp_runs:
+    try:
+        _capability = torch.backends.cpu.get_cpu_capability()
+    except Exception as exc:                                        # pragma: no cover
+        _capability = "unknown (%s)" % type(exc).__name__
+    stage("autocast: SKIPPED, this CPU cannot execute a bf16 autocast forward "
+          "(capability %s, child exit %s)" % (_capability, _probe.returncode))
+    PASS.append("autocast/skipped: bf16 CPU autocast is not executable here")
+else:
+    with torch.no_grad():
+        logits32, act32 = model(iid, am, mp, mm, qt)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+            logits16, act16 = model(iid, am, mp, mm, qt)
+    check("autocast/shapes match", tuple(logits16.shape), tuple(logits32.shape))
+    check("autocast/finite",
+          bool(torch.isfinite(logits16).all() and torch.isfinite(act16).all()), True)
+    check("autocast/close to fp32", float((logits32 - logits16).abs().max()) < 0.5, True)
 
 calls = {"n": 0}
 

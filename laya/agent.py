@@ -313,7 +313,13 @@ def _cpu_amp_dtype() -> Optional[torch.dtype]:
     """Autocast dtype on CPU: bf16 when LAYA_CPU_AMP=bf16|bfloat16, None to leave the forward in
     fp32. No fp16 spelling is offered here, because CPU autocast has no fp16 fast path that beats
     fp32 -- bf16 is the only reduced precision worth asking for, and only on hardware with native
-    BF16 instructions, which is why it stays opt-in. Anything else is ignored."""
+    BF16 instructions, which is why it stays opt-in. Anything else is ignored.
+
+    On hardware without those instructions the failure is a native fault, not an exception:
+    oneDNN picks a kernel the CPU cannot execute and the process dies with SIGILL, or
+    `0xC000001D` on Windows. `_infer`'s autocast retry catches `RuntimeError`, so it cannot
+    see that and cannot fall back. Qualify the host first; `docs/reference/agent.md` has the
+    one-line child-process probe and the `get_cpu_capability()` reading to check."""
     if os.environ.get("LAYA_CPU_AMP", "").lower() in ("bf16", "bfloat16"):
         return torch.bfloat16
     return None
