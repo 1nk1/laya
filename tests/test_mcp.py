@@ -1406,11 +1406,32 @@ def test_batch_tool_control_forwarding():
         server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=0)
         ok("batch_tool/hooks_timeout_zero_is_unset", seen["kwargs"]["hooks_timeout"] is None,
            repr(seen["kwargs"]["hooks_timeout"]))
+        # The collapse compares values rather than testing identity: `hooks_timeout` is declared a
+        # number, so a JSON client is free to send its default as `0.0`, and `0.0 == 0` while
+        # `0.0 is 0` is False.
+        server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=0.0)
+        ok("batch_tool/hooks_timeout_float_zero_is_unset", seen["kwargs"]["hooks_timeout"] is None,
+           repr(seen["kwargs"]["hooks_timeout"]))
         server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS)
         ok("batch_tool/hooks_timeout_default_is_unset", seen["kwargs"]["hooks_timeout"] is None,
            repr(seen["kwargs"]["hooks_timeout"]))
         ok("batch_tool/min_confidence_default_is_unset", seen["kwargs"]["min_confidence"] is None,
            repr(seen["kwargs"]["min_confidence"]))
+        # `batch_size` is declared `int = 0` for the same eager-default reason, so 0 is its unset
+        # marker too -- and a real cap is forwarded untouched.
+        server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, batch_size=0)
+        ok("batch_tool/batch_size_zero_is_unset", seen["kwargs"]["batch_size"] is None,
+           repr(seen["kwargs"]["batch_size"]))
+        # JSON has no integer type, so an eager client can send the declared-int default as `0.0`.
+        server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, batch_size=0.0)
+        ok("batch_tool/batch_size_float_zero_is_unset", seen["kwargs"]["batch_size"] is None,
+           repr(seen["kwargs"]["batch_size"]))
+        server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS)
+        ok("batch_tool/batch_size_default_is_unset", seen["kwargs"]["batch_size"] is None,
+           repr(seen["kwargs"]["batch_size"]))
+        server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, batch_size=2)
+        ok("batch_tool/batch_size_forwarded", seen["kwargs"]["batch_size"] == 2,
+           repr(seen["kwargs"]["batch_size"]))
 
         # A value in range is forwarded as given.
         server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=1.5,
@@ -1426,6 +1447,9 @@ def test_batch_tool_control_forwarding():
             server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=bad)
             ok("batch_tool/hooks_timeout_%r_reaches_tools" % (bad,),
                seen["kwargs"]["hooks_timeout"] is bad, repr(seen["kwargs"]["hooks_timeout"]))
+            server_mod.laya_predict_batch_tool(requests=BATCH_REQUESTS, batch_size=bad)
+            ok("batch_tool/batch_size_%r_reaches_tools" % (bad,),
+               seen["kwargs"]["batch_size"] is bad, repr(seen["kwargs"]["batch_size"]))
 
         # Out of range reaches the tools layer untouched instead of being folded into "unset".
         for bad in (-1.0, -0.5):
@@ -1447,6 +1471,10 @@ def test_batch_tool_control_forwarding():
                       lambda: laya_predict_batch(BATCH_REQUESTS, hooks_timeout=False,
                                                  router=BatchRouter()),
                       "invalid_hooks_timeout")
+    expect_tool_error("batch_tool/batch_size_false_rejected_downstream",
+                      lambda: laya_predict_batch(BATCH_REQUESTS, batch_size=False,
+                                                 router=BatchRouter()),
+                      "invalid_batch_size")
     expect_tool_error("batch_tool/min_confidence_rejected_downstream",
                       lambda: laya_predict_batch(BATCH_REQUESTS, min_confidence=-0.5,
                                                  router=BatchRouter()),
@@ -1514,6 +1542,66 @@ def test_batch_route():
     expect_tool_error("batch/route_count_mismatch",
                       lambda: laya_route_batch(BATCH_REQUESTS, router=ShortRouter()),
                       "internal_error")
+
+
+def test_route_batch_tool_hooks_timeout_forwarding():
+    """`laya_route_batch_tool` must not fold a boolean `hooks_timeout` into "unset".
+
+    The door collapses `0` to None because MCP clients send a declared default eagerly and
+    `Router.route_batch` reads None as "use my own timeout". But `False == 0`, so that same fold
+    swallowed a caller's `hooks_timeout=false`, which `laya_route_batch` refuses by name
+    (`invalid_hooks_timeout`) -- exactly the collapse the sibling door on `laya_predict_batch`
+    already excludes booleans from, for the reason `test_batch_tool_control_forwarding` states.
+    """
+    import laya.mcp.server as server_mod
+
+    seen = {}
+
+    def fake_wrap(fn, **kwargs):
+        seen["kwargs"] = kwargs
+        return "{}"
+
+    real_router_or_error, real_wrap = server_mod._router_or_error, server_mod._wrap
+
+    def fake_router_or_error():
+        return BatchRouter()
+
+    server_mod._router_or_error = fake_router_or_error
+    server_mod._wrap = fake_wrap
+    try:
+        server_mod.laya_route_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=0)
+        ok("route_batch_tool/hooks_timeout_zero_is_unset", seen["kwargs"]["hooks_timeout"] is None,
+           repr(seen["kwargs"]["hooks_timeout"]))
+        # A JSON client is free to send the default as `0.0` for a declared float, and `0.0 == 0`
+        # while `0.0 is 0` is False -- the collapse has to compare, not test identity.
+        server_mod.laya_route_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=0.0)
+        ok("route_batch_tool/hooks_timeout_float_zero_is_unset",
+           seen["kwargs"]["hooks_timeout"] is None, repr(seen["kwargs"]["hooks_timeout"]))
+        server_mod.laya_route_batch_tool(requests=BATCH_REQUESTS)
+        ok("route_batch_tool/hooks_timeout_default_is_unset", seen["kwargs"]["hooks_timeout"] is None,
+           repr(seen["kwargs"]["hooks_timeout"]))
+        server_mod.laya_route_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=1.5)
+        ok("route_batch_tool/hooks_timeout_forwarded", seen["kwargs"]["hooks_timeout"] == 1.5,
+           repr(seen["kwargs"]["hooks_timeout"]))
+
+        # A bool is never an unset marker, and an out-of-range number is not either: both have to
+        # reach the layer that names them.
+        for bad in (True, False):
+            server_mod.laya_route_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=bad)
+            ok("route_batch_tool/hooks_timeout_%r_reaches_tools" % (bad,),
+               seen["kwargs"]["hooks_timeout"] is bad, repr(seen["kwargs"]["hooks_timeout"]))
+        for bad in (-1.0, -0.5):
+            server_mod.laya_route_batch_tool(requests=BATCH_REQUESTS, hooks_timeout=bad)
+            ok("route_batch_tool/hooks_timeout_%r_reaches_tools" % (bad,),
+               seen["kwargs"]["hooks_timeout"] == bad, repr(seen["kwargs"]["hooks_timeout"]))
+    finally:
+        server_mod._router_or_error, server_mod._wrap = real_router_or_error, real_wrap
+
+    # And the tools layer does refuse them, which is what makes the forwarding observable.
+    expect_tool_error("route_batch_tool/hooks_timeout_false_rejected_downstream",
+                      lambda: laya_route_batch(BATCH_REQUESTS, hooks_timeout=False,
+                                               router=BatchRouter()),
+                      "invalid_hooks_timeout")
 
 
 # --- decide tool (mocked router, no weights) ----------------------------------
@@ -3159,6 +3247,7 @@ test_batch_validation()
 test_batch_predict()
 test_batch_tool_control_forwarding()
 test_batch_route()
+test_route_batch_tool_hooks_timeout_forwarding()
 test_decide()
 test_shortlist_lang_parity()
 test_shortlist_embed_cache()
