@@ -94,31 +94,33 @@ The shipped checkpoints work zero-shot, but fine-tuning on decisions from your o
 
 **[nandhakishorm.github.io/laya](https://nandhakishorm.github.io/laya/)**: guides for [prediction hooks](https://nandhakishorm.github.io/laya/hooks/), [schema-driven decisions](https://nandhakishorm.github.io/laya/structured/), [Docker](https://nandhakishorm.github.io/laya/docker/) and [LangChain and LangGraph](https://nandhakishorm.github.io/laya/langchain/), plus a full [API reference](https://nandhakishorm.github.io/laya/reference/).
 
-## What's new in 0.4.8
+## What's new in 0.4.9
 
-* **`laya-go` runs the model.** `agent.Open`, `Predict`, `PredictBatch` and `PredictLong` answer
-  typed questions over an `infer.Session`, and a nested `laya-go/onnx` module (its own `go.mod`,
-  cgo) runs a fused `laya.onnx` on ONNX Runtime 1.29+. The main module stays standard library
-  only: `go test ./...` there compiles no cgo, and `CGO_ENABLED=0` builds `onnx` too, where
-  `Open` returns `ErrNoCGO`. The goldens are regenerated from Python in CI (#1222, #1233).
-* **A gate parameter that decides nothing is refused.** `--max ece=inf`, `--min accuracy=-inf` and
-  `--tolerance METRIC=1e999` passed every measurement and still exited 0, which is the code that
-  means the gate ran (#1225). A baseline that is not a metric name to number map, or that has no
-  metrics at all, now raises instead of being subtracted through, and `"choice_accuracy": true`
-  no longer compares as 100% (#1223). A report `laya-evals` cannot read is exit 2, not a traceback
-  and exit 1 (#1230). `bins` and `min_bucket_n` are positive integers (#1228), and `ece_score`
-  refuses a `bins` it cannot histogram, which used to return the perfect 0.0 (#1232).
-* **`laya-serve` reads a blank `LAYA_*` value as unset**, which is what a `.env` line or a Compose
-  `KEY=` with nothing after it writes; `LAYA_PRELOAD=` was getting lazy loading nobody asked for
-  (#1226). A bad `LAYA_LOG_LEVEL` exits with a message naming the accepted values instead of a
-  `KeyError` from inside uvicorn (#1227).
-* **Schema-driven decisions read two more shapes correctly.** A non-array `enum` is a
-  `SchemaError` naming the path, where a bare string silently split into per-character options
-  (#1220), and a single-value boolean constraint such as `Literal[True]` stays a one-option choice
-  instead of becoming a noul that could answer `False` (#1235).
-* **`laya.jev_confidence` refuses a negative probability** rather than returning a number outside
-  `[0, 1]`, so the range is now a property of the function (#1238). `setup_laya.sh` detects the
-  platform and hands off to a Linux or macOS script (#1234).
+* **A standalone Python HTTP client.** `sdk/python` holds `laya-client`: synchronous `predict()`
+  and `health()` against a self-hosted `laya-serve`, written on the standard library with zero
+  dependencies, so an application server no longer installs torch to call one (#1264, issue
+  #1176). It refuses redirects so a bearer token is never forwarded, rejects a `base_url`
+  carrying credentials or whitespace, and blocks non-finite JSON in both directions. Install it
+  from this checkout with `python -m pip install ./sdk/python`; it is not on PyPI yet.
+* **`laya-go` gains the confidence gate, hooks and digest verification.** `WithMinConfidence`
+  applies the same abstention gate as the Python runtime, `OnPredictStart`/`End`/`Error` dispatch
+  with timeouts and panic isolation, per-language temperatures are read from the checkpoint, and
+  `laya-go/internal/digest` checks a checkpoint's SHA-256 before loading it, streamed, with path
+  traversal refused (#1247, #1260).
+* **`LAYA_DEVICE=cuda:258` is refused rather than silently asking for GPU 2.** torch keeps a CUDA
+  index in its low 8 bits, so it parses that string and builds `cuda:2`, and `cuda:128` builds
+  `cuda:-128`. A value whose parsed device is not the device it names now raises, naming the
+  variable (#1242).
+* **Three more gate parameters that could not fail.** A tolerance of `Infinity` accepts a drift of
+  any size while the run still exits 0 (#1250), `--revision` naming two different commits for one
+  checkpoint is refused instead of resolved to whichever came last (#1248), and a slice label
+  containing `|` is escaped so a tag like `risk|high` cannot shift every number in its row of a
+  `--markdown` report (#1241). A `Dataset` row built in Python now gets the checks a JSONL row
+  already had, before a single inference call rather than after (#1253).
+* **`LAYA_CPU_AMP=bf16` is documented as a hardware requirement, not a preference.** On a CPU
+  without native BF16 instructions the forward dies with an illegal instruction rather than
+  raising, so `_infer`'s autocast retry cannot catch it. `docs/reference/agent.md` now carries the
+  capability reading to check and a child-process probe to qualify a host.
 
 Earlier releases are in the [GitHub releases](https://github.com/NandhaKishorM/laya/releases).
 
