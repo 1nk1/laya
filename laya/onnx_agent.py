@@ -18,7 +18,6 @@ from laya.common import (
     answer_confidence,
     build_sequence,
     collapsed_options,
-    collate_items,
     confidence_from_probs,
     encode_text,
     render_criterion,
@@ -34,6 +33,43 @@ from laya.common import (
     clamp_temperature,
 )
 from laya.confidence import apply_confidence_gate, check_min_confidence
+
+
+def _collate_items_numpy(batch: List[List[Dict[str, Any]]], pad_id: int) -> Dict[str, np.ndarray]:
+    """Collate encoded question rows across states directly into NumPy arrays for ONNX Runtime."""
+    items = [it for group in batch for it in group]
+    if not items:
+        return {}
+    n = len(items)
+    L = max(len(it["ids"]) for it in items)
+    kmax = max(len(it["markers"]) for it in items)
+    # The exported head takes `topk(2)` of the option probabilities: the eager forward's
+    # one-option branch is a Python `if`, which the trace bakes in, so ONNX Runtime refuses
+    # a run whose questions all have one option. Allocating at least 2 marker columns gives
+    # the masked second slot the act head expects without needing a post-collation np.pad.
+    k_cols = max(kmax, 2)
+
+    ids = np.full((n, L), pad_id, dtype=np.int64)
+    att = np.zeros((n, L), dtype=np.int64)
+    mpos = np.zeros((n, k_cols), dtype=np.int64)
+    mmask = np.zeros((n, k_cols), dtype=bool)
+
+    for i, it in enumerate(items):
+        it_ids = it["ids"]
+        ids[i, :len(it_ids)] = it_ids
+        att[i, :len(it_ids)] = 1
+        markers = it["markers"]
+        k = len(markers)
+        mpos[i, :k] = markers
+        mmask[i, :k] = True
+
+    return {
+        "input_ids": ids,
+        "attention_mask": att,
+        "marker_pos": mpos,
+        "marker_mask": mmask,
+        "qtype": np.array([it["qtype"] for it in items], dtype=np.int64),
+    }
 
 
 class ONNXAgent(HookRegistry):
@@ -786,28 +822,7 @@ class ONNXAgent(HookRegistry):
                 indices = order[offset:offset + chunk]
                 per_state_items = [encoded[i] for i in indices]
 
-                b = collate_items(per_state_items, self.tok.pad_token_id)
-
-                marker_pos = b["marker_pos"].numpy().astype(np.int64)
-                marker_mask = b["marker_mask"].numpy().astype(bool)
-                if marker_pos.shape[1] < 2:
-                    # The exported head takes `topk(2)` of the option probabilities: the eager
-                    # forward's one-option branch is a Python `if`, which the trace bakes in, so
-                    # ONNX Runtime refuses a run whose questions all have one option. A masked
-                    # second slot scores -1e4, is sliced off at decode, and gives the act head the
-                    # zero second probability the eager branch pads in.
-                    width = ((0, 0), (0, 2 - marker_pos.shape[1]))
-                    marker_pos = np.pad(marker_pos, width)
-                    marker_mask = np.pad(marker_mask, width)
-
-                # Prepare ONNX inputs as numpy arrays
-                ort_inputs = {
-                    "input_ids": b["input_ids"].numpy().astype(np.int64),
-                    "attention_mask": b["attention_mask"].numpy().astype(np.int64),
-                    "marker_pos": marker_pos,
-                    "marker_mask": marker_mask,
-                    "qtype": b["qtype"].numpy().astype(np.int64),
-                }
+                ort_inputs = _collate_items_numpy(per_state_items, self.tok.pad_token_id)
 
                 # Run ONNX inference
                 ort_outs = self.session.run(["logits", "act_logits"], ort_inputs)
@@ -817,7 +832,7 @@ class ONNXAgent(HookRegistry):
                 # Compute softmax for actions manually in numpy
                 act_exp = np.exp(act_logits - np.max(act_logits, axis=-1, keepdims=True))
                 act = act_exp / np.sum(act_exp, axis=-1, keepdims=True)
-                att = b["attention_mask"]
+                att = ort_inputs["attention_mask"]
 
                 row = 0
                 for index, items in zip(indices, per_state_items):
