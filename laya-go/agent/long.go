@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -47,14 +48,20 @@ type LongPrediction struct {
 // WithWindow, WithStride, WithBatchSize (windows per run; by default the scan bounds a run as
 // laya's window_batch_cap does) and WithLanguage apply. A *StateError names a window, not the
 // state. Errors are those of PredictBatch, and sequence.ErrNoRoom and sequence.ErrStrideGap when
-// the questions leave no room or the stride leaves gaps. The confidence gate and hooks are not
-// applied, and Go has no calibration.
+// the questions leave no room or the stride leaves gaps. WithMinConfidence and
+// WithMinConfidenceMap are refused with an error before any work, as Python raises TypeError for
+// min_confidence; hooks are not applied, and Go has no calibration.
 func (a *Agent) PredictLong(ctx context.Context, state any, qs schema.Questions, opts ...CallOption) (LongPrediction, error) {
 	var c call
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&c)
 		}
+	}
+	if c.gated {
+		// Python's predict_long has no min_confidence argument (TypeError); ignoring the option
+		// would return ungated answers to a caller who asked for a gate.
+		return LongPrediction{}, errors.New("agent: PredictLong takes no confidence gate; use Predict or PredictBatch with WithMinConfidence")
 	}
 	if err := ctx.Err(); err != nil {
 		return LongPrediction{}, err

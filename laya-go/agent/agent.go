@@ -176,6 +176,11 @@ type call struct {
 	sort   bool
 	window int
 	stride int
+
+	// gated is set by WithMinConfidence or WithMinConfidenceMap; minConfidence is then a float64
+	// or a pyjson.Object, checked by checkMinConfidence.
+	gated         bool
+	minConfidence any
 }
 
 // WithLanguage names the request's language as a BCP 47 tag. Its primary subtag selects a
@@ -211,7 +216,12 @@ func (a *Agent) Predict(ctx context.Context, state any, qs schema.Questions, opt
 // list or dict. With no questions each state gets an empty answer and zero usage, with no model
 // run.
 //
+// WithMinConfidence or WithMinConfidenceMap gates every answer: it sets low_confidence,
+// abstention and abstention_threshold as laya does. An invalid threshold is refused first, as a
+// *MinConfidenceError, before any state is encoded or run.
+//
 // Errors may be wrapped; match them with errors.Is and errors.As:
+//   - *MinConfidenceError, for an invalid threshold, before anything else is checked;
 //   - ErrClosed, once Close has been called (a context already done is reported first);
 //   - ctx.Err(), checked on entry, before each state is encoded and between runs;
 //   - *StateError, naming the state, around sequence.ErrUnsupportedState (also for a nil
@@ -225,6 +235,14 @@ func (a *Agent) PredictBatch(ctx context.Context, states []any, qs schema.Questi
 			opt(&c)
 		}
 	}
+	// Validated up front, as laya does, so a bad threshold fails before any work.
+	var g *gate
+	if c.gated {
+		var err error
+		if g, err = checkMinConfidence(c.minConfidence); err != nil {
+			return nil, err
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -232,7 +250,14 @@ func (a *Agent) PredictBatch(ctx context.Context, states []any, qs schema.Questi
 		return nil, err
 	}
 	defer a.leave()
-	return a.predictStates(ctx, states, qs, c)
+	preds, err := a.predictStates(ctx, states, qs, c)
+	if err != nil {
+		return nil, err
+	}
+	if g != nil {
+		g.apply(preds)
+	}
+	return preds, nil
 }
 
 // predictStates is PredictBatch past the entry checks, for a caller that has already entered.
