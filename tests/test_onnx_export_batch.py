@@ -202,7 +202,7 @@ check("names/outputs are the literal contract", export_onnx.OUTPUT_NAMES,
       ["logits", "act_logits"])
 
 _agent_src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "laya", "onnx_agent.py")).read()
+                               "laya", "onnx_agent.py"), encoding="utf-8").read()
 check_true("names/onnx_agent runs the same output names in the same order",
            'session.run(["logits", "act_logits"]' in _agent_src, "")
 for _n in export_onnx.INPUT_NAMES:
