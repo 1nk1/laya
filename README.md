@@ -382,6 +382,10 @@ pip install "laya[serve]"
 python examples/server.py               # http://127.0.0.1:8000
 ```
 
+On Windows, `start.bat` does the same from a clone: it creates `.venv` with whichever supported
+Python is installed, installs CPU torch and the `serve` extra on first run, then starts the server
+and opens the browser. `start.bat 8080` picks a different port.
+
 Open `http://127.0.0.1:8000` in a browser for the playground, or hit it directly:
 
 ```bash

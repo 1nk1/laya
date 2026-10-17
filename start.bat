@@ -1,15 +1,24 @@
 @echo off
-rem Start the Laya web UI + API on http://localhost:8055
-rem Usage: start.bat [port]      (default port 8055)
-setlocal
+rem Start the Laya web UI + API on http://localhost:8000
+rem Usage: start.bat [port]      (default port 8000, same as examples/server.py)
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 set "PORT=%~1"
-if "%PORT%"=="" set "PORT=8055"
+if "%PORT%"=="" set "PORT=8000"
 
 if not exist ".venv\Scripts\python.exe" (
-    echo [setup] Creating virtual environment ^(Python 3.12^)...
-    py -3.12 -m venv .venv || goto :fail
+    rem Any interpreter the package supports, newest first. Pinning one version fails on a
+    rem machine that has a different supported one: pyproject declares >=3.10 and LOCAL_SETUP.md
+    rem documents a 3.11 venv, so a hard py -3.12 could not set up the repo it ships in.
+    echo [setup] Creating virtual environment...
+    set "PYEXE="
+    for %%V in (3.13 3.12 3.11 3.10) do if not defined PYEXE (py -%%V -c "pass" >nul 2>&1 && set "PYEXE=py -%%V")
+    if not defined PYEXE (
+        echo [error] No supported Python found. Install Python 3.10 or newer from python.org.
+        exit /b 1
+    )
+    !PYEXE! -m venv .venv || goto :fail
     ".venv\Scripts\python.exe" -m pip install -q --upgrade pip || goto :fail
     ".venv\Scripts\python.exe" -m pip install -q torch --index-url https://download.pytorch.org/whl/cpu || goto :fail
     ".venv\Scripts\python.exe" -m pip install -q -e ".[serve]" || goto :fail
