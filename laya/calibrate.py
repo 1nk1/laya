@@ -14,7 +14,9 @@ Two sample floors, on purpose:
 
 Fitted temperatures go through `clamp_temperature` and therefore `[TEMP_MIN, TEMP_MAX]`
 from `laya.common`, the same guard checkpoint load uses. There is no second pair of
-bounds in this module.
+bounds in this module. A clamp that moved a fit is reported in `fit_temperature_map`'s
+`temperature_clamped`, since the clamped value alone cannot say whether the optimum was
+the bound or merely beyond it.
 """
 import warnings
 from numbers import Integral
@@ -24,6 +26,7 @@ import numpy as np
 import torch
 
 from .common import (
+    QTYPE_NAMES,
     QTYPES,
     TEMP_MAX,
     TEMP_MIN,
@@ -130,19 +133,15 @@ def _pairs_by_width(pairs: Sequence) -> List[Tuple[torch.Tensor, torch.Tensor]]:
              torch.from_numpy(np.stack([t for _t, t in groups[w]]))) for w in sorted(groups)]
 
 
-def fit_one_temperature(pairs: Sequence, min_n: Optional[int] = None) -> float:
-    """Fit one scalar T by NLL + LBFGS on log T.
+def _fit_unclamped_temperature(pairs: Sequence, min_n: Optional[int] = None) -> float:
+    """The optimised scale before `clamp_temperature`, for callers that report the clamp.
 
-    The result is `clamp_temperature` of the optimised scale, so it lies in
-    `[TEMP_MIN, TEMP_MAX]` (or is the neutral 1.0 when the value is not a number).
-    The search is bounded to `LOG_T_MARGIN` e-folds outside that band, which covers any
-    minimum the answer can use; past it the float32 scale drifts toward `exp()` underflow,
-    where the objective divides by zero and every gradient becomes NaN, and
-    `clamp_temperature` reads that NaN back as the neutral 1.0.
-    Returns 1.0 when fewer than `min_n` pairs are given. `min_n` defaults to
-    `MIN_BUCKET_N` (the per-bucket floor). Type-level fits pass `MIN_TYPE_N`, which
-    is lower, so a dataset that fills no bucket still gets a scalar instead of
-    staying at 1.0.
+    `fit_one_temperature` is this value clamped, and that is the value anything installs.
+    Only the clamp reporting in `_fit_groups` reads the raw scale, so that a bucket whose
+    optimum sits outside `[TEMP_MIN, TEMP_MAX]` can be told apart from one whose optimum
+    really is a bound. The search band is `LOG_T_MARGIN` e-folds wider than the answer
+    band, so a raw value can be far outside it; a NaN from the underflow case described in
+    `fit_one_temperature` reaches the caller as a NaN rather than as 1.0.
     """
     if min_n is None:
         min_n = MIN_BUCKET_N
@@ -176,8 +175,28 @@ def fit_one_temperature(pairs: Sequence, min_n: Optional[int] = None) -> float:
             return loss
 
         opt.step(closure)
-    fitted = float(log_t.detach().clamp(min=log_lo, max=log_hi).exp().item())
-    return clamp_temperature(fitted, TEMP_MIN, TEMP_MAX)
+    return float(log_t.detach().clamp(min=log_lo, max=log_hi).exp().item())
+
+
+def fit_one_temperature(pairs: Sequence, min_n: Optional[int] = None) -> float:
+    """Fit one scalar T by NLL + LBFGS on log T.
+
+    The result is `clamp_temperature` of the optimised scale, so it lies in
+    `[TEMP_MIN, TEMP_MAX]` (or is the neutral 1.0 when the value is not a number).
+    The search is bounded to `LOG_T_MARGIN` e-folds outside that band, which covers any
+    minimum the answer can use; past it the float32 scale drifts toward `exp()` underflow,
+    where the objective divides by zero and every gradient becomes NaN, and
+    `clamp_temperature` reads that NaN back as the neutral 1.0.
+    Returns 1.0 when fewer than `min_n` pairs are given. `min_n` defaults to
+    `MIN_BUCKET_N` (the per-bucket floor). Type-level fits pass `MIN_TYPE_N`, which
+    is lower, so a dataset that fills no bucket still gets a scalar instead of
+    staying at 1.0.
+
+    A clamped result is indistinguishable from an optimum that really is a bound, because
+    both are the bound. `fit_temperature_map`'s `temperature_clamped` is where the
+    difference is reported; it carries the unclamped scale beside the value installed.
+    """
+    return clamp_temperature(_fit_unclamped_temperature(pairs, min_n), TEMP_MIN, TEMP_MAX)
 
 
 def _iter_records(records: Iterable) -> List[Tuple[int, np.ndarray, np.ndarray, int]]:
@@ -273,20 +292,40 @@ def _ece_split(recs, seed):
     return fit_recs, eval_recs, excluded
 
 
+def _clamp_entry(raw: float, applied: float) -> Optional[Dict[str, Any]]:
+    """Describe a fit the clamp moved, or None when it left the fit alone.
+
+    A NaN raw scale is the underflow case, not a clamp: `clamp_temperature` answers the
+    neutral 1.0 for it, which is a different fact and is not reported here.
+    """
+    if not np.isfinite(raw) or TEMP_MIN <= raw <= TEMP_MAX:
+        return None
+    return {"fitted": raw, "applied": applied, "bound": "min" if raw < TEMP_MIN else "max"}
+
+
 def _fit_groups(by_type, by_bucket):
     temperature = [1.0] * N_QTYPES
+    clamped: Dict[str, Dict[str, Any]] = {}
     for qt in range(N_QTYPES):
         pairs = by_type[qt]
         # MIN_TYPE_N, not MIN_BUCKET_N: the scalar has to exist when every bucket is small.
         if len(pairs) >= MIN_TYPE_N:
-            temperature[qt] = fit_one_temperature(pairs, min_n=MIN_TYPE_N)
+            raw = _fit_unclamped_temperature(pairs, min_n=MIN_TYPE_N)
+            temperature[qt] = clamp_temperature(raw, TEMP_MIN, TEMP_MAX)
+            entry = _clamp_entry(raw, temperature[qt])
+            if entry is not None:
+                clamped[QTYPE_NAMES[qt]] = entry
 
     temperature_by_options = {}
     for key, pairs in by_bucket.items():
         if len(pairs) < MIN_BUCKET_N:
             continue
-        temperature_by_options[key] = fit_one_temperature(pairs)
-    return temperature, temperature_by_options
+        raw = _fit_unclamped_temperature(pairs)
+        temperature_by_options[key] = clamp_temperature(raw, TEMP_MIN, TEMP_MAX)
+        entry = _clamp_entry(raw, temperature_by_options[key])
+        if entry is not None:
+            clamped[key] = entry
+    return temperature, temperature_by_options, clamped
 
 
 def fit_temperature_map(records: Iterable, compute_ece: bool = False, seed: int = 0) -> Dict[str, Any]:
@@ -307,6 +346,16 @@ def fit_temperature_map(records: Iterable, compute_ece: bool = False, seed: int 
     value is a `ValueError` naming `seed` on either path, not numpy's cast error on one path
     and silence on the other. `seed=None` stays numpy's entropy seed: accepted, and the split
     is then not reproducible.
+    `temperature_clamped` names every fit the clamp moved, on either path: a bucket key as
+    `temperature_by_options` spells it, or a question-type name for one of the `temperature`
+    scalars. Each entry carries `fitted` (the unclamped optimum), `applied` (the value in
+    this result) and `bound`, `"min"` or `"max"`. It is empty when nothing was clamped, and
+    it reports a fact a caller cannot otherwise recover: a value of exactly `TEMP_MIN` or
+    `TEMP_MAX` is what both a clamped fit and a genuine fit on the bound look like, so
+    without this an optimum of 0.387 installs as 0.5 and reads as a finished fit. The
+    clamped value is still the one to install, because `load_calibration` applies the same
+    bounds at checkpoint load; what the entry adds is that the data wanted to go further.
+
     `report["n"]` is the number of records passed in; `report["n_eval"]` is the held-out
     count the ECE rests on. A bucket that would drop below `MIN_BUCKET_N` after the
     holdout is fit on all of its records, left out of the eval set, and named in
@@ -328,11 +377,12 @@ def fit_temperature_map(records: Iterable, compute_ece: bool = False, seed: int 
         excluded = []
         by_type, by_bucket = all_by_type, all_buckets
 
-    temperature, temperature_by_options = _fit_groups(by_type, by_bucket)
+    temperature, temperature_by_options, clamped = _fit_groups(by_type, by_bucket)
     out: Dict[str, Any] = {
         "temperature": temperature,
         "temperature_by_options": temperature_by_options,
         "n_by_bucket": n_by_bucket,
+        "temperature_clamped": clamped,
     }
     if compute_ece:
         report = _ece_report(eval_recs, temperature, temperature_by_options)
