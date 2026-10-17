@@ -1295,6 +1295,37 @@ for param in ALL_HOOK_KWARGS:
     check_true("hooks/%s is an Agent.predict parameter" % param, param in agent_params)
     check_true("hooks/%s is a Router.predict parameter" % param, param in router_params)
 
+
+# --------------------------------------------------------------- 7c. The control family, derived
+#
+# `laya/integrations/_controls.py` says the shared tuples are checked by this suite and that this
+# suite asserts every wrapper's constructor accepts all of them. The two literals above name the
+# controls by copying them, so neither half happens here: tests/test_crewai.py and
+# tests/test_llamaindex.py read their control set out of the module, which makes a control added
+# there fail those suites, while the copies here keep their old five and seven names and this suite
+# stays green while the new control is dropped at every LangChain entry point. Derive the union and
+# pin it against both the copies and the constructors.
+CONTROLS = (tuple(_controls.PREDICT_CONTROLS) + tuple(_controls.DECISION_CONTROLS)
+            + tuple(_controls.HOOK_CONTROLS))
+
+check("controls/ALL_HOOK_KWARGS covers HOOK_CONTROLS",
+      set(ALL_HOOK_KWARGS), set(_controls.HOOK_CONTROLS))
+check("controls/DECISION_ALL_CONTROLS covers the bypass family", set(DECISION_ALL_CONTROLS),
+      set(_controls.PREDICT_CONTROLS) | set(_controls.HOOK_CONTROLS))
+
+for cls in (LayaRouter, LayaGuardrail, LayaTriage, LayaEvaluator):
+    init_params = set(inspect.signature(cls.__init__).parameters)
+    for _c in CONTROLS:
+        check_true("controls/%s takes %s" % (cls.__name__, _c), _c in init_params)
+
+# `LayaDecision` bypasses `_execute_decision` and calls `decide` directly, so it is driven by its
+# own seven-name literal rather than the union; the two `DECISION_CONTROLS` it omits are a gap in
+# the wrapper, not in this list.
+for _c in tuple(_controls.PREDICT_CONTROLS) + tuple(_controls.HOOK_CONTROLS):
+    check_true("controls/LayaDecision takes %s" % _c,
+               _c in set(inspect.signature(LayaDecision.__init__).parameters))
+
+
 class Watcher:
     """A minimal lifecycle hook; only its identity matters to the node under test."""
 
