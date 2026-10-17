@@ -441,6 +441,15 @@ Measured on the running server: 64 real reviews of 91–2,293 characters, one ch
 `batch_size: 8` on its own was 4.95s, so the length grouping is what earns the second factor:
 1.66x over the sized batch.
 
+### Python HTTP client
+
+Applications that call a separate `laya-serve` can use the
+[Python HTTP client](https://github.com/NandhaKishorM/laya/blob/main/sdk/python/README.md)
+without installing the inference dependencies. It provides synchronous `predict()` and
+`health()` calls using the standard library. From this checkout, install it with
+`python -m pip install ./sdk/python` in the application environment; keep `laya[serve]`
+in the server environment. The separate `laya-client` distribution is not yet published to PyPI.
+
 ### JavaScript / TypeScript
 
 [`laya-client`](https://github.com/NandhaKishorM/laya/blob/main/sdk/typescript/README.md) supports JavaScript and TypeScript

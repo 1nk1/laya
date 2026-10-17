@@ -5,6 +5,10 @@ against Jev -- `hs-jev`, `typesafe-sdk`, or your own -- can point its base URL a
 keep working: Laya's `predict()` output is already schema-compatible, and the server adds only the
 HTTP surface: one decision route, a health probe, an optional bearer check and request limits.
 
+The [Python HTTP client](https://github.com/NandhaKishorM/laya/blob/main/sdk/python/README.md)
+provides synchronous `predict` and `health` calls with no runtime dependencies. Install it
+from `sdk/python` in the application environment to keep the inference stack on the server.
+
 A client that targets `laya-serve` rather than the Jev API exists for PHP:
 [`marcreichel/laya-php`](https://github.com/marcreichel/laya-php) is a Composer SDK (PHP 8.4+)
 that maps a class of enums and attributes onto questions and returns an instance, reads `GET /health`

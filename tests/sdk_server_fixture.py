@@ -1,4 +1,5 @@
-"""Serve a tiny offline checkpoint for the JavaScript integration test, never for production."""
+"""Serve a tiny offline checkpoint for SDK integration tests, never for production."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,10 @@ from laya.serve import create_app  # noqa: E402
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--strict", action="store_true")
+    parser.add_argument("--tournament", action="store_true")
+    args = parser.parse_args()
     torch.manual_seed(7)
     torch.set_num_threads(1)
     with tempfile.TemporaryDirectory(prefix="laya-sdk-test-") as directory:
@@ -60,7 +65,8 @@ def main():
             router.attach(name, agent)
         os.environ["LAYA_API_KEY"] = "integration-test"
         # This fixture exercises the default HTTP contract, including its confidence extension.
-        os.environ["LAYA_JEV_STRICT"] = "0"
+        os.environ["LAYA_JEV_STRICT"] = "1" if args.strict else "0"
+        os.environ["LAYA_TOURNAMENT_GROUP"] = "2" if args.tournament else "0"
         app = create_app(router)
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
