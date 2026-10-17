@@ -273,6 +273,12 @@ One JSON object per line (JSONL). Blank lines and lines starting with `#` are ig
 
 `research/evals/dataset.template.jsonl` has a commented example.
 
+A row built in Python with `Example(...)` is held to the same three rules as a JSONL row: `Dataset`
+refuses one whose `questions` or `expected` is not an object, or whose `expected` names a question
+`questions` does not carry, and quotes the row's index in the message. Both routes fail as
+`EvalError` before the first model call, so a mistake in a dataset never arrives as a verdict about
+the runner.
+
 ## Metrics
 
 Each metric is computed per answer where it applies and aggregated over the dataset:

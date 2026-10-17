@@ -9,6 +9,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import types
 import warnings
 
 import numpy as np
@@ -758,6 +759,108 @@ def test_dataset_rejects_malformed_json_and_empty(tmp_path):
     empty.write_text("# only a comment\n", encoding="utf-8")
     with pytest.raises(EvalError):
         Dataset.from_jsonl(str(empty))
+
+
+# A row built in Python never passes through `Example.from_dict`, which is the only place these three
+# checks were made: `questions` and `expected` must be objects, and every `expected` key must name a
+# question that is actually there. Every reader takes the two fields as mappings, so a row that
+# skipped the checks reached `evaluate`'s scoring loop (`laya/evals.py:1205`), `questions_fingerprint`
+# (`laya/evals.py:285`) or an opt-in door's `_validate_dataset` as an unhandled ``AttributeError`` --
+# or got as far as the runner and came back as a verdict *about the runner*. `Dataset` is the one door
+# all four readers share, so the refusal names the row and lands before a call is paid for.
+@pytest.mark.parametrize("field, value, fragment", [
+    ("expected", True, "'expected' must be an object keyed by question id, got bool"),
+    ("expected", "a", "'expected' must be an object keyed by question id, got str"),
+    ("expected", ["a"], "'expected' must be an object keyed by question id, got list"),
+    ("expected", 1, "'expected' must be an object keyed by question id, got int"),
+    ("questions", ["a"], "'questions' must be an object, got list"),
+    ("questions", None, "'questions' must be an object, got NoneType"),
+    ("questions", "a", "'questions' must be an object, got str"),
+    # A read-only Mapping walked every reader on `4ac226d5`, so refusing it is the one place this
+    # guard narrows what a Python caller could pass. It is the narrowing `Example.from_dict` already
+    # applies to a JSONL row and the shape `docs/evals.md` documents -- "a Laya question dict" -- so
+    # the two routes now ask for the same thing, and a duck-typed check would quietly reopen this.
+    ("questions", types.MappingProxyType(Q), "'questions' must be an object, got mappingproxy"),
+])
+def test_dataset_refuses_a_row_whose_maps_are_not_objects(field, value, fragment):
+    row = {"state": "s1", "questions": Q, "expected": {"intent": "a"}}
+    row[field] = value
+    with pytest.raises(EvalError) as exc:
+        Dataset([Example(**row)])
+    assert str(exc.value) == "example 0 " + fragment
+
+
+@pytest.mark.parametrize("expected, names", [
+    ({"nope": "a"}, "nope"),
+    # Sorted, so the same mistake in two runs reads as one error rather than two.
+    ({"intent": "a", "nope": "b", "also": "c"}, "also, nope"),
+])
+def test_dataset_refuses_an_expected_key_no_question_backs(expected, names):
+    with pytest.raises(EvalError) as exc:
+        Dataset([Example("s1", Q, expected)])
+    assert str(exc.value) == "example 0 'expected' names unknown question(s): " + names
+
+
+def test_the_row_refusal_names_the_offender_and_costs_no_inference():
+    class Counting:
+        """Answers the question ids it was handed, the way a real runner does."""
+
+        def __init__(self):
+            self.calls = 0
+
+        def predict(self, state, questions, model=None):
+            self.calls += 1
+            return {"model": "stub",
+                    "answers": {qid: choice_answer("a") for qid in (questions or [])}}
+
+    runner, good, bad = Counting(), Example("s1", Q, {"intent": "a"}), Example("s2", Q, True)
+    with pytest.raises(EvalError) as exc:
+        evaluate(runner, Dataset([good, bad]))
+    assert "example 1 'expected'" in str(exc.value), "the offending row is named, not just the class"
+    assert runner.calls == 0, "the refusal lands before the dataset is run"
+    # All three refusals land with nothing paid for. Measured on `4ac226d5`, every one of these cost a
+    # runner call first: a `questions` list whose id is not an expected key came back as "runner
+    # returned no answer for question 'intent'", a list carrying the expected id scored and then died
+    # in `questions_fingerprint` on the way out, and an unbacked expected key is the same
+    # runner-verdict shape `from_dict` has always refused for a JSONL row.
+    for row in (Example("s1", ["a"], {"intent": "a"}),
+                Example("s1", ["intent"], {"intent": "a"}),
+                Example("s1", None, {"intent": "a"}),
+                Example("s1", Q, {"nope": "a"}),
+                Example("s1", Q, True)):
+        silent = Counting()
+        with pytest.raises(EvalError) as exc:
+            evaluate(silent, Dataset([row]))
+        assert silent.calls == 0, row
+        assert str(exc.value).startswith("example 0 "), row
+    with pytest.raises(EvalError):
+        evals.questions_fingerprint(Dataset([Example("s1", ["intent"], {"intent": "a"})]))
+    with pytest.raises(EvalError):
+        evals.questions_fingerprint(Dataset([bad]))
+    assert len(evals.questions_fingerprint(Dataset([good]))) == 64
+
+
+def test_the_jsonl_door_and_the_python_door_refuse_the_same_rows():
+    # `Example.from_dict` is the JSONL route's door and quotes the row as "row 0"; `Dataset` is the
+    # route every Python caller takes. Same check, same reason, different prefix -- which is what
+    # makes this one row shape with one meaning rather than two dialects.
+    for row in ({"state": "s1", "questions": Q, "expected": True},
+                {"state": "s1", "questions": ["intent"], "expected": {"intent": "a"}},
+                {"state": "s1", "questions": Q, "expected": {"nope": "a"}}):
+        with pytest.raises(EvalError) as via_jsonl:
+            Example.from_dict(dict(row), where="row 0")
+        with pytest.raises(EvalError) as via_python:
+            Dataset([Example(**row)])
+        reason = str(via_jsonl.value).removeprefix("row 0 ")
+        assert str(via_python.value).removeprefix("example 0 ").startswith(reason), row
+
+
+def test_a_row_with_an_empty_expected_map_is_still_accepted():
+    # Refusing the type is not refusing an unlabelled row: `expected={}` is a mapping, names no
+    # question, and scores nothing. That is the shape this guard has to leave alone.
+    dataset = Dataset([Example("s1", Q, {})])
+    report = evaluate(StubRunner({"s1": {"intent": choice_answer("a")}}), dataset)
+    assert report.cases == []
 
 
 # --------------------------------------------------------------- evaluate

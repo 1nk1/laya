@@ -202,6 +202,29 @@ class Dataset:
 
     def __init__(self, examples: Iterable[Example]):
         self.examples: List[Example] = list(examples)
+        # `Example.from_dict` refuses a JSONL row whose `questions` or `expected` is not an object, or
+        # whose `expected` names a question `questions` does not carry. A row built in Python with
+        # `Example(...)` skipped all three, and every reader of it takes the two fields as mappings: a
+        # non-object `expected` died as an unhandled ``AttributeError``, in `evaluate` only after the
+        # runner had answered (`laya/evals.py:1205`), and a non-object `questions` leaked through
+        # `questions_fingerprint` (`laya/evals.py:285`). An `expected` key with no question behind it
+        # was answered with "runner returned no answer for question 'x'" -- a verdict about the runner,
+        # paid for with a whole inference run, for a mistake in the caller's row. The two opt-in doors
+        # refused the same rows before calling anything, but as tracebacks
+        # (`laya/evals_shortlist.py:38`, `laya/evals_tournament.py:33`). Checking at the door all four
+        # readers share names the row and lands before a single call: a leaked traceback exits 1, the
+        # code `laya-evals` reserves for a failed threshold (`laya/evals_cli.py:591`).
+        for index, example in enumerate(self.examples):
+            if not isinstance(example.questions, dict):
+                raise EvalError("example %d 'questions' must be an object, got %s"
+                                % (index, type(example.questions).__name__))
+            if not isinstance(example.expected, dict):
+                raise EvalError("example %d 'expected' must be an object keyed by question id, got %s"
+                                % (index, type(example.expected).__name__))
+            unknown = sorted(set(example.expected) - set(example.questions))
+            if unknown:
+                raise EvalError("example %d 'expected' names unknown question(s): %s"
+                                % (index, ", ".join(unknown)))
 
     def __len__(self) -> int:
         return len(self.examples)
