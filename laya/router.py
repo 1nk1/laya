@@ -1713,6 +1713,8 @@ class Router(HookRegistry):
                 # checkpoint group again on what the start hooks left, so a rewritten question
                 # set or `ctx.max_len` only applies to its own request.
                 question_groups: List[Dict[str, Any]] = []
+                last_questions = None
+                last_schema = None
                 for i, ctx in zip(indices, started):
                     if ctx.results is not None:
                         # A cache hit short-circuits inference; keep the `routing` key predict adds.
@@ -1722,9 +1724,12 @@ class Router(HookRegistry):
                         continue
                     # Pass token-budget overrides only when set, as `predict` does, so an
                     # Agent-like object that does not accept them still works.
-                    overrides = {key: value for key, value in (("max_len", ctx.max_len),
-                                                               ("head_max_len", ctx.head_max_len))
-                                 if value is not None}
+                    if ctx.max_len is None and ctx.head_max_len is None:
+                        overrides = {}
+                    else:
+                        overrides = {key: value for key, value in (("max_len", ctx.max_len),
+                                                                   ("head_max_len", ctx.head_max_len))
+                                     if value is not None}
                     # `predict` forwards the language of the request so the agent can apply its
                     # per-language temperatures; the batched path forwarded only the token
                     # budgets, so the same request scored differently depending on the entry
@@ -1739,7 +1744,12 @@ class Router(HookRegistry):
                             lang_key = detection.get("language")
                     # Order-sensitive at every nesting level (#166): options are positional, so two
                     # equal schemas with different key orders must not share a group.
-                    schema = _question_schema(ctx.questions)
+                    if ctx.questions is last_questions:
+                        schema = last_schema
+                    else:
+                        schema = _question_schema(ctx.questions)
+                        last_questions = ctx.questions
+                        last_schema = schema
                     for group in question_groups:
                         if (group["schema"] == schema and group["overrides"] == overrides
                                 and group["lang"] == lang_key):
