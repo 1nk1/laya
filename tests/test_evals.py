@@ -777,6 +777,161 @@ def test_evaluate_overall_and_slices():
     assert "choice_accuracy" in report.to_markdown()
 
 
+# --------------------------------------------------------------- markdown cells
+def _markdown_cells(line):
+    """Split one table row on its *unescaped* pipes, turning `\\|` back into a literal one.
+
+    Read left to right, a backslash escapes the character after it, so `\\\\\\|` is an escaped
+    backslash followed by a column boundary while `\\|` is a pipe inside the cell.
+    `str.split("|")` cannot tell the two apart -- it splits the escaped row this test is about,
+    which is the failure being reported -- so the scan is explicit here rather than in the product
+    code, where the writer has no reason to read its own output back.
+    """
+    cells, current, index = [], [], 0
+    while index < len(line):
+        char = line[index]
+        if char == "\\" and index + 1 < len(line):
+            current.append(line[index + 1])
+            index += 2
+            continue
+        if char == "|":
+            cells.append("".join(current))
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    cells.append("".join(current))
+    if line.startswith("|"):
+        cells = cells[1:]           # the text before the first pipe is empty
+    if line.endswith("|"):
+        cells = cells[:-1]          # ... and so is the text after the last
+    return [cell.strip() for cell in cells]
+
+
+def _markdown_slice_table(report, dimension):
+    """`{label: {metric: cell}}` for one `### by <dimension>` table, paired through its header."""
+    lines = report.to_markdown().splitlines()
+    body = lines[lines.index("### by %s" % dimension) + 1:]
+    header, rows = None, []
+    for line in body:
+        if line.startswith("###"):
+            break
+        if not line.startswith("|"):
+            continue
+        cells = _markdown_cells(line)
+        if all(cell and set(cell) <= set("-:") for cell in cells):
+            continue                                # the |---|---| separator row
+        if header is None:
+            header = cells
+            continue
+        assert len(cells) == len(header), \
+            "%r has %d cells for a %d-column header: %r" % (line, len(cells), len(header), cells)
+        rows.append(cells)
+    assert header and rows, "no %s table in the report" % dimension
+    return {cells[0]: dict(zip(header[1:], cells[1:])) for cells in rows}
+
+
+def _tagged_report(tags):
+    """A report whose `tag` slice has exactly these groups, two scored cases each.
+
+    Two cases per group land every metric in every cell (a single case leaves some of the
+    calibration columns empty), and each group gets its own confidence so the columns hold
+    different numbers -- a row shifted by one header then pairs a figure with the wrong name
+    instead of swapping two that happen to look alike.
+    """
+    examples, by_state = [], {}
+    for group, tag in enumerate(tags):
+        for case, expected in enumerate(("a", "b")):
+            state = "s%d%d" % (group, case)
+            # the group's first case answers right and its second wrong, so accuracy is 0.5
+            wrong = "b" if expected == "a" else "a"
+            examples.append(Example(state, Q, {"intent": expected}, tags=[tag]))
+            by_state[state] = {"intent": choice_answer(expected if case == 0 else wrong,
+                                                        confidence=0.9 - 0.05 * group)}
+    report = evaluate(StubRunner(by_state), Dataset(examples),
+                      evaluators=[ChoiceAccuracy(), MeanConfidence()])
+    assert sorted(report.slices["tag"]) == sorted(str(t) for t in tags)
+    return report
+
+
+def _assert_columns_pair(report, dimension, groups):
+    """Every figure sits under its own metric name, for every group in the table.
+
+    `groups` maps each rendered label to the key the slice is stored under; the two differ only for
+    a label whose line break was flattened into a space.
+    """
+    table = _markdown_slice_table(report, dimension)
+    assert sorted(table) == sorted(groups)
+    for label, data_label in groups.items():
+        row = table[label]
+        scores = report.slices[dimension][data_label]
+        assert sorted(row) == sorted(scores)
+        for metric, value in scores.items():
+            assert row[metric] == "%.4f" % value, "%s / %s" % (label, metric)
+
+
+def test_markdown_escapes_a_pipe_in_a_slice_label():
+    """A `|` in a group label is cell content, not a column boundary.
+
+    `tags` are any string the dataset author wrote -- `Example.from_dict` coerces them with `str`
+    rather than restricting them -- and this report is what a reader of `laya-evals run --markdown`
+    pairs numbers against. An unescaped pipe made that row one cell wider than its header, so every
+    figure after the label moved one header to the left and the last was dropped: `choice_accuracy`
+    showed the label's own second half, and the row that lost a value lost it silently.
+    """
+    report = _tagged_report(["risk|high", "plain"])
+    assert "| risk\\|high |" in report.to_markdown()
+    _assert_columns_pair(report, "tag", {"plain": "plain", "risk|high": "risk|high"})
+
+
+def test_markdown_keeps_a_label_with_a_line_break_on_one_row():
+    """A newline (or carriage return) in a label ends the row, taking its numbers out of the table.
+
+    `splitlines()` counts the physical rows the way a Markdown parser does: an unescaped break put
+    half a label on one line and the rest of the row, numbers included, on an unnumbered second
+    line that no header covers. Both breaks become spaces, which keeps the row intact and leaves
+    the label readable -- at the cell only, since the slice stays keyed by the label the dataset
+    wrote, so `--json` and `--markdown` still describe the same group.
+    """
+    report = _tagged_report(["two\nlines", "cr\rreturn", "plain"])
+    lines = report.to_markdown().splitlines()
+    table_rows = [line for line in lines[lines.index("### by tag"):] if line.startswith("|")]
+    assert len(table_rows) == 5, table_rows          # header, separator, one row per group
+    _assert_columns_pair(report, "tag", {"two lines": "two\nlines",
+                                         "cr return": "cr\rreturn", "plain": "plain"})
+
+
+def test_markdown_escapes_a_backslash_before_the_pipe_escape():
+    """`\\` is doubled first, so a trailing backslash cannot swallow the escape that follows it.
+
+    A label ending in a backslash is ordinary data (`C:\\temp\\`), and writing only the pipe would
+    put that backslash in front of the escape for the *next* cell's boundary. The reader would then
+    take the boundary as a literal pipe and join the row -- so the doubling is what makes the pipe
+    escape mean one thing, and the round trip through `_markdown_cells` is the witness.
+    """
+    report = _tagged_report(["win\\path", "trailing\\", "back\\|pipe"])
+    markdown = report.to_markdown()
+    assert "| win\\\\path |" in markdown
+    assert "| trailing\\\\ |" in markdown
+    _assert_columns_pair(report, "tag", {"win\\path": "win\\path", "trailing\\": "trailing\\",
+                                         "back\\|pipe": "back\\|pipe"})
+
+
+def test_markdown_leaves_an_ordinary_label_untouched():
+    """The escape is invisible on the labels a report normally carries.
+
+    Nothing here rewrites a plain checkpoint name, language code or question id, so every existing
+    report -- and the doc-table parity checks that read the repository's own Markdown -- keeps the
+    bytes it had before.
+    """
+    report = _tagged_report(["english", "multilingual"])
+    markdown = report.to_markdown()
+    assert "| english |" in markdown and "| multilingual |" in markdown
+    assert "\\" not in markdown.split("### by tag")[1]
+    _assert_columns_pair(report, "tag", {"english": "english", "multilingual": "multilingual"})
+
+
 def test_model_slice_follows_the_routed_checkpoint():
     """A Router records the checkpoint it chose under `routing`, not at the top level.
 
