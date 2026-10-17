@@ -10,6 +10,7 @@ nav:
       - llamaindex.md
       - crewai.md
       - agno.md
+      - tools.md
       - glob: "*"
         ignore_no_matches: true
   - Deployment:
