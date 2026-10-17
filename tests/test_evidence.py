@@ -81,6 +81,39 @@ check("mixed types overall -> INSUFFICIENT", mixed["state"], evidence.INSUFFICIE
 malformed = calib({"training": {"laya_train_calibration": {"choice": {"temperature": 1.0}}}})
 check("malformed entry -> UNKNOWN", malformed["types"]["choice"]["state"], evidence.UNKNOWN)
 
+# A JSON `true` is not a count, but `isinstance(True, int)` makes it one. Before this guard
+# `{"items": true}` answered PRESENT with "fitted with no recorded issues on 1 items" and
+# `{"items": false}` answered MISSING with "zero calibration items": two verdicts about a fit that
+# the artifact never reported, and the second one is the state a genuinely unfitted type gets.
+for _flag in (True, False):
+    _t = calib({"training": {"laya_train_calibration": {
+        "choice": {"items": _flag, "temperature": 1.1, "issues": []}}}})
+    check("items=%r is a malformed entry, not a count" % _flag, _t["types"]["choice"]["state"],
+          evidence.UNKNOWN)
+    check("items=%r keeps the malformed reason" % _flag, _t["types"]["choice"]["reason"],
+          "calibration entry is malformed")
+    check("items=%r leaves the overall undecided" % _flag, _t["state"], evidence.INSUFFICIENT)
+
+# The guard is about the type of `items`, not its value: a negative count stays reported, because
+# #964 deleted the local floor that judged it and nothing here is supposed to re-introduce one.
+_neg = calib({"training": {"laya_train_calibration": {
+    "choice": {"items": -5, "temperature": 1.1, "issues": []}}}})
+check("negative items are still reported, not judged", _neg["types"]["choice"]["state"], evidence.PRESENT)
+check("negative items keep their own count in the reason", _neg["types"]["choice"]["reason"],
+      "fitted with no recorded issues on -5 items")
+
+# The rest of the same door, which main already refuses but nothing pinned: a string or a float is
+# not a count, and an entry that is not an object cannot carry one. All three land on the same
+# `UNKNOWN` as a missing key, because none of them states a number the fit can be checked against.
+for _bad, _label in (("5", "a string"), (2.0, "a float")):
+    _t = calib({"training": {"laya_train_calibration": {
+        "choice": {"items": _bad, "temperature": 1.1, "issues": []}}}})
+    check("items=%s is not a count -> UNKNOWN" % _label, _t["types"]["choice"]["state"], evidence.UNKNOWN)
+_not_entry = calib({"training": {"laya_train_calibration": {"choice": "5"}}})
+check("entry that is not an object -> UNKNOWN", _not_entry["types"]["choice"]["state"], evidence.UNKNOWN)
+check("entry that is not an object keeps the malformed reason", _not_entry["types"]["choice"]["reason"],
+      "calibration entry is malformed")
+
 # ------------------------------------------------------ one numeric source of truth
 # `items` is reported here, never judged: #964 deleted the local `_thresholds()` that compared it
 # against copies of `MIN_TYPE_N`/`CALIB_WARN_N`, and the comment describing that mechanism stayed
