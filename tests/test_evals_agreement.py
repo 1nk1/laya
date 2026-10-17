@@ -1,13 +1,16 @@
 """Model-free checks for paired agreement and case-level uncertainty."""
 from copy import deepcopy
+import inspect
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
-from laya import confidence, evals
+from laya import _agreement, confidence, evals
 
 
 def run_document(run_id, rows, *, teacher=True):
@@ -133,6 +136,71 @@ def test_bootstrap_preserves_decision_weights_with_unequal_case_sizes():
     # K large-case draws follows Binomial(4, 1/4). The 2.5th/97.5th percentiles
     # have K=0/3: ratios -4/4 and (300-1)/(300+1), not case-mean rates -1/0.5.
     assert overall["paired_delta_ci95"] == pytest.approx([-1.0, 299 / 301])
+
+
+def test_the_bootstrap_batch_split_is_invisible_in_the_published_interval():
+    """`paired_delta_ci95` depends on the records, `bootstrap_samples` and `seed`, and on nothing else.
+
+    `_agreement._interval` draws its replicate indices in batches so the index matrix stays under
+    131072 `int64` -- 1 MiB -- and the comment there says exactly that: "batching bounds the index
+    matrix memory". It has to stay true that nothing else moves: the report publishes
+    `bootstrap_samples` and `seed` as the identity of the interval, so a rewrite that reseeds per
+    batch -- one line, and every other number in the report still validates -- silently republishes a
+    different 95% interval under the same recorded configuration.
+
+    A batch boundary lands on a row boundary of the same row-major stream, so the replicates are the
+    ones one matrix of the whole draw would have produced, and the equality below is exact rather
+    than `pytest.approx` for that reason: both sides ask the same numpy, in the same process, for the
+    same stream and the same percentile method, so a numpy that changed either would move both.
+
+    The shape is sized from the constant read out of `_interval`'s own source -- 120 cases and
+    `5 * (constant // 120) + 1` samples cross the split 6 times here -- so the test cannot quietly
+    stop exercising the split if the constant moves; it fails with the remedy in the message.
+
+    What this does NOT pin is the constant's value: shrinking it (more batches, same stream) and
+    drawing the matrix flat then reshaping it both leave the interval exactly where they are, and
+    both were measured to do so. Only a rewrite that changes which draws land in which replicate
+    moves it. Removing the batching altogether is the one equivalent-looking change this test does
+    fail, deliberately: the guard belongs to the mechanism, so the message names both remedies --
+    keep a memory budget, or delete this test along with the split.
+    """
+    cases = 120
+    budget = re.search(r"(\d+) // len\(clusters\)", inspect.getsource(_agreement._interval))
+    assert budget is not None, (
+        "`_interval` no longer splits its bootstrap draw by a row budget, so the split this test "
+        "guards is gone: either keep a memory budget here, or delete this test together with the "
+        "batching -- but do not leave a claim of a guarded invariant standing on nothing.")
+    constant = int(budget.group(1))
+    batch = constant // cases
+    samples = min(100000, 5 * batch + 1)
+    assert samples > batch, ("this shape no longer crosses the batch split (%d samples against a "
+                             "%d-row batch): raise `cases` so the draw still spans more than one batch"
+                             % (samples, batch))
+    # 1..4 questions per case, so the clusters carry unequal decision weights, and the repeat and
+    # student runs disagree on a pattern that is periodic in neither the case nor the question index.
+    reference = tuple(tuple("a" for _ in range(1 + i % 4)) for i in range(cases))
+
+    def labels(modulus):
+        return tuple(tuple("a" if (i + j) % modulus == 0 else "b"
+                           for j in range(1 + i % 4)) for i in range(cases))
+
+    report = compare(documents(reference, labels(4), labels(3)), bootstrap_samples=samples, seed=12)
+    published = report["overall"]["paired_delta_ci95"]
+    assert report["overall"]["n_cases"] == cases
+    assert report["overall"]["n_decisions"] == sum(len(row) for row in reference)
+
+    totals = {}
+    for case in report["cases"]:
+        cluster = totals.setdefault(case["case_id"], [0, 0])
+        cluster[0] += case["delta"]
+        cluster[1] += 1
+    matrix = np.asarray([totals[case_id] for case_id in sorted(totals)], dtype=np.int64)
+    indices = np.random.default_rng(12).integers(len(matrix), size=(samples, len(matrix)))
+    sums = matrix[indices].sum(axis=1)
+    one_shot = np.percentile(sums[:, 0] / sums[:, 1], [2.5, 97.5]).tolist()
+    assert published == one_shot, ("the batched draw and one draw of the same %d replicates disagree, "
+                                   "so the batching is no longer invisible: batched=%r one-shot=%r"
+                                   % (samples, published, one_shot))
 
 
 @pytest.mark.parametrize("side", [0, 1, 2])
