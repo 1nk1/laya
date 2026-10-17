@@ -257,7 +257,7 @@ func TestNewTemperaturesRefuses(t *testing.T) {
 		"language not a mapping":   {nil, map[string]any{"de": 5}, "must be a mapping"},
 		"language list too short":  {nil, map[string]any{"de": map[string]any{"temperature": []any{1.0}}}, "list of 3"},
 		"language list not a list": {nil, map[string]any{"de": map[string]any{"temperature": 2}}, "list of 3"},
-		"by options not a mapping": {nil, map[string]any{"de": map[string]any{"temperature_by_options": []any{}}}, "mapping of bucket"},
+		"by options not a mapping": {nil, map[string]any{"de": map[string]any{"temperature_by_options": []any{1.0}}}, "mapping of bucket"},
 	}
 	for name, c := range cases {
 		_, err := NewTemperatures(c.byType, nil, c.langs)
@@ -706,5 +706,20 @@ func TestQuotientOverflowIsRefused(t *testing.T) {
 	}
 	if ps := answer.(*schema.ChoiceAnswer).Probabilities; ps[0].P != 1 || ps[1].P != 0 {
 		t.Errorf("probabilities = %v, want 1 and 0", ps)
+	}
+}
+
+func TestNewTemperaturesFalsyByOptionsIsEmpty(t *testing.T) {
+	for _, v := range []any{false, 0, 0.0, "", []any{}, map[string]any{}, nil, json.Number("0"), json.Number("0.0")} {
+		if _, err := NewTemperatures(nil, nil, map[string]any{"de": map[string]any{"temperature_by_options": v}}); err != nil {
+			t.Errorf("%#v: %v", v, err)
+		}
+	}
+}
+
+func TestNewTemperaturesRefusesSharedPrimarySubtag(t *testing.T) {
+	_, err := NewTemperatures(nil, nil, map[string]any{"PT": map[string]any{}, "pt-BR": map[string]any{}})
+	if err == nil || !strings.Contains(err.Error(), `"PT"`) || !strings.Contains(err.Error(), `"pt-BR"`) {
+		t.Fatalf("err = %v", err)
 	}
 }

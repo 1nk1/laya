@@ -42,6 +42,9 @@ func Open(graphPath string, opts ...Option) (*Session, error) {
 	if err := checkPath(graphPath); err != nil {
 		return nil, err
 	}
+	if err := verifyGraph(graphPath, o); err != nil {
+		return nil, err
+	}
 	version, err := acquire(o.library)
 	if err != nil {
 		return nil, err

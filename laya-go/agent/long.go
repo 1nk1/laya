@@ -50,7 +50,8 @@ type LongPrediction struct {
 // state. Errors are those of PredictBatch, and sequence.ErrNoRoom and sequence.ErrStrideGap when
 // the questions leave no room or the stride leaves gaps. WithMinConfidence and
 // WithMinConfidenceMap are refused with an error before any work, as Python raises TypeError for
-// min_confidence; hooks are not applied, and Go has no calibration.
+// min_confidence; WithHooks, WithOnPredictStart and WithOnPredictEnd are refused the same way: PredictLong runs no hooks, as in
+// Python, and Go has no calibration.
 func (a *Agent) PredictLong(ctx context.Context, state any, qs schema.Questions, opts ...CallOption) (LongPrediction, error) {
 	var c call
 	for _, opt := range opts {
@@ -62,6 +63,9 @@ func (a *Agent) PredictLong(ctx context.Context, state any, qs schema.Questions,
 		// Python's predict_long has no min_confidence argument (TypeError); ignoring the option
 		// would return ungated answers to a caller who asked for a gate.
 		return LongPrediction{}, errors.New("agent: PredictLong takes no confidence gate; use Predict or PredictBatch with WithMinConfidence")
+	}
+	if c.hooked {
+		return LongPrediction{}, errors.New("agent: PredictLong runs no hooks; use Predict or PredictBatch with WithHooks")
 	}
 	if err := ctx.Err(); err != nil {
 		return LongPrediction{}, err

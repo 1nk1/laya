@@ -35,8 +35,8 @@
 //
 // # Scope
 //
-// Not here yet: per-language temperature overrides, the calibration file, min_confidence,
-// hooks, digest checks and per-call max_len overrides. PredictLong ports predict_long for
-// aggregate="auto" and applies neither the gate nor hooks. WithLanguage is accepted
-// so callers need not change when overrides arrive; without overrides it does nothing.
+// Shipped: hooks, the min_confidence gate, per-language temperatures (WithLangTemperatures,
+// selected by WithLanguage) and digest checks (WithExpectedSHA256, LAYA_SHA256_DIGESTS). Not here
+// yet: the calibration file and the router. PredictLong ports predict_long for aggregate="auto"
+// and applies neither the gate nor hooks. Without overrides WithLanguage does nothing.
 package agent

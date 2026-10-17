@@ -76,12 +76,18 @@ func NewTemperatures(byType []any, byOptions map[string]any, byLanguage map[stri
 	for lang := range byLanguage {
 		langs = append(langs, lang)
 	}
+	seen := map[string]string{}
 	sort.Strings(langs) // a repeated primary subtag resolves the same way on every run
 	for _, lang := range langs {
 		resolved, err := resolveLanguage(lang, byLanguage[lang], base)
 		if err != nil {
 			return nil, err
 		}
+		p := primarySubtag(lang)
+		if first, dup := seen[p]; dup {
+			return nil, fmt.Errorf("decode: language overrides %q and %q share the primary subtag %q; Python keeps the last inserted, which a Go map cannot say, so give one", first, lang, p)
+		}
+		seen[p] = lang
 		t.ByLanguage[primarySubtag(lang)] = resolved
 	}
 	return t, nil
@@ -113,7 +119,7 @@ func resolveLanguage(lang string, raw any, base []any) (LanguageTemperatures, er
 	for i, v := range list {
 		out.ByType[i] = Clamp(v)
 	}
-	if bo := cfg["temperature_by_options"]; bo != nil {
+	if bo := cfg["temperature_by_options"]; !falsy(bo) { // `or {}`: false, 0, "", [] and {} are empty
 		m, ok := asMap(bo)
 		if !ok {
 			return LanguageTemperatures{}, fmt.Errorf("decode: language override %q temperature_by_options must be a mapping of bucket -> float, got %T", lang, bo)
@@ -237,4 +243,29 @@ func toFloat(v any) (float64, bool) {
 func isRange(err error) bool {
 	ne, ok := err.(*strconv.NumError)
 	return ok && ne.Err == strconv.ErrRange
+}
+
+// falsy is Python truthiness for the values `cfg.get(...) or {}` meets: None, False, zero, "" and
+// an empty container.
+func falsy(v any) bool {
+	if n, ok := v.(json.Number); ok { // a string kind: checked before the reflect switch
+		f, err := n.Float64()
+		return err == nil && f == 0
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Invalid:
+		return true
+	case reflect.Bool:
+		return !rv.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return rv.Int() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return rv.Uint() == 0
+	case reflect.Float32, reflect.Float64:
+		return rv.Float() == 0
+	case reflect.String, reflect.Slice, reflect.Array, reflect.Map:
+		return rv.Len() == 0
+	}
+	return false
 }
