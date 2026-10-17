@@ -94,21 +94,29 @@ The shipped checkpoints work zero-shot, but fine-tuning on decisions from your o
 
 **[nandhakishorm.github.io/laya](https://nandhakishorm.github.io/laya/)**: guides for [prediction hooks](https://nandhakishorm.github.io/laya/hooks/), [schema-driven decisions](https://nandhakishorm.github.io/laya/structured/), [Docker](https://nandhakishorm.github.io/laya/docker/) and [LangChain and LangGraph](https://nandhakishorm.github.io/laya/langchain/), plus a full [API reference](https://nandhakishorm.github.io/laya/reference/).
 
-## What's new in 0.4.10
+## What's new in 0.4.11
 
-* **A clamped temperature fit says so instead of looking like a finished fit.**
-  `fit_temperature_map` now returns `temperature_clamped`, naming every bucket or question type
-  whose optimum fell outside `[0.5, 5.0]`, with the unclamped value beside the one installed. The
-  clamped value is still what to install, since checkpoint load applies the same bounds, but a
-  fitted 0.387 arriving as exactly 0.5 was indistinguishable from a fit that really wanted 0.5, so
-  anyone calibrating their own checkpoint could not tell the floor from an answer (issue #1245).
-* **The `labels` guidance in `docs/questions-and-answers.md` was backwards for one real case.** A
-  `noul` instruction asking whether something is "positive" answers no for every state at
-  confidence 1.0 on both PyTorch checkpoints, and naming the two options through `labels` is the
-  one thing that restores it; rewording does not reliably, and capitalising the word helps in some
-  wordings and not others. The doc said labels are not a way to fix a question the model gets
-  wrong, which is still true in the other direction, and both directions are now stated (issue
-  #1244).
+* **A Rust SDK.** `laya-rust` is an ONNX Runtime port of the Python SDK: typed questions, the
+  sequence builder and collator, calibration and typed answers, language detection, email
+  cleaning, the embedding shortlist and the checkpoint router, with 210 offline tests checked
+  against goldens generated from the Python implementation (#672, issue #674).
+* **The ONNX exporter proves its graph is batch-dynamic instead of asserting it.** Exporting now
+  runs the written graph at batches 1, 2 and 3 and compares each against PyTorch, so a graph that
+  silently specialised to one row fails the export rather than failing at inference. On this
+  machine the probabilities agree to 1.2e-06 (#688).
+* **Two new MCP tools and a batched TypeScript decide.** `laya_predict_long` scans a state past
+  the context window and reports which window decided, with token offsets (#738); `LayaToolSelector`
+  routes tools and functions for LangChain, CrewAI, LlamaIndex and plain agent loops (#977); and
+  `decideBatch` lands in the TypeScript SDK alongside `answerConfidence` (#750).
+* **`task` and `lang_guess` reach every framework wrapper.** The per-call control rules now live
+  in one module that the LangChain, CrewAI, LlamaIndex and Agno wrappers share, and a routing hint
+  passed to a runner that cannot read it is refused by name instead of dropped silently (#804, and
+  #970 adds the Agno integration behind `pip install laya[agno]`).
+* **An ONNX agent's calibration file can match its own checkpoint again.** `ONNXAgent` never stored
+  the identity `apply_calibration_payload` compares against, so every versioned calibration file
+  warned about a checkpoint mismatch, including for the checkpoint that agent had just loaded
+  (#731). The ONNX batch path also collates straight into NumPy now (#1271), and a `hooks_timeout`
+  of `True` is refused rather than read as 1.0 second (#1203).
 
 Earlier releases are in the [GitHub releases](https://github.com/NandhaKishorM/laya/releases).
 
