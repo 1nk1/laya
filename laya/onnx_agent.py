@@ -15,6 +15,7 @@ from laya.hooks import (
 from laya.revisions import resolve_revision, snapshot_revision, verify_digests
 from laya.common import (
     QTYPES,
+    _reuse_question_tokens,
     answer_confidence,
     build_sequence,
     collapsed_options,
@@ -337,6 +338,7 @@ class ONNXAgent(HookRegistry):
                                   max_len=max_len, head_max_len=head_max_len,
                                   min_confidence=min_confidence)[0]
 
+    @_reuse_question_tokens
     def predict_batch(self, states: List[Union[str, dict, list]], questions: Dict[str, Dict[str, Any]],
                       batch_size: Optional[int] = None, lang: Optional[str] = None,
                       hooks=None, on_predict_start=None, on_predict_end=None,
