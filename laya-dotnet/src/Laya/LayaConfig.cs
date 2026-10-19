@@ -197,9 +197,8 @@ public sealed class LayaConfig
         string Operand(string kind) => $"TypeError: unsupported operand type(s) for -: '{kind}' and 'int'";
         var leftBad = left is not ("int" or "bool");
         var rightBad = right is not ("int" or "bool");
-        if (rightBad && right != "float") throw new InvalidDataException(Operand(right));
+        if (rightBad) throw new InvalidDataException(right == "float" ? SliceError : Operand(right));
         if (leftBad) throw new InvalidDataException(left == "float" ? SliceError : Operand(left));
-        if (rightBad) throw new InvalidDataException(SliceError);
         return (Length("max_len", maxLen), Length("head_max_len", headMaxLen));
     }
 
@@ -213,5 +212,5 @@ public sealed class LayaConfig
     };
 
     private static InvalidDataException NegativeLength(string key, string literal) =>
-        new($"{key}={literal} is negative: Python slices from the end for it, which this port does not support");
+        new($"{key}={literal}: must be a non-negative integer");
 }

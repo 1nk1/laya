@@ -106,7 +106,8 @@ public sealed class ConfigFieldTypeTests
         { "{\"max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
         { "{\"max_len\": \"x\", \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
         { "{\"max_len\": \"x\", \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
-        { "{\"max_len\": \"x\", \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": \"x\", \"head_max_len\": 1.5}", "TypeError: slice indices must be integers or None or have an __index__ method" },
+        { "{\"max_len\": \"x\", \"head_max_len\": 192.0}", "TypeError: slice indices must be integers or None or have an __index__ method" },
         { "{\"max_len\": \"x\", \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
         { "{\"max_len\": \"x\", \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
         { "{\"max_len\": \"x\", \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
@@ -114,7 +115,8 @@ public sealed class ConfigFieldTypeTests
         { "{\"max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
         { "{\"max_len\": null, \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
         { "{\"max_len\": null, \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
-        { "{\"max_len\": null, \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": null, \"head_max_len\": 1.5}", "TypeError: slice indices must be integers or None or have an __index__ method" },
+        { "{\"max_len\": null, \"head_max_len\": 192.0}", "TypeError: slice indices must be integers or None or have an __index__ method" },
         { "{\"max_len\": null, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
         { "{\"max_len\": null, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
         { "{\"max_len\": null, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
@@ -122,7 +124,8 @@ public sealed class ConfigFieldTypeTests
         { "{\"max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
         { "{\"max_len\": [1], \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
         { "{\"max_len\": [1], \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
-        { "{\"max_len\": [1], \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": [1], \"head_max_len\": 1.5}", "TypeError: slice indices must be integers or None or have an __index__ method" },
+        { "{\"max_len\": [1], \"head_max_len\": 192.0}", "TypeError: slice indices must be integers or None or have an __index__ method" },
         { "{\"max_len\": [1], \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
         { "{\"max_len\": [1], \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
         { "{\"max_len\": [1], \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
@@ -130,7 +133,8 @@ public sealed class ConfigFieldTypeTests
         { "{\"max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
         { "{\"max_len\": {}, \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
         { "{\"max_len\": {}, \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
-        { "{\"max_len\": {}, \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": {}, \"head_max_len\": 1.5}", "TypeError: slice indices must be integers or None or have an __index__ method" },
+        { "{\"max_len\": {}, \"head_max_len\": 192.0}", "TypeError: slice indices must be integers or None or have an __index__ method" },
         { "{\"max_len\": {}, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
         { "{\"max_len\": {}, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
         { "{\"max_len\": {}, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
@@ -146,9 +150,9 @@ public sealed class ConfigFieldTypeTests
     }
 
     [Theory]
-    [InlineData("{\"max_len\": -1}", "max_len=-1 is negative: Python slices from the end for it, which this port does not support")]
-    [InlineData("{\"head_max_len\": -192}", "head_max_len=-192 is negative: Python slices from the end for it, which this port does not support")]
-    [InlineData("{\"max_len\": -99999999999999999999999}", "max_len=-99999999999999999999999 is negative: Python slices from the end for it, which this port does not support")]
+    [InlineData("{\"max_len\": -1}", "max_len=-1: must be a non-negative integer")]
+    [InlineData("{\"head_max_len\": -192}", "head_max_len=-192: must be a non-negative integer")]
+    [InlineData("{\"max_len\": -99999999999999999999999}", "max_len=-99999999999999999999999: must be a non-negative integer")]
     public void NegativeLengthsAreRefusedAtLoad(string json, string error) =>
         Assert.Equal(error, Assert.Throws<InvalidDataException>(() => LayaConfig.Parse(json)).Message);
 
@@ -217,4 +221,3 @@ public sealed class ConfigFieldTypeTests
         }
     }
 }
-
