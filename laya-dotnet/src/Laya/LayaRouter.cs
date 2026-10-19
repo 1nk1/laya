@@ -34,11 +34,12 @@ public sealed class LayaRouterOptions
     public LayaOptions EngineOptions { get; set; } = new();
 
     /// <summary>
-    /// How many checkpoints stay resident at once (least-recently-used is evicted). Default 1,
-    /// matching Python. Raised automatically by <see cref="LayaRouter.Attach"/> and
+    /// How many checkpoints stay resident at once (least-recently-used is evicted). Default 2,
+    /// matching Python's <c>Router(max_loaded=2)</c>, so alternating two languages does not reload
+    /// a checkpoint on every request. Raised automatically by <see cref="LayaRouter.Attach"/> and
     /// <see cref="LayaRouter.Preload"/> to fit what they load.
     /// </summary>
-    public int MaxLoaded { get; set; } = 1;
+    public int MaxLoaded { get; set; } = 2;
 
     /// <summary>
     /// Checkpoint used when a state has no letters or its Latin language is undetermined without

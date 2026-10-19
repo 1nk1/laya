@@ -26,6 +26,8 @@ goldens: 0.4.0).
 
 ### Fixed
 
+- `LayaRouterOptions.MaxLoaded` defaults to 2, as Python's `Router(max_loaded=2)` does, so a
+  router that alternates two languages no longer reloads a checkpoint on every request.
 - Undetermined Latin text uses the router's configured default, including its route reason.
 - Language detection counts unlisted scripts, distinguishes mixed-language fields and lines
   (`MixedSegment`), and applies current script, stopword and loanword rules.

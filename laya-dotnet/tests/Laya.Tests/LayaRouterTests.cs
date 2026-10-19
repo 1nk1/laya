@@ -199,6 +199,19 @@ public sealed class LayaRouterTests
     }
 
     [Fact]
+    public void DefaultKeepsTwoCheckpointsLikePython()
+    {
+        // Python's Router(max_loaded=2) since #180: alternating two languages must not reload.
+        Assert.Equal(2, new LayaRouterOptions().MaxLoaded);
+        using var router = NewFakeRouter(new LayaRouterOptions());
+        router.Load("english");
+        router.Load("multilingual");
+        Assert.Equal(2, router.Loaded.Count);
+        Assert.Contains(LayaCheckpoint.English, router.Loaded);
+        Assert.Contains(LayaCheckpoint.Multilingual, router.Loaded);
+    }
+
+    [Fact]
     public void Cap2EvictsOldest()
     {
         using var router = NewFakeRouter(new LayaRouterOptions { MaxLoaded = 2 });
