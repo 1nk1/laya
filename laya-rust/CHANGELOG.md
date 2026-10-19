@@ -62,6 +62,7 @@ regenerated from laya (Python) 0.4.11 for the supported paths (see the known gap
   through the `log` facade (`warn`, target `laya`); `log` is a new dependency.
 - A string in a checkpoint's `temperature` or `temperature_by_options` is read as Python's `float(str)` reads it (surrounding whitespace, any-script digits, single underscores, `inf`/`nan`) before clamping, instead of being replaced by 1.0.
 - A checkpoint whose temperature is a JSON integer too large for a float fails to load with `LayaError::InvalidConfig("OverflowError: int too large to convert to float")`, as Python's `clamp_temperature` raises; a float literal such as `1e400` is read as infinity and replaced by 1.0, as in Python.
+- The bare JSON constants `NaN`, `Infinity` and `-Infinity`, which Python's `json.loads` reads as floats, are accepted in `rl_agent_config.json` and `tokenizer_config.json` (a temperature of `NaN` clamps to 1.0 with Python's warning).
 - `LangGuess` callbacks receive the state as Python passes it (`GuessInput::Value`, or the original
   bytes as `GuessInput::Bytes` from `LayaRouter::route_bytes`).
 - Email cleaning matches Python's `re` where the `regex` crate differs: `\b` follows Python's `\w`

@@ -134,6 +134,7 @@ fn ascii_float_text(body: &str) -> Option<String> {
 fn temperature_number(raw: &Value) -> Option<f64> {
     match raw {
         Value::Number(n) => n.as_f64(),
+        Value::String(s) if s == NAN_MARK => Some(f64::NAN),
         Value::String(s) if s == POS_INF_MARK => Some(f64::INFINITY),
         Value::String(s) if s == NEG_INF_MARK => Some(f64::NEG_INFINITY),
         Value::String(s) => py_float(s),
@@ -148,15 +149,85 @@ const NEG_INF_MARK: &str = "__laya_neg_inf__";
 
 const INT_OVERFLOW_MARK: &str = "__laya_int_too_large_to_convert_to_float__";
 
-/// `json.loads`, for the one place serde_json is stricter: it refuses a number literal that
-/// overflows an `f64`, where Python keeps a huge integer as an `int` and reads `1e400` as `inf`.
-/// Such a literal is rewritten before the second read: a float literal becomes a marker string
-/// read back as infinity (what `float` makes of it), an integer literal becomes [`INT_OVERFLOW_MARK`].
-fn read_json(text: &str) -> Result<Value> {
+/// Whether `token` has the shape of a JSON number: `-? (0 | [1-9][0-9]*) (. [0-9]+)? ([eE] [+-]? [0-9]+)?`.
+fn is_json_number(token: &str) -> bool {
+    let b = token.as_bytes();
+    let digits = |mut i: usize| {
+        let start = i;
+        while b.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        (i, i > start)
+    };
+    let mut i = usize::from(b.first() == Some(&b'-'));
+    if b.get(i) == Some(&b'0') {
+        i += 1;
+    } else {
+        let (next, any) = digits(i);
+        if !any || b[i] == b'0' {
+            return false;
+        }
+        i = next;
+    }
+    if b.get(i) == Some(&b'.') {
+        let (next, any) = digits(i + 1);
+        if !any {
+            return false;
+        }
+        i = next;
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        let (next, any) = digits(i);
+        if !any {
+            return false;
+        }
+        i = next;
+    }
+    i == b.len()
+}
+
+/// Stands in for the bare token `NaN`, which Python's `json.loads` accepts as `float('nan')`.
+const NAN_MARK: &str = "__laya_nan__";
+
+/// The bare constants Python's `json.loads` accepts and serde_json refuses (`NaN`, `Infinity`,
+/// `-Infinity`; nothing else, so `nan`, `+Infinity` and `Inf` stay errors) at the start of `rest`:
+/// the marker standing in for it and its length in characters.
+fn python_json_constant(rest: &[char]) -> Option<(&'static str, usize)> {
+    let starts = |word: &str| {
+        let n = word.chars().count();
+        rest.len() >= n
+            && rest[..n].iter().copied().eq(word.chars())
+            && !rest
+                .get(n)
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+    };
+    if starts("NaN") {
+        Some((NAN_MARK, 3))
+    } else if starts("Infinity") {
+        Some((POS_INF_MARK, 8))
+    } else if starts("-Infinity") {
+        Some((NEG_INF_MARK, 9))
+    } else {
+        None
+    }
+}
+
+/// `json.loads`, for the places serde_json is stricter than Python:
+/// - it refuses a number literal that overflows an `f64`, where Python keeps a huge integer as an
+///   `int` and reads `1e400` as `inf`;
+/// - it refuses the bare tokens `NaN`, `Infinity` and `-Infinity`, which Python reads as floats.
+///
+/// Such a literal is rewritten before a second read: a float literal or constant becomes a marker
+/// string read back as the float Python makes of it, an integer literal that overflows becomes
+/// [`INT_OVERFLOW_MARK`]. Text serde_json reads as is never reaches the rewrite.
+pub(crate) fn read_json(text: &str) -> Result<Value> {
     let first = match serde_json::from_str::<Value>(text) {
         Ok(value) => return Ok(value),
-        Err(e) if e.to_string().contains("number out of range") => e,
-        Err(e) => return Err(e.into()),
+        Err(e) => e,
     };
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
@@ -177,13 +248,16 @@ fn read_json(text: &str) -> Result<Value> {
             in_string = true;
             out.push(c);
             i += 1;
+        } else if let Some((mark, len)) = python_json_constant(&chars[i..]) {
+            out.push_str(&format!("\"{mark}\""));
+            i += len;
         } else if c == '-' || c.is_ascii_digit() {
             let start = i;
             while i < chars.len() && matches!(chars[i], '-' | '+' | '.' | 'e' | 'E' | '0'..='9') {
                 i += 1;
             }
             let token: String = chars[start..i].iter().collect();
-            if serde_json::from_str::<Value>(&token).is_ok() {
+            if !is_json_number(&token) || serde_json::from_str::<Value>(&token).is_ok() {
                 out.push_str(&token);
             } else if token.contains(['.', 'e', 'E']) {
                 let mark = if token.starts_with('-') {
@@ -249,6 +323,7 @@ fn py_repr(value: &Value) -> String {
             (_, Some(u)) => u.to_string(),
             _ => PythonJson::repr(n.as_f64().unwrap_or(f64::NAN)),
         },
+        Value::String(s) if s == NAN_MARK => "nan".to_string(),
         Value::String(s) if s == POS_INF_MARK => "inf".to_string(),
         Value::String(s) if s == NEG_INF_MARK => "-inf".to_string(),
         Value::String(s) => python_repr_str(s),
@@ -394,5 +469,23 @@ impl LayaConfig {
             temperature_by_options_raw,
             clamped_temperatures,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_json;
+
+    // `tokenizer_config.json` goes through the same reader: Python's `json.load` accepts these
+    // constants in unrelated keys (e.g. `model_max_length`), so the special-token read must too.
+    #[test]
+    fn read_json_accepts_pythons_constants_and_keeps_strings_alone() {
+        let value = read_json(
+            r#"{"model_max_length": Infinity, "x": [NaN, -Infinity], "cls_token": "[CLS] NaN"}"#,
+        )
+        .unwrap();
+        assert_eq!("[CLS] NaN", value["cls_token"].as_str().unwrap());
+        assert!(value["x"].is_array() && value["model_max_length"].is_string());
+        assert!(read_json(r#"{"a": nan}"#).is_err());
     }
 }

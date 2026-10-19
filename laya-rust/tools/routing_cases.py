@@ -903,6 +903,23 @@ EMAIL_CLEAN_CASES = [
     ("pyre/ignorecase_dotless_i_french_signoff", "Je demande de l'aide.\nBonne journée,\nMarıe", 3000),
     ("pyre/ignorecase_long_s_and_kelvin_sign",
      "Please help me.\n\nThis email is confidential and intended ſolely for you, thankK you.", 3000),
+    # astral characters: `re` counts and bounds code points, a UTF-16 engine sees two units
+    ("pyre/astral_boundary_after_letter",
+     "Please help me.\n\nThis email\U0001d400 is confidential and intended solely for you.", 3000),
+    ("pyre/astral_boundary_before_letter",
+     "Please help me.\n\nThis \U0001d400email is confidential and intended solely for you.", 3000),
+    ("pyre/astral_boundary_after_emoji",
+     "Please help me.\n\nThis email\U0001f600 is confidential and intended solely for you.", 3000),
+    ("pyre/astral_dot_run_within_bound",
+     "Please help me.\n\nThis email " + "\U0001d400" * 40 + " is confidential and intended solely for you.", 3000),
+    ("pyre/astral_dot_run_past_bound",
+     "Please help me.\n\nThis email " + "\U0001d400" * 70 + " is confidential and intended solely for you.", 3000),
+    ("pyre/astral_quote_header_within_bound",
+     "Please help me.\nOn Monday 1 Jan, " + "\U0001d400" * 200 + " wrote:\n> old request", 3000),
+    ("pyre/astral_quote_header_past_bound",
+     "Please help me.\nOn Monday 1 Jan, " + "\U0001d400" * 301 + " wrote:\n> old request\nStill mine.", 3000),
+    ("pyre/astral_digit_boundary",
+     "Please help me.\n\nThis email\U0001d7ce is confidential and intended solely for you.", 3000),
 ]
 
 EMAIL_STATE_CASES = [

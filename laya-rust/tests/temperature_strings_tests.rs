@@ -90,3 +90,39 @@ fn huge_integer_temperatures_fail_to_load_as_in_python_and_float_literals_do_not
         seen[1]
     );
 }
+
+// Python's json.loads reads the bare tokens NaN, Infinity and -Infinity as floats (nothing else:
+// `nan`, `+Infinity`, `Inf` and `01` are errors there). Expected text from Python's own
+// clamp_temperature / temperature_rejected on the loaded values.
+#[test]
+fn bare_nan_and_infinity_tokens_load_as_in_python() {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log::LevelFilter::Warn);
+    SEEN.lock().unwrap().clear();
+
+    let config = LayaConfig::parse(
+        r#"{"temperature": [NaN, 1.2, Infinity, -Infinity],
+            "temperature_by_options": {"choice:2": NaN, "note": "NaN"}}"#,
+    )
+    .unwrap();
+    assert_eq!(vec![1.0, 1.2, 1.0, 1.0], config.temperature);
+    assert_eq!(Some(&1.0), config.temperature_by_options.get("choice:2"));
+    assert_eq!(
+        vec![
+            "laya ONNX: this checkpoint ships temperatures outside [0.5, 5] which would distort \
+             confidence; clamping choice:2=nan -> 1, note='NaN' -> 1, temperature[0]=nan -> 1, \
+             temperature[2]=inf -> 1, temperature[3]=-inf -> 1. Treat confidence from the \
+             affected buckets as uncalibrated."
+                .to_string()
+        ],
+        *SEEN.lock().unwrap()
+    );
+    for bad in ["nan", "+Infinity", "Inf", "-NaN", "Infinityx", "01", "-"] {
+        let text = format!(r#"{{"temperature": [{bad}, 1.0, 1.0]}}"#);
+        assert!(
+            LayaConfig::parse(&text).is_err(),
+            "{bad} must stay a JSON error"
+        );
+    }
+}
