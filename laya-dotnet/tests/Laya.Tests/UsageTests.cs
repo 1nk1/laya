@@ -176,4 +176,21 @@ public class UsageTests
 
         Assert.NotEqual(a, a with { InputTokens = 11 });
     }
+
+    [Fact]
+    public void Options_KeysCompareOrdinallyWhateverEitherMapsComparer()
+    {
+        var ordinal = Full(options: new Dictionary<string, OptionUsage>(StringComparer.Ordinal)
+            { ["q1"] = new OptionUsage(5, 3, 9) });
+        var ignoreCase = Full(options: new Dictionary<string, OptionUsage>(StringComparer.OrdinalIgnoreCase)
+            { ["Q1"] = new OptionUsage(5, 3, 9) });
+        Assert.False(ordinal.Equals(ignoreCase));
+        Assert.False(ignoreCase.Equals(ordinal));
+
+        var sameKeyIgnoreCase = Full(options: new Dictionary<string, OptionUsage>(StringComparer.OrdinalIgnoreCase)
+            { ["q1"] = new OptionUsage(5, 3, 9) });
+        Assert.True(ordinal.Equals(sameKeyIgnoreCase));
+        Assert.True(sameKeyIgnoreCase.Equals(ordinal));
+        Assert.Equal(ordinal.GetHashCode(), sameKeyIgnoreCase.GetHashCode());
+    }
 }

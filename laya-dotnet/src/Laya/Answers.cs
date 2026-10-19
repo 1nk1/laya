@@ -52,9 +52,14 @@ public readonly record struct Usage(int InputTokens, int OutputTokens)
     private static bool SameList(IReadOnlyList<string>? a, IReadOnlyList<string>? b) =>
         ReferenceEquals(a, b) || (a is not null && b is not null && a.SequenceEqual(b, StringComparer.Ordinal));
 
+    // Keys compare ordinally whatever comparer either map was built with, so equality stays
+    // symmetric and agrees with GetHashCode's ordinal key hashes.
     private static bool SameMap(IReadOnlyDictionary<string, OptionUsage>? a, IReadOnlyDictionary<string, OptionUsage>? b) =>
         ReferenceEquals(a, b) || (a is not null && b is not null && a.Count == b.Count
-            && a.All(pair => b.TryGetValue(pair.Key, out var value) && value == pair.Value));
+            && a.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Zip(b.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                .All(pairs => string.Equals(pairs.First.Key, pairs.Second.Key, StringComparison.Ordinal)
+                    && pairs.First.Value == pairs.Second.Value));
 }
 
 /// <summary>Option-span diagnostics from Python's common.collapsed_options.</summary>
