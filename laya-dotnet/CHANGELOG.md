@@ -54,6 +54,7 @@ goldens: 0.4.12).
 - `rl_agent_config.json` and `tokenizer_config.json` are read as strict UTF-8 and a BOM is rejected, as
   Python's `json.load(open(path))` does on a UTF-8 locale (it opens them without an `encoding`, so on a default
   Windows install it would use the ANSI code page; the two agree on ASCII files).
+- Case-insensitive email matching also treats the long s with `s` and the Kelvin sign with `k`, as `re.I` does.
 - Email patterns count and bound code points, not UTF-16 units, so characters outside the BMP next to a
   keyword or inside a `.{0,300}` window behave as in Python.
 - `byte[]` states are decoded as strict UTF-8 for detection, and invalid UTF-8 is no text, as in Python;

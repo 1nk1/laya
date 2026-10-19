@@ -16,13 +16,13 @@ public static partial class LayaEmail
     [GeneratedRegex(@"^[\s\x1c-\x1f]*On .{0,300}wrote:[\s\x1c-\x1f]*$", RegexOptions.IgnoreCase)]
     private static partial Regex QuoteHeaderOnWrote();
 
-    [GeneratedRegex(@"^[\s\x1c-\x1f]*(Em (?=.*\d).{0,300}escreveu:|El (?=.*\d).{0,300}escr[iIıİ]b[iIıİ][óo]:|Le (?=.*\d).{0,300}a [eé]cr[iIıİ]t[\s\x1c-\x1f]*:)[\s\x1c-\x1f]*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^[\s\x1c-\x1f]*(Em (?=.*\d).{0,300}e[sSſ]creveu:|El (?=.*\d).{0,300}e[sSſ]cr[iIıİ]b[iIıİ][óo]:|Le (?=.*\d).{0,300}a [eé]cr[iIıİ]t[\s\x1c-\x1f]*:)[\s\x1c-\x1f]*$", RegexOptions.IgnoreCase)]
     private static partial Regex QuoteHeaderTranslated();
 
-    [GeneratedRegex(@"^[\s\x1c-\x1f]*-{2,}[\s\x1c-\x1f]*(Or[iIıİ]g[iIıİ]nal|Forwarded) Message[\s\x1c-\x1f]*-{2,}", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^[\s\x1c-\x1f]*-{2,}[\s\x1c-\x1f]*(Or[iIıİ]g[iIıİ]nal|Forwarded) Me[sSſ][sSſ]age[\s\x1c-\x1f]*-{2,}", RegexOptions.IgnoreCase)]
     private static partial Regex QuoteHeaderOriginalOrForwarded();
 
-    [GeneratedRegex(@"^[\s\x1c-\x1f]*-{2,}[\s\x1c-\x1f]*(Mensagem (or[iIıİ]g[iIıİ]nal|encam[iIıİ]nhada)|Mensaje (or[iIıİ]g[iIıİ]nal|reenv[iIıİ]ado)|Message d'or[iIıİ]g[iIıİ]ne)[\s\x1c-\x1f]*-{2,}", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^[\s\x1c-\x1f]*-{2,}[\s\x1c-\x1f]*(Men[sSſ]agem (or[iIıİ]g[iIıİ]nal|encam[iIıİ]nhada)|Men[sSſ]aje (or[iIıİ]g[iIıİ]nal|reenv[iIıİ]ado)|Me[sSſ][sSſ]age d'or[iIıİ]g[iIıİ]ne)[\s\x1c-\x1f]*-{2,}", RegexOptions.IgnoreCase)]
     private static partial Regex QuoteHeaderTranslatedMessage();
 
     [GeneratedRegex(@"^[\s\x1c-\x1f]*_{8,}[\s\x1c-\x1f]*$")]
@@ -34,10 +34,10 @@ public static partial class LayaEmail
     [GeneratedRegex(@"^[\s\x1c-\x1f]*(De|From)[\s\x1c-\x1f]*:[\s\x1c-\x1f]+[^\s\x1c-\x1f]", RegexOptions.IgnoreCase)]
     private static partial Regex HeaderFromName();
 
-    [GeneratedRegex(@"^[\s\x1c-\x1f]*(Env[iIıİ]ad[oa]( em| el)?:[\s\x1c-\x1f]|Envoy[ée]( le)?[\s\x1c-\x1f]*:[\s\x1c-\x1f]|Sent:[\s\x1c-\x1f]|(Data|Fecha|Date):[\s\x1c-\x1f].*\d{4})", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^[\s\x1c-\x1f]*(Env[iIıİ]ad[oa]( em| el)?:[\s\x1c-\x1f]|Envoy[ée]( le)?[\s\x1c-\x1f]*:[\s\x1c-\x1f]|[sSſ]ent:[\s\x1c-\x1f]|(Data|Fecha|Date):[\s\x1c-\x1f].*\d{4})", RegexOptions.IgnoreCase)]
     private static partial Regex HeaderNext();
 
-    [GeneratedRegex(@"^.{0,120}[^\s\x1c-\x1f]@[^\s\x1c-\x1f]+[\s\x1c-\x1f]+(wrote|escreveu|escr[iIıİ]b[iIıİ][óo]|a [eé]cr[iIıİ]t)[\s\x1c-\x1f]*:[\s\x1c-\x1f]*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^.{0,120}[^\s\x1c-\x1f]@[^\s\x1c-\x1f]+[\s\x1c-\x1f]+(wrote|e[sSſ]creveu|e[sSſ]cr[iIıİ]b[iIıİ][óo]|a [eé]cr[iIıİ]t)[\s\x1c-\x1f]*:[\s\x1c-\x1f]*$", RegexOptions.IgnoreCase)]
     private static partial Regex AttributionTail();
 
     [GeneratedRegex(@"^[\s\x1c-\x1f]*(On|Em|El|Le) (?=.*\d)", RegexOptions.IgnoreCase)]
@@ -46,40 +46,40 @@ public static partial class LayaEmail
     [GeneratedRegex(@"^[\s\x1c-\x1f]*--[\s\x1c-\x1f]*$")]
     private static partial Regex SignatureDashDash();
 
-    [GeneratedRegex(@"^[\s\x1c-\x1f]*(?i:best|k[iIıİ]nd|warmest|warm|many thanks|thanks|thank you|regards|cheers|s[iIıİ]ncerely)"
-        + @"(?i:[\s\x1c-\x1f]+(?:and|&)[\s\x1c-\x1f]+regards|[\s\x1c-\x1f]+(?:regards|w[iIıİ]shes|aga[iIıİ]n|[iIıİ]n advance|a lot|so much|very much))?")]
+    [GeneratedRegex(@"^[\s\x1c-\x1f]*(?i:be[sSſ]t|[kKK][iIıİ]nd|warme[sSſ]t|warm|many than[kKK][sSſ]|than[kKK][sSſ]|than[kKK] you|regard[sSſ]|cheer[sSſ]|[sSſ][iIıİ]ncerely)"
+        + @"(?i:[\s\x1c-\x1f]+(?:and|&)[\s\x1c-\x1f]+regard[sSſ]|[\s\x1c-\x1f]+(?:regard[sSſ]|w[iIıİ][sSſ]he[sSſ]|aga[iIıİ]n|[iIıİ]n advance|a lot|[sSſ]o much|very much))?")]
     private static partial Regex SignatureClosingHead();
 
-    [GeneratedRegex(@"^[\s\x1c-\x1f]*(atenc[iIıİ]osamente|att|abraços?|abs|um abraço|cord[iIıİ]almente|grat[oa]|(mu[iIıİ]to )?obr[iIıİ]gad[oa]s?"
-        + @"( desde já| pela atenção)?|(com os melhores )?cumpr[iIıİ]mentos|saudações|"
-        + @"(un )?saludos?( cord[iIıİ]ales)?|atentamente|(muchas )?grac[iIıİ]as( de antemano)?|"
-        + @"(b[iIıİ]en )?cord[iIıİ]alement|salutat[iIıİ]ons( d[iIıİ]st[iIıİ]nguées)?|b[iIıİ]en à vous|merc[iIıİ]( d'avance)?|bonne journée)[\s\x1c-\x1f,!.]*$",
+    [GeneratedRegex(@"^[\s\x1c-\x1f]*(atenc[iIıİ]o[sSſ]amente|att|abraço[sSſ]?|ab[sSſ]|um abraço|cord[iIıİ]almente|grat[oa]|(mu[iIıİ]to )?obr[iIıİ]gad[oa][sSſ]?"
+        + @"( de[sSſ]de já| pela atenção)?|(com o[sSſ] melhore[sSſ] )?cumpr[iIıİ]mento[sSſ]|[sSſ]audaçõe[sSſ]|"
+        + @"(un )?[sSſ]aludo[sSſ]?( cord[iIıİ]ale[sSſ])?|atentamente|(mucha[sSſ] )?grac[iIıİ]a[sSſ]( de antemano)?|"
+        + @"(b[iIıİ]en )?cord[iIıİ]alement|[sSſ]alutat[iIıİ]on[sSſ]( d[iIıİ][sSſ]t[iIıİ]nguée[sSſ])?|b[iIıİ]en à vou[sSſ]|merc[iIıİ]( d'avance)?|bonne journée)[\s\x1c-\x1f,!.]*$",
         RegexOptions.IgnoreCase)]
     private static partial Regex SignatureTranslated();
 
-    private const string Device = @"[iIıİ]phone|[iIıİ]pad|andro[iIıİ]d|[iIıİ]os|mob[iIıİ]le|celular|telemóvel|móv[iIıİ]l|galaxy|smartphone|samsung|tablet|outlook|yahoo|ma[iIıİ]l|e-?ma[iIıİ]l|gma[iIıİ]l|w[iIıİ]ndows";
+    private const string Device = @"[iIıİ]phone|[iIıİ]pad|andro[iIıİ]d|[iIıİ]o[sSſ]|mob[iIıİ]le|celular|telemóvel|móv[iIıİ]l|galaxy|[sSſ]martphone|[sSſ]am[sSſ]ung|tablet|outloo[kKK]|yahoo|ma[iIıİ]l|e-?ma[iIıİ]l|gma[iIıİ]l|w[iIıİ]ndow[sSſ]";
 
-    [GeneratedRegex(@"^[\s\x1c-\x1f]*((env[iIıİ]ad[oa] (do|pelo|pela|v[iIıİ]a|desde|a part[iIıİ]r do)( meu| m[iIıİ]nha| m[iIıİ])?|sent from( my)?|"
-        + @"envoy[ée] (depu[iIıİ]s|de)( mon| ma| mes)?)"
-        + @" (" + Device + @")( (" + Device + @"|para|for|no|na|\d+|phone|dev[iIıİ]ce|pro|max|m[iIıİ]n[iIıİ]|plus|us[iIıİ]ng [a-zıİ][a-z0-9_.+ıİ-]*))*"
-        + @"|(obter o|get) outlook (para|for) ([iIıİ]os|andro[iIıİ]d))[\s\x1c-\x1f.!]*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^[\s\x1c-\x1f]*((env[iIıİ]ad[oa] (do|pelo|pela|v[iIıİ]a|de[sSſ]de|a part[iIıİ]r do)( meu| m[iIıİ]nha| m[iIıİ])?|[sSſ]ent from( my)?|"
+        + @"envoy[ée] (depu[iIıİ][sSſ]|de)( mon| ma| me[sSſ])?)"
+        + @" (" + Device + @")( (" + Device + @"|para|for|no|na|\d+|phone|dev[iIıİ]ce|pro|max|m[iIıİ]n[iIıİ]|plu[sSſ]|u[sSſ][iIıİ]ng [a-zıİſK][a-z0-9_.+ıİſK-]*))*"
+        + @"|(obter o|get) outloo[kKK] (para|for) ([iIıİ]o[sSſ]|andro[iIıİ]d))[\s\x1c-\x1f.!]*$", RegexOptions.IgnoreCase)]
     private static partial Regex SignatureSentFromMobile();
 
     // .search() semantics: no anchors, matches anywhere in the text.
     [GeneratedRegex(
-        @"(" + Wb + @"(e-?ma[iIıİ]l|message|[iIıİ]nformat[iIıİ]on|commun[iIıİ]cat[iIıİ]on|transm[iIıİ]ss[iIıİ]on|contents?)" + Wb + @"[^.]{0,60}"
-        + @"" + Wb + @"conf[iIıİ]dent[iIıİ]al" + Wb + @"[^.]{0,60}" + Wb + @"([iIıİ]ntended|solely|addressee|rec[iIıİ]p[iIıİ]ent|pr[iIıİ]v[iIıİ]leged|d[iIıİ]sclos|unauthor[iIıİ][sz]ed)|"
-        + @"" + Wb + @"conf[iIıİ]dent[iIıİ]al" + Wb + @"[^.]{0,60}" + Wb + @"(and (may|[iIıİ]s) (also )?pr[iIıİ]v[iIıİ]leged)|"
-        + @"[iIıİ]f you (have )?rece[iIıİ]ved th[iIıİ]s (e-?ma[iIıİ]l|message) [iIıİ]n error|"
-        + @"" + Wb + @"(esta|este) (mensagem|e-?ma[iIıİ]l|mensaje|correo)" + Wb + @"[^.]{0,80}(conf[iIıİ]denc[iIıİ]a|s[iIıİ]g[iIıİ]los|pr[iIıİ]v[iIıİ]leg[iIıİ]ad)|"
-        + @"" + Wb + @"(uso exclus[iIıİ]vo|exclus[iIıİ]vamente|ún[iIıİ]camente|un[iIıİ]camente)" + Wb + @"[^.]{0,30}(dest[iIıİ]natár[iIıİ]|dest[iIıİ]natar[iIıİ]|pessoa|persona|ent[iIıİ]dade|ent[iIıİ]dad)|"
-        + @"" + Wb + @"(recebeu|receb[iIıİ]do|receber) (esta|este) (mensagem|e-?ma[iIıİ]l)" + Wb + @"[^.]{0,20} por (engano|erro)|"
-        + @"" + Wb + @"(ha rec[iIıİ]b[iIıİ]do|rec[iIıİ]b[iIıİ]ó|rec[iIıİ]be) (este|esta) (mensaje|correo)" + Wb + @"[^.]{0,20} por error|"
-        + @"" + Wb + @"antes de [iIıİ]mpr[iIıİ]m[iIıİ]r" + Wb + @"[^.]{0,100}(me[iIıİ]o amb[iIıİ]ente|med[iIıİ]o amb[iIıİ]ente|natureza|planeta|realmente necess)|"
-        + @"" + Wb + @"(me[iIıİ]o|med[iIıİ]o) amb[iIıİ]ente" + Wb + @"[^.]{0,30}antes de [iIıİ]mpr[iIıİ]m[iIıİ]r|"
-        + @"" + Wb + @"(ce|cet|cette) (message|e-?ma[iIıİ]l|ma[iIıİ]l|courr[iIıİ]el)" + Wb + @"[^.]{0,80}(conf[iIıİ]dent[iIıİ]el|pr[iIıİ]v[iIıİ]l[eé]g[iIıİ])|"
-        + @"" + Wb + @"avez re[çc]u (ce|cet|cette) (message|e-?ma[iIıİ]l|ma[iIıİ]l)" + Wb + @"[^.]{0,20} par erreur|"
-        + @"" + Wb + @"(usage exclus[iIıİ]f|exclus[iIıİ]vement|un[iIıİ]quement)" + Wb + @"[^.]{0,30}dest[iIıİ]nata[iIıİ]re)",
+        @"(" + Wb + @"(e-?ma[iIıİ]l|me[sSſ][sSſ]age|[iIıİ]nformat[iIıİ]on|commun[iIıİ]cat[iIıİ]on|tran[sSſ]m[iIıİ][sSſ][sSſ][iIıİ]on|content[sSſ]?)" + Wb + @"[^.]{0,60}"
+        + @"" + Wb + @"conf[iIıİ]dent[iIıİ]al" + Wb + @"[^.]{0,60}" + Wb + @"([iIıİ]ntended|[sSſ]olely|addre[sSſ][sSſ]ee|rec[iIıİ]p[iIıİ]ent|pr[iIıİ]v[iIıİ]leged|d[iIıİ][sSſ]clo[sSſ]|unauthor[iIıİ][sz]ed)|"
+        + @"" + Wb + @"conf[iIıİ]dent[iIıİ]al" + Wb + @"[^.]{0,60}" + Wb + @"(and (may|[iIıİ][sSſ]) (al[sSſ]o )?pr[iIıİ]v[iIıİ]leged)|"
+        + @"[iIıİ]f you (have )?rece[iIıİ]ved th[iIıİ][sSſ] (e-?ma[iIıİ]l|me[sSſ][sSſ]age) [iIıİ]n error|"
+        + @"" + Wb + @"(e[sSſ]ta|e[sSſ]te) (men[sSſ]agem|e-?ma[iIıİ]l|men[sSſ]aje|correo)" + Wb + @"[^.]{0,80}(conf[iIıİ]denc[iIıİ]a|[sSſ][iIıİ]g[iIıİ]lo[sSſ]|pr[iIıİ]v[iIıİ]leg[iIıİ]ad)|"
+        + @"" + Wb + @"(u[sSſ]o exclu[sSſ][iIıİ]vo|exclu[sSſ][iIıİ]vamente|ún[iIıİ]camente|un[iIıİ]camente)" + Wb + @"[^.]{0,30}(de[sSſ]t[iIıİ]natár[iIıİ]|de[sSſ]t[iIıİ]natar[iIıİ]|pe[sSſ][sSſ]oa|per[sSſ]ona|ent[iIıİ]dade|ent[iIıİ]dad)|"
+        + @"" + Wb + @"(recebeu|receb[iIıİ]do|receber) (e[sSſ]ta|e[sSſ]te) (men[sSſ]agem|e-?ma[iIıİ]l)" + Wb + @"[^.]{0,20} por (engano|erro)|"
+        + @"" + Wb + @"(ha rec[iIıİ]b[iIıİ]do|rec[iIıİ]b[iIıİ]ó|rec[iIıİ]be) (e[sSſ]te|e[sSſ]ta) (men[sSſ]aje|correo)" + Wb + @"[^.]{0,20} por error|"
+        + @"" + Wb + @"ante[sSſ] de [iIıİ]mpr[iIıİ]m[iIıİ]r" + Wb + @"[^.]{0,100}(me[iIıİ]o amb[iIıİ]ente|med[iIıİ]o amb[iIıİ]ente|natureza|planeta|realmente nece[sSſ][sSſ])|"
+        + @"" + Wb + @"(me[iIıİ]o|med[iIıİ]o) amb[iIıİ]ente" + Wb + @"[^.]{0,30}ante[sSſ] de [iIıİ]mpr[iIıİ]m[iIıİ]r|"
+        + @"" + Wb + @"(ce|cet|cette) (me[sSſ][sSſ]age|e-?ma[iIıİ]l|ma[iIıİ]l|courr[iIıİ]el)" + Wb + @"[^.]{0,80}(conf[iIıİ]dent[iIıİ]el|pr[iIıİ]v[iIıİ]l[eé]g[iIıİ])|"
+        + @"" + Wb + @"avez re[çc]u (ce|cet|cette) (me[sSſ][sSſ]age|e-?ma[iIıİ]l|ma[iIıİ]l)" + Wb + @"[^.]{0,20} par erreur|"
+        + @"" + Wb + @"(u[sSſ]age exclu[sSſ][iIıİ]f|exclu[sSſ][iIıİ]vement|un[iIıİ]quement)" + Wb + @"[^.]{0,30}de[sSſ]t[iIıİ]nata[iIıİ]re)",
         RegexOptions.IgnoreCase)]
     private static partial Regex Disclaimer();
 

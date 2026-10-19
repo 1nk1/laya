@@ -1445,6 +1445,36 @@
       "body": "Please help me.\n\nThis email𝟎 is confidential and intended solely for you.",
       "max_chars": 3000,
       "result": "Please help me.\n\nThis email𝟎 is confidential and intended solely for you."
+    },
+    {
+      "label": "pyre/ignorecase_long_s_original_message",
+      "body": "Please help me.\n-----Menſagem original-----\nOld request.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/ignorecase_long_s_forwarded_message",
+      "body": "Please help me.\n----- Forwarded Meſsage -----\nOld request.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/ignorecase_long_s_pt_signoff",
+      "body": "Preciso de ajuda.\nſaludoſ cordiales,\nMaria",
+      "max_chars": 3000,
+      "result": "Preciso de ajuda."
+    },
+    {
+      "label": "pyre/ignorecase_kelvin_sign_signoff",
+      "body": "Please help me.\nThanK you,\nJohn",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/ignorecase_kelvin_sign_device_footer",
+      "body": "Please help me.\nSent from my iPhone using KIT",
+      "max_chars": 3000,
+      "result": "Please help me."
     }
   ],
   "state": [
