@@ -126,3 +126,140 @@ fn bare_nan_and_infinity_tokens_load_as_in_python() {
         );
     }
 }
+
+fn warnings_for(config: &str) -> Vec<String> {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log::LevelFilter::Warn);
+    SEEN.lock().unwrap().clear();
+    LayaConfig::parse(config).unwrap();
+    SEEN.lock().unwrap().clone()
+}
+
+fn onnx_warning(clamping: &str) -> String {
+    format!(
+        "laya ONNX: this checkpoint ships temperatures outside [0.5, 5] which would distort \
+         confidence; clamping {clamping}. Treat confidence from the affected buckets as \
+         uncalibrated."
+    )
+}
+
+// B1: Python keeps `-0` and integers above 2**64 as ints, so the warning prints them as ints.
+#[test]
+fn warning_prints_json_integers_as_python_ints() {
+    assert_eq!(
+        vec![onnx_warning("temperature[0]=0 -> 0.5")],
+        warnings_for(r#"{"temperature":[-0,1,1]}"#)
+    );
+    assert_eq!(
+        vec![onnx_warning(
+            "temperature[0]=123456789012345678901234567890 -> 5"
+        )],
+        warnings_for(r#"{"temperature":[123456789012345678901234567890,1,1]}"#)
+    );
+    assert_eq!(
+        vec![onnx_warning(
+            "temperature[0]=-123456789012345678901234567890 -> 0.5, \
+             temperature[1]=18446744073709551616 -> 5, temperature[2]=1e+22 -> 5, \
+             temperature[3]=1.5e+300 -> 5, temperature[4]=0.0 -> 0.5, \
+             temperature[5]=-0.0 -> 0.5, temperature[6]=100.0 -> 5"
+        )],
+        warnings_for(
+            r#"{"temperature":[-123456789012345678901234567890, 18446744073709551616, 1e22,
+                1.5e300, 0.0, -0.0, 1E2]}"#
+        )
+    );
+}
+
+// B3: a real string that spells an internal marker is just a string.
+#[test]
+fn strings_that_look_like_internal_markers_stay_strings() {
+    assert_eq!(
+        vec![onnx_warning(
+            "temperature[0]='__laya_nan__' -> 1, temperature[1]='__laya_inf__' -> 1, \
+             temperature[2]='__laya_int_too_large_to_convert_to_float__' -> 1"
+        )],
+        warnings_for(
+            r#"{"temperature":["__laya_nan__","__laya_inf__",
+                "__laya_int_too_large_to_convert_to_float__",1,1]}"#
+        )
+    );
+}
+
+// B2: Python's json.loads rejects all of these (checked with Python 3.12).
+#[test]
+fn malformed_json_stays_rejected() {
+    for bad in [
+        "{NaN: 1}",
+        "{Infinity: 1}",
+        r#"{"a": 1, -Infinity: 2}"#,
+        "[NaN,]",
+        r#"{"a":NaN,}"#,
+        "[Infinity Infinity]",
+        r#"{"a" NaN}"#,
+        "NaN NaN",
+        r#"{"a":-}"#,
+        "[1.]",
+        "[.5]",
+        "[+1]",
+        "[01]",
+        "[nan]",
+        r#"{"a":tru}"#,
+        "[1e]",
+    ] {
+        assert!(LayaConfig::parse(bad).is_err(), "{bad} must be rejected");
+    }
+}
+
+// N2: Python's default filter shows a warning once per (text, line of the attributed frame).
+// The attributed line is the caller's (`stacklevel`), which `#[track_caller]` reproduces.
+fn capture(run: impl FnOnce()) -> Vec<String> {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log::LevelFilter::Warn);
+    SEEN.lock().unwrap().clear();
+    run();
+    SEEN.lock().unwrap().clone()
+}
+
+#[test]
+fn a_warning_repeated_from_one_line_is_emitted_once() {
+    let config = r#"{"temperature":[0.25,1,1]}"#;
+    let seen = capture(|| {
+        for _ in 0..3 {
+            LayaConfig::parse(config).unwrap();
+        }
+    });
+    assert_eq!(1, seen.len());
+}
+
+#[test]
+fn the_same_warning_from_two_lines_is_emitted_twice() {
+    let config = r#"{"temperature":[0.27,1,1]}"#;
+    let seen = capture(|| {
+        LayaConfig::parse(config).unwrap();
+        LayaConfig::parse(config).unwrap();
+    });
+    assert_eq!(2, seen.len());
+    assert_eq!(seen[0], seen[1]);
+}
+
+// The router builds engines from one fixed line inside the library (it has no `#[track_caller]`),
+// so loading through it warns once per process however many lines call it, as in Python.
+fn like_the_router(config: &str) {
+    LayaConfig::parse(config).unwrap();
+}
+
+#[test]
+fn a_warning_through_a_fixed_library_line_is_emitted_once() {
+    let config = r#"{"temperature":[0.29,1,1]}"#;
+    let seen = capture(|| {
+        like_the_router(config);
+        like_the_router(config);
+    });
+    assert_eq!(1, seen.len());
+    assert_eq!(
+        1,
+        capture(|| like_the_router(r#"{"temperature":[0.31,1,1]}"#)).len()
+    );
+}

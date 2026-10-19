@@ -69,6 +69,15 @@ IDENTIFIERS = ["os.path", "user@example.com", "https://example.com/a/b?c=d", "fo
 EMOJI = ["\U0001F600", "\U0001F680", "\U0001F44D", "\u2764\uFE0F", "\U0001F1E7\U0001F1F7"]
 WHITESPACE = [" ", " ", " ", "\u00a0", "\x1c", "\x1d", "\x1e", "\x1f", "\x85", "\u3000", "\t", "\u2003",
               "\u2028"]
+# Characters with special case-folding or word-class behaviour: dotted/dotless i, long s, the Kelvin
+# and Angstrom signs, titlecase digraphs, German sharp s, final sigma, a superscript digit and a
+# connector, a circled letter, a Roman numeral, a vulgar fraction, a modifier letter, a mark.
+SPECIAL = ["\u0130", "\u0131", "\u017f", "\u212a", "\u212b", "\u01c5", "\u00df", "\u1e9e", "\u03c2",
+           "\u03a3", "\u00b2", "\u00b3", "\u00bd", "\u203f", "\u2040", "\u24b6", "\u2160", "\u02b0",
+           "\u0149", "\u00b5", "\u03bc", "\u0345", "\u200d", "\u2460", "\u0660", "\uff10"]
+SWAPS = {"i": ["\u0131", "\u0130", "I"], "I": ["\u0130", "\u0131", "i"], "s": ["\u017f", "S"],
+         "S": ["\u017f", "s"], "k": ["\u212a", "K"], "K": ["\u212a", "k"], "a": ["\u212b", "A"],
+         "u": ["\u00b5"], "2": ["\u00b2", "\u0662", "\uff12"]}
 COMBINING = ["\u0301", "\u0308", "\u0323", "\u0327", "\u0345", "\u200d", "\u200c"]
 
 
@@ -111,6 +120,18 @@ def astral_word():
     return "".join(chr(base + rng.randrange(26)) for _ in range(rng.randint(2, 6)))
 
 
+def special_word():
+    """A word with some letters swapped for look-alikes that fold or classify differently."""
+    w = pick(ENGLISH + LOANWORDS + sorted(sum((STOP_WORDS[k][:6] for k in STOP_LANGS), [])))
+    out = []
+    for ch in w:
+        out.append(pick(SWAPS[ch]) if ch in SWAPS and rng.random() < 0.4 else ch)
+    w = "".join(out)
+    if rng.random() < 0.4:
+        w = w + pick(SPECIAL) if rng.random() < 0.5 else pick(SPECIAL) + w
+    return w
+
+
 def accent_word():
     w = pick(ENGLISH + LOANWORDS)
     return w + pick(COMBINING) if rng.random() < 0.5 else w[:1] + pick(COMBINING) + w[1:]
@@ -146,6 +167,8 @@ def fragment():
         return pick(ENGLISH).upper()
     if r < 0.93:
         return pick(ENGLISH) + pick([".", "/", "_", "\\"]) + pick(ENGLISH)
+    if r < 0.95:
+        return special_word()
     if r < 0.96:
         return str(rng.randrange(100000))
     return pick(["!", "?", ",", ".", ":", ";", "-", "(", ")", "\"", "'"])
@@ -309,7 +332,7 @@ DISCLAIMERS = [
     "Usage exclusif du destinataire.",
     "The email is confidential and intended solely for you.",
 ]
-NEIGHBOURS = ["\u00b2", "\u0301", "\u203f", "\u200d", "\u24b6", "\U0001D400", "\u2160", "_", "1"]
+NEIGHBOURS = ["\u0130", "\u0131", "\u017f", "\u212a", "\u00bd", "\u2040", "\u00b2", "\u0301", "\u203f", "\u200d", "\u24b6", "\U0001D400", "\u2160", "_", "1"]
 
 
 def vary(s):
@@ -320,8 +343,8 @@ def vary(s):
         x = ch
         if upper_lower:
             x = ch.upper() if rng.random() < 0.5 else ch.lower()
-        if ch in "iI" and rng.random() < 0.12:
-            x = pick(["\u0131", "\u0130", "i", "I"])
+        if ch in SWAPS and rng.random() < 0.12:
+            x = pick(SWAPS[ch])
         if ch == " " and rng.random() < 0.06:
             x = pick(["\u00a0", "\x1f", "\u3000", "\x85", "\t"])
         out.append(x)

@@ -82,6 +82,7 @@ impl LayaEngine {
     /// requested [`LayaOptions::checkpoint`] — this only happens when the artifact was resolved
     /// through a checkpoint-aware path (`LAYA_ONNX_ROOT`, cache, or download); an explicit
     /// `model_directory` is trusted as-is.
+    #[track_caller]
     pub fn create(options: LayaOptions) -> Result<Self> {
         let artifacts = ModelArtifacts::resolve(&options)?;
         let config = LayaConfig::load(&artifacts.config_path)?;
@@ -121,6 +122,7 @@ impl LayaEngine {
 
     /// Loads an engine from an artifact directory containing `model.onnx` directly, skipping
     /// every other resolution step.
+    #[track_caller]
     pub fn from_directory(directory: impl AsRef<Path>) -> Result<Self> {
         Self::create(LayaOptions {
             model_directory: Some(directory.as_ref().to_path_buf()),
@@ -199,6 +201,7 @@ impl LayaEngine {
     /// Per-call hooks, per-language temperatures and the confidence gate are not part of this
     /// port. Errors: [`LayaError::UnsupportedAggregate`], [`LayaError::InvalidWindow`] (no room
     /// for the state, or a stride that leaves gaps), plus everything [`Self::predict`] returns.
+    #[track_caller]
     pub fn predict_long(
         &self,
         state: impl Into<Value>,
@@ -210,6 +213,7 @@ impl LayaEngine {
 
     /// [`Self::predict_long`], for a state that implements [`serde::Serialize`] but not
     /// `Into<serde_json::Value>`.
+    #[track_caller]
     pub fn predict_long_serialize(
         &self,
         state: &impl Serialize,
@@ -220,6 +224,7 @@ impl LayaEngine {
         self.predict_long_value(value, questions, options)
     }
 
+    #[track_caller]
     fn predict_long_value(
         &self,
         state: Value,
@@ -237,7 +242,7 @@ impl LayaEngine {
             explicit_window,
             options.stride.unwrap_or(0),
         )?;
-        long_prediction::emit_warnings(&warnings);
+        long_prediction::emit_warnings(&warnings, std::panic::Location::caller());
         let state_ids = SequenceBuilder::encode_state(tokenizer, &state)?;
 
         // `predict` reads the whole room the questions leave, so the default window must not force

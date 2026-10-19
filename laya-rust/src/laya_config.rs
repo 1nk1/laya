@@ -10,7 +10,7 @@ use crate::language_detection::py_strip;
 use crate::laya_router::python_repr_str;
 use crate::long_prediction::emit_warnings;
 use crate::python_json::PythonJson;
-use serde_json::Value;
+use crate::python_json_reader::PyJson;
 use std::collections::HashMap;
 use std::path::Path;
 use unicode_general_category::{GeneralCategory, get_general_category};
@@ -131,163 +131,28 @@ fn ascii_float_text(body: &str) -> Option<String> {
 
 /// A JSON temperature entry as `clamp_temperature` reads it: a number as itself, a string through
 /// `float(str)`, and a bool or anything else not at all.
-fn temperature_number(raw: &Value) -> Option<f64> {
+fn temperature_number(raw: &PyJson) -> Option<f64> {
     match raw {
-        Value::Number(n) => n.as_f64(),
-        Value::String(s) if s == NAN_MARK => Some(f64::NAN),
-        Value::String(s) if s == POS_INF_MARK => Some(f64::INFINITY),
-        Value::String(s) if s == NEG_INF_MARK => Some(f64::NEG_INFINITY),
-        Value::String(s) => py_float(s),
+        PyJson::Int(literal) => PyJson::int_as_f64(literal),
+        PyJson::Float(f) => Some(*f),
+        PyJson::Str(s) => py_float(s),
         _ => None,
     }
 }
 
-/// Stands in, in the re-read text, for a JSON integer literal too large for a float.
-/// Stands in for a float literal that overflows to infinity (Python: `inf`, `-inf`).
-const POS_INF_MARK: &str = "__laya_inf__";
-const NEG_INF_MARK: &str = "__laya_neg_inf__";
-
-const INT_OVERFLOW_MARK: &str = "__laya_int_too_large_to_convert_to_float__";
-
-/// Whether `token` has the shape of a JSON number: `-? (0 | [1-9][0-9]*) (. [0-9]+)? ([eE] [+-]? [0-9]+)?`.
-fn is_json_number(token: &str) -> bool {
-    let b = token.as_bytes();
-    let digits = |mut i: usize| {
-        let start = i;
-        while b.get(i).is_some_and(u8::is_ascii_digit) {
-            i += 1;
-        }
-        (i, i > start)
-    };
-    let mut i = usize::from(b.first() == Some(&b'-'));
-    if b.get(i) == Some(&b'0') {
-        i += 1;
-    } else {
-        let (next, any) = digits(i);
-        if !any || b[i] == b'0' {
-            return false;
-        }
-        i = next;
-    }
-    if b.get(i) == Some(&b'.') {
-        let (next, any) = digits(i + 1);
-        if !any {
-            return false;
-        }
-        i = next;
-    }
-    if matches!(b.get(i), Some(b'e' | b'E')) {
-        i += 1;
-        if matches!(b.get(i), Some(b'+' | b'-')) {
-            i += 1;
-        }
-        let (next, any) = digits(i);
-        if !any {
-            return false;
-        }
-        i = next;
-    }
-    i == b.len()
-}
-
-/// Stands in for the bare token `NaN`, which Python's `json.loads` accepts as `float('nan')`.
-const NAN_MARK: &str = "__laya_nan__";
-
-/// The bare constants Python's `json.loads` accepts and serde_json refuses (`NaN`, `Infinity`,
-/// `-Infinity`; nothing else, so `nan`, `+Infinity` and `Inf` stay errors) at the start of `rest`:
-/// the marker standing in for it and its length in characters.
-fn python_json_constant(rest: &[char]) -> Option<(&'static str, usize)> {
-    let starts = |word: &str| {
-        let n = word.chars().count();
-        rest.len() >= n
-            && rest[..n].iter().copied().eq(word.chars())
-            && !rest
-                .get(n)
-                .is_some_and(|c| c.is_alphanumeric() || *c == '_')
-    };
-    if starts("NaN") {
-        Some((NAN_MARK, 3))
-    } else if starts("Infinity") {
-        Some((POS_INF_MARK, 8))
-    } else if starts("-Infinity") {
-        Some((NEG_INF_MARK, 9))
-    } else {
-        None
-    }
-}
-
-/// `json.loads`, for the places serde_json is stricter than Python:
-/// - it refuses a number literal that overflows an `f64`, where Python keeps a huge integer as an
-///   `int` and reads `1e400` as `inf`;
-/// - it refuses the bare tokens `NaN`, `Infinity` and `-Infinity`, which Python reads as floats.
-///
-/// Such a literal is rewritten before a second read: a float literal or constant becomes a marker
-/// string read back as the float Python makes of it, an integer literal that overflows becomes
-/// [`INT_OVERFLOW_MARK`]. Text serde_json reads as is never reaches the rewrite.
-pub(crate) fn read_json(text: &str) -> Result<Value> {
-    let first = match serde_json::from_str::<Value>(text) {
-        Ok(value) => return Ok(value),
-        Err(e) => e,
-    };
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let (mut i, mut in_string, mut escaped) = (0, false, false);
-    while i < chars.len() {
-        let c = chars[i];
-        if in_string {
-            out.push(c);
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_string = false;
-            }
-            i += 1;
-        } else if c == '"' {
-            in_string = true;
-            out.push(c);
-            i += 1;
-        } else if let Some((mark, len)) = python_json_constant(&chars[i..]) {
-            out.push_str(&format!("\"{mark}\""));
-            i += len;
-        } else if c == '-' || c.is_ascii_digit() {
-            let start = i;
-            while i < chars.len() && matches!(chars[i], '-' | '+' | '.' | 'e' | 'E' | '0'..='9') {
-                i += 1;
-            }
-            let token: String = chars[start..i].iter().collect();
-            if !is_json_number(&token) || serde_json::from_str::<Value>(&token).is_ok() {
-                out.push_str(&token);
-            } else if token.contains(['.', 'e', 'E']) {
-                let mark = if token.starts_with('-') {
-                    NEG_INF_MARK
-                } else {
-                    POS_INF_MARK
-                };
-                out.push_str(&format!("\"{mark}\""));
-            } else {
-                out.push_str(&format!("\"{INT_OVERFLOW_MARK}\""));
-            }
-        } else {
-            out.push(c);
-            i += 1;
-        }
-    }
-    serde_json::from_str(&out).map_err(|_| first.into())
-}
-
 /// Python's `OverflowError` from `clamp_temperature(<huge int>)`, which nothing catches, so the
 /// checkpoint fails to load.
-fn check_temperature_overflow(root: &Value) -> Result<()> {
-    let marked = |v: &Value| v.as_str() == Some(INT_OVERFLOW_MARK);
-    let by_options = root
-        .get("temperature_by_options")
-        .and_then(Value::as_object);
-    let list = root.get("temperature").and_then(Value::as_array);
-    if by_options.is_some_and(|m| m.values().any(marked))
-        || list.is_some_and(|l| l.iter().any(marked))
-    {
+fn check_temperature_overflow(root: &PyJson) -> Result<()> {
+    let overflows = |v: &PyJson| matches!(v, PyJson::Int(l) if PyJson::int_as_f64(l).is_none());
+    let by_options = match root.get("temperature_by_options") {
+        Some(PyJson::Object(entries)) => entries.iter().any(|(_, v)| overflows(v)),
+        _ => false,
+    };
+    let list = match root.get("temperature") {
+        Some(PyJson::Array(items)) => items.iter().any(overflows),
+        _ => false,
+    };
+    if by_options || list {
         return Err(LayaError::InvalidConfig(
             "OverflowError: int too large to convert to float".to_string(),
         ));
@@ -313,25 +178,25 @@ fn percent_g(value: f64) -> String {
 }
 
 /// Python's `repr()` of a JSON value as `json.load` would have produced it.
-fn py_repr(value: &Value) -> String {
+fn py_repr(value: &PyJson) -> String {
     match value {
-        Value::Null => "None".to_string(),
-        Value::Bool(true) => "True".to_string(),
-        Value::Bool(false) => "False".to_string(),
-        Value::Number(n) => match (n.as_i64(), n.as_u64()) {
-            (Some(i), _) => i.to_string(),
-            (_, Some(u)) => u.to_string(),
-            _ => PythonJson::repr(n.as_f64().unwrap_or(f64::NAN)),
+        PyJson::Null => "None".to_string(),
+        PyJson::Bool(true) => "True".to_string(),
+        PyJson::Bool(false) => "False".to_string(),
+        PyJson::Int(literal) => match literal.strip_prefix('-') {
+            // Python's `int('-0')` is `0`.
+            Some("0") => "0".to_string(),
+            _ => literal.clone(),
         },
-        Value::String(s) if s == NAN_MARK => "nan".to_string(),
-        Value::String(s) if s == POS_INF_MARK => "inf".to_string(),
-        Value::String(s) if s == NEG_INF_MARK => "-inf".to_string(),
-        Value::String(s) => python_repr_str(s),
-        Value::Array(items) => format!(
+        PyJson::Float(f) if f.is_nan() => "nan".to_string(),
+        PyJson::Float(f) if f.is_infinite() => if *f > 0.0 { "inf" } else { "-inf" }.to_string(),
+        PyJson::Float(f) => PythonJson::repr(*f),
+        PyJson::Str(s) => python_repr_str(s),
+        PyJson::Array(items) => format!(
             "[{}]",
             items.iter().map(py_repr).collect::<Vec<_>>().join(", ")
         ),
-        Value::Object(map) => format!(
+        PyJson::Object(map) => format!(
             "{{{}}}",
             map.iter()
                 .map(|(k, v)| format!("{}: {}", python_repr_str(k), py_repr(v)))
@@ -345,15 +210,12 @@ fn py_repr(value: &Value) -> String {
 /// had to be replaced, or `None` when every one was accepted. Entries are named, in Python's
 /// order (`temperature_by_options` in file order, then `temperature[i]`), with the value as
 /// shipped (`%r`) and the one applied (`%g`).
-fn temperature_warning(root: &Value) -> Option<String> {
-    let mut entries: Vec<(String, &Value)> = Vec::new();
-    if let Some(by_options) = root
-        .get("temperature_by_options")
-        .and_then(Value::as_object)
-    {
+fn temperature_warning(root: &PyJson) -> Option<String> {
+    let mut entries: Vec<(String, &PyJson)> = Vec::new();
+    if let Some(PyJson::Object(by_options)) = root.get("temperature_by_options") {
         entries.extend(by_options.iter().map(|(k, v)| (k.clone(), v)));
     }
-    if let Some(list) = root.get("temperature").and_then(Value::as_array) {
+    if let Some(PyJson::Array(list)) = root.get("temperature") {
         entries.extend(
             list.iter()
                 .enumerate()
@@ -384,52 +246,52 @@ fn temperature_warning(root: &Value) -> Option<String> {
 
 impl LayaConfig {
     /// Read a config from a `rl_agent_config.json` file.
+    #[track_caller]
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         Self::parse(&std::fs::read_to_string(path)?)
     }
 
     /// Parse a config from JSON text.
+    #[track_caller]
     pub fn parse(json: &str) -> Result<Self> {
-        let root = read_json(json)?;
+        let at = std::panic::Location::caller();
+        let root = PyJson::parse(json)?;
         check_temperature_overflow(&root)?;
 
-        let mut temperature_raw: Vec<f64> = root
-            .get("temperature")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .map(|v| temperature_number(v).unwrap_or(f64::NAN))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut temperature_raw: Vec<f64> = match root.get("temperature") {
+            Some(PyJson::Array(arr)) => arr
+                .iter()
+                .map(|v| temperature_number(v).unwrap_or(f64::NAN))
+                .collect(),
+            _ => Vec::new(),
+        };
         // Python indexes self.temperature[qtype] for qtype 0..2, so a short list would be an
         // IndexError there; pad to 3 with the neutral value rather than failing later per-question.
         while temperature_raw.len() < 3 {
             temperature_raw.push(1.0);
         }
 
-        let temperature_by_options_raw: HashMap<String, f64> = root
-            .get("temperature_by_options")
-            .and_then(Value::as_object)
-            .map(|obj| {
-                obj.iter()
+        let temperature_by_options_raw: HashMap<String, f64> =
+            match root.get("temperature_by_options") {
+                Some(PyJson::Object(obj)) => obj
+                    .iter()
                     .map(|(k, v)| (k.clone(), temperature_number(v).unwrap_or(f64::NAN)))
-                    .collect()
-            })
-            .unwrap_or_default();
+                    .collect(),
+                _ => HashMap::new(),
+            };
 
         let encoder = root
             .get("encoder")
-            .and_then(Value::as_str)
+            .and_then(PyJson::as_str)
             .map(str::to_string);
         let max_len = root
             .get("max_len")
-            .and_then(Value::as_u64)
+            .and_then(PyJson::as_u64)
             .map(|v| v as usize)
             .unwrap_or(512);
         let head_max_len = root
             .get("head_max_len")
-            .and_then(Value::as_u64)
+            .and_then(PyJson::as_u64)
             .map(|v| v as usize)
             .unwrap_or(192);
 
@@ -456,7 +318,7 @@ impl LayaConfig {
         }
 
         if let Some(warning) = temperature_warning(&root) {
-            emit_warnings(&[warning]);
+            emit_warnings(&[warning], at);
         }
 
         Ok(LayaConfig {
@@ -469,23 +331,5 @@ impl LayaConfig {
             temperature_by_options_raw,
             clamped_temperatures,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::read_json;
-
-    // `tokenizer_config.json` goes through the same reader: Python's `json.load` accepts these
-    // constants in unrelated keys (e.g. `model_max_length`), so the special-token read must too.
-    #[test]
-    fn read_json_accepts_pythons_constants_and_keeps_strings_alone() {
-        let value = read_json(
-            r#"{"model_max_length": Infinity, "x": [NaN, -Infinity], "cls_token": "[CLS] NaN"}"#,
-        )
-        .unwrap();
-        assert_eq!("[CLS] NaN", value["cls_token"].as_str().unwrap());
-        assert!(value["x"].is_array() && value["model_max_length"].is_string());
-        assert!(read_json(r#"{"a": nan}"#).is_err());
     }
 }

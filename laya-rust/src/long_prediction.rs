@@ -197,9 +197,26 @@ pub(crate) fn plan_budget_warned(
 const WINDOW_CLAMP_WARN_RATIO: usize = 2;
 
 /// Sends each warning to the `log` facade (`warn`, target `laya`).
-pub(crate) fn emit_warnings(warnings: &[String]) {
+///
+/// Python's default warnings filter shows an identical warning once per location, so a text that
+/// has already been emitted in this process is not emitted again.
+///
+/// Python keys that on the message text and the file and line of the frame the warning is
+/// attributed to (`stacklevel`): the caller's line, not the library's. `at` is that place, taken
+/// from `#[track_caller]` on the public entry points. A call made through the router comes from
+/// the router's own fixed line, as it does in Python.
+pub(crate) fn emit_warnings(warnings: &[String], at: &std::panic::Location<'_>) {
+    type Shown = std::collections::HashSet<(String, String, u32)>;
+    static SHOWN: std::sync::Mutex<Option<Shown>> = std::sync::Mutex::new(None);
     for message in warnings {
-        log::warn!(target: "laya", "{message}");
+        let first = SHOWN
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(Default::default)
+            .insert((message.clone(), at.file().to_string(), at.line()));
+        if first {
+            log::warn!(target: "laya", "{message}");
+        }
     }
 }
 
@@ -899,6 +916,16 @@ mod tests {
         assert!(warned(&[312], 0, 0).is_empty());
     }
 
+    // 312 / 96 = 3.25 is an exact tie: Python's `%.1f` rounds it half to even and prints 3.2.
+    #[test]
+    fn window_capped_ratio_tie_prints_as_python_does() {
+        let text = warned(&[96], 0, 0).remove(0);
+        assert!(
+            text.contains("capped 312 -> 96 and roughly 3.2x as many windows"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn warns_with_pythons_text_when_an_explicit_window_is_capped() {
         assert_eq!(vec![WARN_WINDOW], warned(&[32], 100, 0));
@@ -940,7 +967,10 @@ mod tests {
         log::set_logger(&LOGGER).unwrap();
         log::set_max_level(log::LevelFilter::Warn);
 
-        emit_warnings(&[WARN_WINDOW.to_string(), WARN_STRIDE.to_string()]);
+        let at = std::panic::Location::caller();
+        emit_warnings(&[WARN_WINDOW.to_string(), WARN_STRIDE.to_string()], at);
+        // Python shows an identical warning once per process; a repeat is dropped.
+        emit_warnings(&[WARN_WINDOW.to_string()], at);
 
         let seen = SEEN.lock().unwrap();
         let ours: Vec<_> = seen.iter().filter(|(t, ..)| t == "laya").collect();

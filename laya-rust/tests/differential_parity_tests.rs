@@ -18,8 +18,9 @@ struct Mismatch {
     rust: String,
 }
 
+/// Floats are compared bit for bit: both sides compute the same IEEE operations.
 fn close(a: f64, b: f64) -> bool {
-    (a - b).abs() < 1e-9
+    a.to_bits() == b.to_bits()
 }
 
 fn show(s: &str) -> String {
