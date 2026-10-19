@@ -93,7 +93,7 @@ public sealed class LayaRouterOptions
 /// <see cref="Attach"/> to hand the router an instance you own and will dispose yourself.
 /// </para>
 /// </remarks>
-public sealed class LayaRouter : ILayaPredictor, IDisposable
+public sealed class LayaRouter : ILayaLongPredictor, IDisposable
 {
     // Checkpoint keys people are likely to type, mapped to their canonical name. Matches
     // Python's _ALIASES exactly.
@@ -475,6 +475,33 @@ public sealed class LayaRouter : ILayaPredictor, IDisposable
     public LayaResult Predict(
         object? state, QuestionSet questions,
         string? model = null, string? task = null, string? lang = null)
+        => PredictRouted(state, questions, model, task, lang,
+            predictor => predictor.Predict(state, questions));
+
+    LayaResult ILayaLongPredictor.PredictLong(
+        object state, QuestionSet questions, int? window, int? stride, string aggregate, int? batchSize) =>
+        PredictLong(state, questions, window, stride, aggregate, batchSize);
+
+    /// <summary>
+    /// Route using the usual model/task/lang hints, then scan the entire state. An attached predictor
+    /// must implement ILayaLongPredictor; unsupported predictors are never silently truncated.
+    /// </summary>
+    public LayaResult PredictLong(
+        object state, QuestionSet questions, int? window = null, int? stride = null,
+        string aggregate = "auto", int? batchSize = null,
+        string? model = null, string? task = null, string? lang = null)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        return PredictRouted(state, questions, model, task, lang, predictor =>
+            predictor is ILayaLongPredictor scanner
+                ? scanner.PredictLong(state, questions, window, stride, aggregate, batchSize)
+                : throw new NotSupportedException(
+                    $"{predictor.GetType().Name} has no PredictLong, so a state longer than its window cannot be scanned"));
+    }
+
+    private LayaResult PredictRouted(
+        object? state, QuestionSet questions, string? model, string? task, string? lang,
+        Func<ILayaPredictor, LayaResult> predict)
     {
         ArgumentNullException.ThrowIfNull(questions);
         var decision = Route(state, questions, model, task, lang);
@@ -492,7 +519,7 @@ public sealed class LayaRouter : ILayaPredictor, IDisposable
             // Inference runs outside the lock, exactly as Python's predict() calls
             // agent.system_one after load() has already returned and released the lock — so
             // concurrent predictions on a shared checkpoint are not serialised by the router.
-            var result = slot.Predictor.Predict(state, questions);
+            var result = predict(slot.Predictor);
             return result.WithRouting(decision);
         }
         finally

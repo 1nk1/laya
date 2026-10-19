@@ -6,10 +6,14 @@ All notable changes to the `Laya.Onnx` NuGet package are documented here. The fo
 
 ## [0.1.0] - unreleased
 
-First release: a port of the Laya Python SDK, tested against laya (Python) 0.3.24.
+First release: a port of the Laya Python SDK, tested against laya (Python) 0.4.11 (routing
+goldens: 0.4.0).
 
 ### Added
 
+- `LayaEngine.PredictLong` and `LayaRouter.PredictLong`, ported from Python
+  `ONNXAgent.predict_long`: overlapping token windows, batched inference, deciding-window
+  attribution, per-type aggregation and summed scan diagnostics.
 - `LayaEngine`: `choice`, `score` and `noul` predictions over the exported ONNX checkpoints
   (english, multilingual, typed-decisions); all questions for a state run in one batched forward pass.
 - Loads both ONNX layouts: the fused `model.onnx` and the split `encoder.onnx` + `head.onnx`.
@@ -34,9 +38,9 @@ First release: a port of the Laya Python SDK, tested against laya (Python) 0.3.2
 
 ### Known gaps
 
-- Python-only opt-in features are not yet ported: abstention (`min_confidence`), `predict_long`,
+- Python-only opt-in features are not yet ported: abstention (`min_confidence`),
   `lang_temperatures`, hooks, batching APIs, question option ordering and digest controls.
 - `LayaEmail.State` does not expose Python's `max_chars` keyword; use `CleanBody` with a custom
   budget and pass the cleaned body with `clean: false`.
 - New Python usage diagnostics (`state_tokens`, `truncated`, `state_tokens_dropped` and
-  `truncated_questions`) are not exposed by the .NET `Usage` record.
+  `truncated_questions`) are populated for `PredictLong`, but not ordinary `Predict`.

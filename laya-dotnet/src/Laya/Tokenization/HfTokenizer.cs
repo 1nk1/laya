@@ -43,6 +43,8 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
 {
     private readonly Tokenizer _inner;
     private readonly string _maskToken;
+    private readonly string _sourcePath;
+    private Tokenizer? _decoder;
 
     /// <inheritdoc/>
     public int PadId { get; }
@@ -81,6 +83,7 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
     public HfTokenizer(string tokenizerJsonPath)
     {
         ArgumentException.ThrowIfNullOrEmpty(tokenizerJsonPath);
+        _sourcePath = Path.GetFullPath(tokenizerJsonPath);
 
         var strippedPath = EnsureStrippedTokenizer(tokenizerJsonPath);
         _inner = new Tokenizer(vocabPath: strippedPath);
@@ -101,8 +104,24 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
         return Array.ConvertAll(tokens, t => (int)t);
     }
 
+    // Not self-synchronized: the lazy decoder relies on callers serializing use of this
+    // instance, as LayaEngine does under its tokenizer gate.
+    internal string Decode(int[] ids)
+    {
+        // Tokenizers.DotNet hardcodes skip_special_tokens=true. A decoder-only copy with
+        // added tokens marked non-special gives Python's default decode(..., false) instead.
+        // Encoding must keep using the original special-token metadata.
+        _decoder ??= new Tokenizer(vocabPath: EnsureStrippedTokenizer(_sourcePath, forDecode: true));
+        // The pinned transformers TokenizersBackend disables WordPiece space cleanup for BPE.
+        return _decoder.Decode(Array.ConvertAll(ids, id => (uint)id));
+    }
+
     /// <inheritdoc/>
-    public void Dispose() => _inner.Dispose();
+    public void Dispose()
+    {
+        _decoder?.Dispose();
+        _inner.Dispose();
+    }
 
     // ── post-processor stripping ───────────────────────────────────────────────
 
@@ -112,7 +131,7 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
     /// Returns the path to a cached copy of the tokenizer with <c>post_processor</c> set
     /// to <see langword="null"/>. Regenerates the cache when the source file has changed.
     /// </summary>
-    private static string EnsureStrippedTokenizer(string sourcePath)
+    private static string EnsureStrippedTokenizer(string sourcePath, bool forDecode = false)
     {
         sourcePath = Path.GetFullPath(sourcePath);
         var srcInfo = new FileInfo(sourcePath);
@@ -123,7 +142,8 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
 
         // Primary cache: alongside the original.
         var primaryDir = Path.GetDirectoryName(sourcePath)!;
-        var primaryPath = Path.Combine(primaryDir, "tokenizer.nopost.json");
+        var cacheName = forDecode ? "tokenizer.decode.json" : "tokenizer.nopost.json";
+        var primaryPath = Path.Combine(primaryDir, cacheName);
 
         if (IsCacheValid(primaryPath, fingerprint))
             return primaryPath;
@@ -133,7 +153,7 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
             if (IsCacheValid(primaryPath, fingerprint))
                 return primaryPath;
 
-            if (TryWriteStripped(sourcePath, primaryPath, fingerprint))
+            if (TryWriteStripped(sourcePath, primaryPath, fingerprint, forDecode))
                 return primaryPath;
 
             // Fallback: a per-source temp directory when the artifact directory is read-only.
@@ -141,12 +161,12 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
                 Path.GetTempPath(), "laya", FingerprintToSafeName(sourcePath));
             System.IO.Directory.CreateDirectory(fallbackDir);
 
-            var fallbackPath = Path.Combine(fallbackDir, "tokenizer.nopost.json");
+            var fallbackPath = Path.Combine(fallbackDir, cacheName);
 
             if (IsCacheValid(fallbackPath, fingerprint))
                 return fallbackPath;
 
-            if (TryWriteStripped(sourcePath, fallbackPath, fingerprint))
+            if (TryWriteStripped(sourcePath, fallbackPath, fingerprint, forDecode))
                 return fallbackPath;
 
             throw new IOException(
@@ -166,11 +186,11 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
         catch (IOException) { return false; }
     }
 
-    private static bool TryWriteStripped(string sourcePath, string destPath, string fingerprint)
+    private static bool TryWriteStripped(string sourcePath, string destPath, string fingerprint, bool forDecode)
     {
         try
         {
-            WriteStrippedTokenizer(sourcePath, destPath);
+            WriteStrippedTokenizer(sourcePath, destPath, forDecode);
             var info = new FileInfo(destPath);
             if (!info.Exists || info.Length == 0)
                 return false;
@@ -189,7 +209,7 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
     /// <paramref name="destPath"/> via a unique <c>.part</c> temp file so an interrupted write
     /// or concurrent writer never leaves a partial or colliding cache.
     /// </summary>
-    private static void WriteStrippedTokenizer(string sourcePath, string destPath)
+    private static void WriteStrippedTokenizer(string sourcePath, string destPath, bool forDecode)
     {
         JsonObject root;
         using (var stream = File.OpenRead(sourcePath))
@@ -198,6 +218,9 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
         // Setting to null writes "post_processor": null in the output, which the
         // underlying Rust tokenizers library treats identically to the key being absent.
         root["post_processor"] = null;
+        if (forDecode && root["added_tokens"] is JsonArray added)
+            foreach (var token in added)
+                if (token is JsonObject obj) obj["special"] = false;
 
         var partPath = $"{destPath}.{Guid.NewGuid():N}.part";
         try

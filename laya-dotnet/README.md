@@ -31,6 +31,7 @@ hallucinate.
 - [Quickstart](#quickstart)
 - [Writing questions](#writing-questions)
 - [Supplying state](#supplying-state)
+- [Long prediction](#long-prediction)
 - [Reading results](#reading-results)
 - [Confidence gating](#confidence-gating)
 - [Built-in presets](#built-in-presets)
@@ -291,6 +292,55 @@ engine.Predict(new[]                                                       // a 
 
 ---
 
+## Long prediction
+
+`Predict` keeps only the state tokens that fit one sequence. To scan an entire long document,
+use the port of Python **`ONNXAgent.predict_long`** (there is no long-prediction API in `laya-ts`):
+
+```csharp
+LayaResult result = engine.PredictLong(document, questions, batchSize: 2);
+Console.WriteLine(result.Usage.Windows);
+if (result["churn_risk"].Window is { } deciding)
+    Console.WriteLine($"window {deciding.Index}: tokens {deciding.TokenStart}..{deciding.TokenEnd}");
+
+// The router routes the original document once, then scans it on that checkpoint.
+using var router = new LayaRouter();
+LayaResult routed = router.PredictLong(document, questions, model: "english", batchSize: 2);
+```
+
+- `window` is a state-token count, defaulting to `max(64, max_len - head_max_len - 8)`,
+  capped at the smallest state budget left by the questions. `stride` defaults to half the
+  effective window (at least 1). Nonpositive values select the defaults, as in Python.
+- Tokens are decoded back to text and scored as ordinary states, with the same overlapping
+  windows and re-tokenization as Python. `batchSize` caps windows per forward pass; without
+  a positive cap they share a run, except for Python's automatic cap when a small window
+  multiplies the batch by more than 2x.
+- `noul` takes the greatest rounded P(true). `choice` and `score` take the greatest rounded
+  `AnswerConfidence`. Ties use the first window. The complete deciding answer (including
+  probabilities, score legend and action) is preserved; it is **not** a calibrated probability
+  for the whole document.
+- `Answer.Window` reports zero-based index, start/end offsets into the original tokenized state
+  (end exclusive), and total window count. A state that fits the room the questions leave
+  (or, with an explicit `window`, that window) is scored unchanged by one `Predict` pass,
+  with `Usage.Windows == 1` and no answer attribution.
+- Scan usage sums `InputTokens`, `StateTokens`, `StateTokensDropped` and `Truncated`
+  (a window count, including 0/1 for a single window). `TruncatedQuestions` is the last
+  window's list; `Options` merges collapsed-option records by question id. These additional
+  diagnostics are currently populated only by `PredictLong`, not ordinary `Predict`.
+- `aggregate` accepts only `"auto"`. Null state, unsupported aggregation, no state room, or a
+  gap-causing stride throws `ArgumentException` (`ArgumentNullException` for null state).
+  A stride valid for a requested window that gets clamped is reduced to half its new size.
+  Window/stride clamps emit `System.Diagnostics.Trace` warnings; install a listener to see them.
+- The router's usual `model`, `task` and `lang` hints select a checkpoint. Attached predictors
+  must implement `ILayaLongPredictor`; otherwise the router throws `NotSupportedException`.
+  Language-temperature and hook arguments remain unported.
+
+The .NET adaptations are typed records instead of Python dictionaries, trace warnings instead of
+`RuntimeWarning`, and .NET argument/capability exceptions. The existing `"laya-rl-agent"` model
+identifier is kept, rather than Python ONNXAgent's `"laya-rl-agent-onnx"` suffix.
+
+---
+
 ## Reading results
 
 `LayaResult` is indexed by question id. `Ids` returns the ids in the order they were asked.
@@ -524,6 +574,7 @@ Python's `laya.Agent`.
 | `static LayaEngine Create(LayaOptions? options = null)` | Finds the artifacts (see [resolution order](https://github.com/NandhaKishorM/laya/blob/main/laya-dotnet/MODELS.md#5-where-the-engine-looks)), loads the config, and builds the ONNX session and tokenizer. May download if `AllowDownload` is set. |
 | `static LayaEngine FromDirectory(string directory)` | Shorthand for `Create(new LayaOptions { ModelDirectory = directory })`. |
 | `LayaResult Predict(object? state, QuestionSet questions)` | Answers every question about `state` in a single batched inference call. See [Supplying state](#supplying-state). |
+| `LayaResult PredictLong(object state, QuestionSet questions, int? window = null, int? stride = null, string aggregate = "auto", int? batchSize = null)` | Scans overlapping token windows. See [Long prediction](#long-prediction). |
 | `LayaConfig Config { get; }` | The loaded checkpoint's `rl_agent_config.json`. |
 | `ModelArtifacts Artifacts { get; }` | The paths the artifacts were loaded from. |
 | `void Dispose()` | Releases the session and tokenizer. Safe to call more than once. |
@@ -670,6 +721,7 @@ embedding.
 | `double Confidence` | 0..1. Entropy-based for choice and score, `max(p, 1-p)` for noul. |
 | `double AnswerConfidence` | 0..1. `max(p)`, the same quantity on every question type. |
 | `ActionInfo Action` | The action head's output. |
+| `WindowInfo? Window` | Deciding window for a multi-window scan; otherwise null. Token end is exclusive. |
 | `ChoiceAnswer AsChoice()` / `ScoreAnswer AsScore()` / `NoulAnswer AsNoul()` | Narrows to the typed answer. Throws `InvalidOperationException` on a mismatch. |
 
 - **`ChoiceAnswer`**: `string Choice`, `IReadOnlyList<KeyValuePair<string, double>> Probabilities`
@@ -684,6 +736,12 @@ embedding.
   acted on directly rather than escalated. It corresponds to Python's `action.act_probability`.
 - `Usage(int InputTokens, int OutputTokens)`: non-padding input tokens across the batch.
   `OutputTokens` is always 0.
+  Optional scan properties are `Windows`, `StateTokens`, `StateTokensDropped`, `Truncated`
+  (all `int?`), `TruncatedQuestions` (`IReadOnlyList<string>?`) and
+  `Options` (`IReadOnlyDictionary<string, OptionUsage>?`).
+- `WindowInfo(int Index, int TokenStart, int TokenEnd, int Count)` and
+  `OptionUsage(int Total, int Distinct, int? TokensPerOption)` are immutable record structs.
+  See [Long prediction](#long-prediction) for their semantics.
 
 ### `LayaPresets` (static)
 
@@ -863,21 +921,22 @@ with `--solution` rather than as a positional argument.
 
 ## Known gaps
 
-Default predictions and routing are verified against goldens regenerated from Python
-**0.3.24**. Language detection uses current script and mixed-language rules; `MixedSegment`
+Default and long predictions are verified against goldens regenerated from Python
+**0.4.11**, and routing against goldens from Python **0.4.0**. Language detection uses current script and mixed-language rules; `MixedSegment`
 identifies the foreign line or field that overrides a mostly-English state. Undetermined
 Latin text uses the router's configured default. Email cleaning follows current request,
 disclaimer, signature and reply-header rules, including Portuguese, Spanish and French markers.
 
 - **Opt-in features added in Python 0.3.21 are not ported yet:** abstention (`min_confidence`),
-  `predict_long`, and per-language temperatures (`lang_temperatures`). They are off by default in
+  and per-language temperatures (`lang_temperatures`). They are off by default in
   Python, so default predictions are unaffected. They are planned as follow-ups.
 - **Other Python-only APIs are not ported:** hooks, batching APIs, question option ordering and
   digest controls.
 - **Custom email-state body budgets:** `LayaEmail.State` does not expose Python's `max_chars`
   keyword. Call `LayaEmail.CleanBody(body, maxChars)` and pass its result with `clean: false`.
 - **Usage diagnostics:** Python's `state_tokens`, `truncated`, `state_tokens_dropped` and
-  `truncated_questions` are not yet exposed by .NET's `Usage` record.
+  `truncated_questions` are exposed for `PredictLong` only; ordinary `Predict` still reports
+  just input/output tokens.
 
 ---
 
