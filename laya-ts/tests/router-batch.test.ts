@@ -1,10 +1,40 @@
 import { describe, expect, it, vi } from "vitest";
-import { Agent, Router } from "../src/index.js";
+import { Agent, Router, clearDefaultHooks, setDefaultHooks } from "../src/index.js";
 import type { BatchRequest } from "../src/index.js";
 
 // TS mirror of tests/test_router_batch.py and the orchestration part of tests/test_batch.py.
 
 const Q = { intent: { type: "noul", instructions: "Relevant?" } } as const;
+
+// A stateful default hook must not run again inside the Agent after the Router has
+// already expanded its questions (as OptionStabilityHook does).
+it.each([false, true])("runs process defaults once per request with fallback=%s", async (fallback) => {
+  const starts: unknown[] = [];
+  const ends: unknown[] = [];
+  const agent = new Agent({ provider: {
+    async runEncoder(batch) { return { lastHidden: batch.inputIds.map(() => [[0]]) }; },
+    async runHead(_hidden, batch) {
+      return { logits: batch.qtype.map(() => [2, 0]), act: batch.qtype.map(() => [3, 0]) };
+    },
+  } });
+  const loaded = fallback ? { systemOne: agent.systemOne.bind(agent) } : agent;
+  const router = new Router({ default: "english", loader: (() => loaded) as never });
+  setDefaultHooks({
+    onPredictStart(ctx) { starts.push([...ctx.states]); },
+    onPredictEnd(ctx) { ends.push([...ctx.states]); },
+  });
+  try {
+    const results = await router.predictBatch([
+      { state: "first request", questions: Q },
+      { state: "second request", questions: Q },
+    ]);
+    expect(results).toHaveLength(2);
+    expect(starts).toEqual([["first request"], ["second request"]]);
+    expect(ends).toEqual(starts);
+  } finally {
+    clearDefaultHooks();
+  }
+});
 const req = (state: unknown, overrides: Record<string, unknown> = {}): BatchRequest =>
   ({ state, questions: Q, ...overrides }) as unknown as BatchRequest;
 

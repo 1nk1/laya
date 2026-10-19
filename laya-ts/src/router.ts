@@ -940,6 +940,7 @@ export class Router extends HookRegistry {
           if (group.maxLen !== null) agentOpts.maxLen = group.maxLen;
           if (group.headMaxLen !== null) agentOpts.headMaxLen = group.headMaxLen;
           if (group.lang !== null) agentOpts.lang = group.lang;
+          markDefaultsRan(agentOpts);
           let batchResults: SystemOneResult[];
           if (typeof agent.predictBatch === "function") {
             batchResults = await agent.predictBatch(
@@ -952,11 +953,13 @@ export class Router extends HookRegistry {
             // still work; their states simply share no forward pass.
             batchResults = [];
             for (const [, ctx] of group.items) {
+              const singleOpts = group.lang === null ? {} : { lang: group.lang };
+              markDefaultsRan(singleOpts);
               batchResults.push(
                 await agent.systemOne(
                   ctx.states[0],
                   group.questions as Record<string, QuestionDef>,
-                  group.lang === null ? undefined : { lang: group.lang },
+                  singleOpts,
                 ),
               );
             }

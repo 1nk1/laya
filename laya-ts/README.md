@@ -75,6 +75,76 @@ class MetricsHook extends BaseHook {
 setDefaultHooks([new MetricsHook()]);  // addDefaultHook(...) appends; clearDefaultHooks() resets
 ```
 
+### Option stability
+
+`OptionStabilityHook` adds opt-in `reliability` diagnostics to choice answers. It expands
+the questions with reorder and letter-rename probes and evaluates them through the existing
+batch path. The original answer stays in place; internal probe answers and their usage keys
+are removed before the result returns. Extra rows cost inference work even within one call.
+
+```ts
+import { Agent, OptionStabilityHook, calibrateReliability, decideReliability } from "laya-ts";
+
+const agent = await Agent.load("./dist/laya");
+agent.addHook(new OptionStabilityHook({
+  accept: null, escalate: null, variants: "fast", seed: "evaluation-v1",
+}));
+const result = await agent.predict("Please approve the request", {
+  action: { type: "choice", instructions: "Choose action", criteria: ["approve", "reject"] },
+});
+if (result.answers.action.type === "choice") {
+  console.log(result.answers.action.reliability);
+}
+
+// Fit on your labelled examples, using only probed numeric soft_stability values.
+// Keep these scores and cutoffs as numbers; round only a separate display string.
+function fitAndReplay(scores: number[], correct: boolean[], savedScore: number) {
+  const [accept, escalate] = calibrateReliability(scores, correct, { targetAccuracy: 0.9 });
+  return decideReliability(savedScore, accept, escalate);
+}
+```
+
+Both thresholds are required. `accept: null` disables categorical decisions;
+`escalate: null` disables only `ESCALATE`. No calibrated defaults are recommended.
+`ACCEPT` uses `soft_stability >= accept`; `ESCALATE` uses
+`soft_stability < escalate`; otherwise the decision is `VERIFY`. An unprobed question has
+null signals. The report keeps the unrounded mean used by the comparator, matching the
+Python precision correction in #1289. Other diagnostic fractions retain Python's
+four-decimal rounding. Historical rounded Python reports cannot recover the lost precision.
+
+Calibration requires equally sized, nonempty score/boolean-label arrays, finite scores in
+`[0, 1]`, and accuracy targets in `[0, 1]`. Invalid evidence is rejected rather than silently
+dropping unmatched rows. The helpers match Python on valid inputs; they do not copy its
+permissive handling of invalid calibration inputs.
+
+Options use camelCase (`nShuffles`, `renameMaxOptions`); result fields match Python's
+snake_case fields. `variants` accepts `"fast"`, `"full"`, or an array of variant names;
+`probes` accepts `"auto"`, `"reorder"`, `"rename"`, `"all"`, or a probe-name array.
+Renaming retains original label text for missing descriptions, including blank strings,
+as in #1286, and preserves nonblank descriptions and caller `option_order`.
+
+Explicit string seeds and the same ordered labels produce the same permutations as Python's
+CRC32-seeded shuffle. JavaScript enumerates integer-like object keys numerically, so preserve
+the intended label order when comparing inputs across languages.
+They reproduce probe selection, not model outputs. The default seed uses the single string
+state, or `"batch"` for multiple states. A single structured state uses the existing TS state
+serializer; Python uses `repr`, so supply the same explicit seed for cross-language replay.
+The shared fixtures record their Python version and source hashes. Numerical comparison is
+for those decoded inputs; different inference backends or Python floating-point accumulation
+versions can still produce different scores near a threshold.
+
+The hook reads `agent.cfg.option_layout` to choose probes automatically: a declared
+parallel layout selects rename-only probes; sequential selects both. This is probe selection,
+not an implementation of parallel attention. The current local ONNX runtime supports the
+sequential path; this hook adds no new checkpoint/backend support. It also does not add the
+feature to the separate HTTP SDK.
+
+Install the hook once at the Agent, Router, or process-default scope. `predictBatch` and
+concurrent calls can share one instance; plans are scoped to each prediction context and
+released on completion or error. A cache hit without probe answers does not gain a fabricated
+reliability score. The hook's own methods are synchronous and work within the existing async
+Agent/Router prediction lifecycle.
+
 ## Structured decisions (`decide`)
 
 Turn a JSON schema into typed values in one call — the port of Python's `laya.structured`

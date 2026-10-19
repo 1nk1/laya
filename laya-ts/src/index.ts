@@ -37,6 +37,11 @@ export {
   HOOK_EVENTS,
 } from "./hooks.js";
 export type { Hook, HookEvent, HookArg, PredictHook, PredictHookArg } from "./hooks.js";
+export { OptionStabilityHook, makeVariants, decideReliability, calibrateReliability } from "./option-stability.js";
+export type {
+  OptionStabilityOptions, OptionStabilityReport, StabilityProbe, ReliabilityDecision,
+  StabilityVariant, VariantOptions, CalibrationOptions,
+} from "./option-stability.js";
 export { triageQuestions, emailQuestions, guardQuestions, moderationQuestions, routerQuestions } from "./presets.js";
 export {
   decide,
