@@ -7,9 +7,9 @@
 //! without a model. The engine supplies the tokenizer-dependent inputs (the per-question state
 //! room and the state's token ids) and runs the windows.
 //!
-//! Python also emits `warnings.warn` when it caps the window or reduces the stride. This crate has
-//! no logging dependency (see the crate docs), so those two warnings are not emitted; the
-//! resulting window and stride are the same.
+//! Python also emits `warnings.warn` when it caps the window or reduces the stride. Those warnings
+//! are ported with Python's exact text and sent through the `log` facade at `warn` level, target
+//! `laya`; install any `log` backend (for example `env_logger`) to see them.
 
 use crate::answers::{Answer, LayaResult, OptionUsage, ScanUsage, StateUsage, Usage, WindowInfo};
 use crate::error::{LayaError, Result};
@@ -100,7 +100,8 @@ pub(crate) fn default_window(max_len: usize, head_max_len: usize) -> usize {
 }
 
 /// `window_budget` with the per-question rooms already measured. An empty `rooms` (no questions)
-/// leaves the requested window as the room.
+/// leaves the requested window as the room. The `RuntimeWarning`s Python raises are dropped.
+#[cfg(test)]
 pub(crate) fn plan_budget(
     rooms: &[usize],
     max_len: usize,
@@ -108,6 +109,19 @@ pub(crate) fn plan_budget(
     window: usize,
     stride: usize,
 ) -> Result<WindowBudget> {
+    plan_budget_warned(rooms, max_len, head_max_len, window, stride).map(|(budget, _)| budget)
+}
+
+/// [`plan_budget`], also returning the text of every `warnings.warn` Python's `window_budget`
+/// would emit for the same call, in order, exactly as Python words it.
+pub(crate) fn plan_budget_warned(
+    rooms: &[usize],
+    max_len: usize,
+    head_max_len: usize,
+    window: usize,
+    stride: usize,
+) -> Result<(WindowBudget, Vec<String>)> {
+    let mut warnings = Vec::new();
     let requested = if window > 0 {
         window
     } else {
@@ -122,6 +136,25 @@ pub(crate) fn plan_budget(
         )));
     }
     let size = requested.min(room);
+    if requested > room {
+        if window > 0 {
+            warnings.push(format!(
+                "laya: predict_long: window={requested} is wider than the {room} state tokens \
+                    these questions leave inside max_len={max_len}, so every window would be \
+                    truncated to {room} on the way to the model; scanning with window={room} instead"
+            ));
+        } else if requested >= room * WINDOW_CLAMP_WARN_RATIO {
+            warnings.push(format!(
+                "laya: predict_long: these questions leave only {room} of max_len={max_len} for \
+                    the state (their heads take the rest), so the scan window is capped {requested} \
+                    -> {room} and roughly {:.1}x as many windows -- each a full forward pass -- are \
+                    needed to read the document. Fewer or shorter options, a larger max_len, or \
+                    laya.shortlist.predict_shortlist for a large label set will all cost less than \
+                    scanning at this width",
+                requested as f64 / room as f64
+            ));
+        }
+    }
     let mut step = if stride > 0 {
         stride
     } else {
@@ -129,7 +162,13 @@ pub(crate) fn plan_budget(
     };
     if step > size {
         if size < requested && stride <= requested {
-            step = (size / 2).max(1);
+            let reduced = (size / 2).max(1);
+            warnings.push(format!(
+                "laya: predict_long: stride={step} was a 50% step for the window={requested} you \
+                    asked for, but the window was reduced to {size} to fit the room these questions \
+                    leave; scanning with stride={reduced} instead"
+            ));
+            step = reduced;
         } else {
             return Err(LayaError::InvalidWindow(format!(
                 "predict_long: stride={step} steps past the {size}-token window{}, so {} tokens \
@@ -144,11 +183,24 @@ pub(crate) fn plan_budget(
             )));
         }
     }
-    Ok(WindowBudget {
-        window: size,
-        stride: step,
-        room,
-    })
+    Ok((
+        WindowBudget {
+            window: size,
+            stride: step,
+            room,
+        },
+        warnings,
+    ))
+}
+
+/// Python's `_WINDOW_CLAMP_WARN_RATIO`: a default window cut to half its size or less is warned.
+const WINDOW_CLAMP_WARN_RATIO: usize = 2;
+
+/// Sends each warning to the `log` facade (`warn`, target `laya`).
+pub(crate) fn emit_warnings(warnings: &[String]) {
+    for message in warnings {
+        log::warn!(target: "laya", "{message}");
+    }
 }
 
 /// `window_budget`: measures each question's state room, then plans.
@@ -164,6 +216,19 @@ pub fn window_budget(
     window: usize,
     stride: usize,
 ) -> Result<WindowBudget> {
+    window_budget_warned(tokenizer, questions, max_len, head_max_len, window, stride)
+        .map(|(budget, _)| budget)
+}
+
+/// [`window_budget`] for the engine: the budget plus Python's warnings, not yet emitted.
+pub(crate) fn window_budget_warned(
+    tokenizer: &dyn LayaTokenizer,
+    questions: &QuestionSet,
+    max_len: usize,
+    head_max_len: usize,
+    window: usize,
+    stride: usize,
+) -> Result<(WindowBudget, Vec<String>)> {
     let mut rooms = Vec::with_capacity(questions.len());
     for id in questions.ids() {
         rooms.push(SequenceBuilder::state_room(
@@ -173,7 +238,7 @@ pub fn window_budget(
             head_max_len,
         )?);
     }
-    plan_budget(&rooms, max_len, head_max_len, window, stride)
+    plan_budget_warned(&rooms, max_len, head_max_len, window, stride)
 }
 
 /// The overlapping windows over `tokens` state tokens. A window that reaches the end is the last.
@@ -798,5 +863,90 @@ mod tests {
             matches!(error, LayaError::UnsupportedAggregate(_)),
             "{error:?}"
         );
+    }
+
+    const WARN_CAPPED_DEFAULT: &str = "laya: predict_long: these questions leave only 102 of \
+        max_len=512 for the state (their heads take the rest), so the scan window is capped 312 \
+        -> 102 and roughly 3.1x as many windows -- each a full forward pass -- are needed to read \
+        the document. Fewer or shorter options, a larger max_len, or \
+        laya.shortlist.predict_shortlist for a large label set will all cost less than scanning \
+        at this width";
+    const WARN_WINDOW: &str = "laya: predict_long: window=100 is wider than the 32 state tokens \
+        these questions leave inside max_len=512, so every window would be truncated to 32 on the \
+        way to the model; scanning with window=32 instead";
+    const WARN_STRIDE: &str = "laya: predict_long: stride=64 was a 50% step for the window=100 \
+        you asked for, but the window was reduced to 32 to fit the room these questions leave; \
+        scanning with stride=16 instead";
+
+    fn warned(rooms: &[usize], window: usize, stride: usize) -> Vec<String> {
+        plan_budget_warned(rooms, 512, 192, window, stride)
+            .unwrap()
+            .1
+    }
+
+    // Expected texts and which calls warn were produced by running Python's
+    // `common.window_budget` with `warnings.catch_warnings(record=True)`.
+    #[test]
+    fn warns_with_pythons_text_when_the_default_window_is_capped_hard() {
+        assert_eq!(vec![WARN_CAPPED_DEFAULT], warned(&[102], 0, 0));
+        assert!(warned(&[150], 0, 0)[0].contains("capped 312 -> 150 and roughly 2.1x as many"));
+    }
+
+    #[test]
+    fn stays_silent_when_the_default_window_is_capped_mildly_or_not_at_all() {
+        assert!(warned(&[200], 0, 0).is_empty());
+        assert!(warned(&[400], 0, 0).is_empty());
+        assert!(warned(&[312], 0, 0).is_empty());
+    }
+
+    #[test]
+    fn warns_with_pythons_text_when_an_explicit_window_is_capped() {
+        assert_eq!(vec![WARN_WINDOW], warned(&[32], 100, 0));
+        assert_eq!(2, warned(&[100], 300, 150).len());
+        // A stride that already fits the capped window adds nothing.
+        assert_eq!(1, warned(&[100], 300, 40).len());
+    }
+
+    #[test]
+    fn warns_with_pythons_text_when_the_stride_is_reduced() {
+        assert_eq!(vec![WARN_WINDOW, WARN_STRIDE], warned(&[32], 100, 64));
+        assert_eq!(
+            "laya: predict_long: stride=150 was a 50% step for the window=300 you asked for, but \
+                the window was reduced to 100 to fit the room these questions leave; scanning with \
+                stride=50 instead",
+            warned(&[100], 300, 150)[1]
+        );
+    }
+
+    #[test]
+    fn emit_warnings_reaches_the_log_facade_at_warn_level_under_target_laya() {
+        use std::sync::Mutex;
+        static SEEN: Mutex<Vec<(String, log::Level, String)>> = Mutex::new(Vec::new());
+        struct Capture;
+        impl log::Log for Capture {
+            fn enabled(&self, _: &log::Metadata) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record) {
+                SEEN.lock().unwrap().push((
+                    record.target().to_string(),
+                    record.level(),
+                    record.args().to_string(),
+                ));
+            }
+            fn flush(&self) {}
+        }
+        static LOGGER: Capture = Capture;
+        log::set_logger(&LOGGER).unwrap();
+        log::set_max_level(log::LevelFilter::Warn);
+
+        emit_warnings(&[WARN_WINDOW.to_string(), WARN_STRIDE.to_string()]);
+
+        let seen = SEEN.lock().unwrap();
+        let ours: Vec<_> = seen.iter().filter(|(t, ..)| t == "laya").collect();
+        assert_eq!(2, ours.len());
+        assert_eq!(log::Level::Warn, ours[0].1);
+        assert_eq!(WARN_WINDOW, ours[0].2);
+        assert_eq!(WARN_STRIDE, ours[1].2);
     }
 }

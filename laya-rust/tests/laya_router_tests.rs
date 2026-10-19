@@ -10,7 +10,7 @@ use common::routing_golden;
 use laya::answers::{LayaResult, Usage};
 use laya::error::Result;
 use laya::laya_options::LayaCheckpoint;
-use laya::laya_router::{LangGuess, LayaPredictor, LayaRouter, LayaRouterOptions};
+use laya::laya_router::{GuessInput, LangGuess, LayaPredictor, LayaRouter, LayaRouterOptions};
 use laya::questions::QuestionSet;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -581,7 +581,7 @@ fn lang_guess_callback_code_is_used_and_receives_the_state() {
     );
     let by_content = LangGuess::callback(|state| {
         Some(
-            if state.as_str().is_some_and(|s| s.contains("Tokyo")) {
+            if matches!(state, GuessInput::Value(v) if v.as_str().is_some_and(|s| s.contains("Tokyo"))) {
                 "en"
             } else {
                 "ro"

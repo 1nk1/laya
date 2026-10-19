@@ -229,7 +229,7 @@ impl LayaEngine {
         options.check_aggregate()?;
         let tokenizer = self.tokenizer.as_ref();
         let explicit_window = options.window.unwrap_or(0);
-        let budget = long_prediction::window_budget(
+        let (budget, warnings) = long_prediction::window_budget_warned(
             tokenizer,
             questions,
             self.config.max_len,
@@ -237,6 +237,7 @@ impl LayaEngine {
             explicit_window,
             options.stride.unwrap_or(0),
         )?;
+        long_prediction::emit_warnings(&warnings);
         let state_ids = SequenceBuilder::encode_state(tokenizer, &state)?;
 
         // `predict` reads the whole room the questions leave, so the default window must not force

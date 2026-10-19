@@ -137,8 +137,19 @@ const TYPED_DECISION_WORKFLOWS: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// The state a [`LangGuess`] callback is handed, exactly as the caller gave it to the router: a
+/// JSON value from `route`, `predict` and `predict_long`, the original bytes from `route_bytes`
+/// (Python passes the `bytes` object itself, invalid UTF-8 included).
+#[derive(Debug, Clone, Copy)]
+pub enum GuessInput<'a> {
+    /// A JSON state.
+    Value(&'a Value),
+    /// A `bytes` state, untouched.
+    Bytes(&'a [u8]),
+}
+
 /// The callback form of [`LangGuess`]: reads the state, answers with a language code or `None`.
-type GuessFn = dyn Fn(&Value) -> Option<String> + Send + Sync;
+type GuessFn = dyn Fn(GuessInput<'_>) -> Option<String> + Send + Sync;
 
 /// A caller-supplied answer to "can the English checkpoint read this state?", Python's
 /// `lang_guess`: a language code, or a callback taking the state. Any code that is not English
@@ -157,13 +168,13 @@ pub enum LangGuess {
 
 impl LangGuess {
     /// A hint that reads the state and answers with a code, or `None` to abstain.
-    pub fn callback(f: impl Fn(&Value) -> Option<String> + Send + Sync + 'static) -> Self {
+    pub fn callback(f: impl Fn(GuessInput<'_>) -> Option<String> + Send + Sync + 'static) -> Self {
         Self::Callback(Arc::new(f))
     }
 
     /// `_resolve_hint`: `Some(true)` when the hint says English, `Some(false)` when it names
     /// another language, `None` when it identifies nothing.
-    fn resolve(&self, state: &Value) -> Option<bool> {
+    fn resolve(&self, state: GuessInput<'_>) -> Option<bool> {
         match self {
             Self::Code(code) => english_from_code(code),
             Self::Callback(f) => f(state).and_then(|code| english_from_code(&code)),
@@ -552,6 +563,31 @@ impl LayaRouter {
         self.route_with_lang_guess(state, questions, model, task, lang, None)
     }
 
+    /// [`Self::route_with_lang_guess`] for a `bytes` state, which Python's `lang.analyse` accepts:
+    /// the bytes are read as strict UTF-8 and invalid UTF-8 counts as no text. A `lang_guess`
+    /// callback receives the original bytes as [`GuessInput::Bytes`], as Python's receives the
+    /// `bytes` object.
+    pub fn route_bytes(
+        &self,
+        state: &[u8],
+        questions: Option<&QuestionSet>,
+        model: Option<&str>,
+        task: Option<&str>,
+        lang: Option<&str>,
+        lang_guess: Option<&LangGuess>,
+    ) -> Result<RouteDecision> {
+        let text = Value::String(std::str::from_utf8(state).unwrap_or("").to_string());
+        self.route_inner(
+            GuessInput::Bytes(state),
+            &text,
+            questions,
+            model,
+            task,
+            lang,
+            lang_guess,
+        )
+    }
+
     /// [`Self::route`] with Python's per-call `lang_guess` hint.
     ///
     /// `lang_guess` is an opt-in hint -- a language code or a callback taking the state --
@@ -563,6 +599,30 @@ impl LayaRouter {
     /// after this per-call one.
     pub fn route_with_lang_guess(
         &self,
+        state: &Value,
+        questions: Option<&QuestionSet>,
+        model: Option<&str>,
+        task: Option<&str>,
+        lang: Option<&str>,
+        lang_guess: Option<&LangGuess>,
+    ) -> Result<RouteDecision> {
+        self.route_inner(
+            GuessInput::Value(state),
+            state,
+            questions,
+            model,
+            task,
+            lang,
+            lang_guess,
+        )
+    }
+
+    /// `Router._route`: `given` is the state as the caller passed it (what a hint callback sees),
+    /// `state` the JSON text detection reads.
+    #[allow(clippy::too_many_arguments)]
+    fn route_inner(
+        &self,
+        given: GuessInput<'_>,
         state: &Value,
         questions: Option<&QuestionSet>,
         model: Option<&str>,
@@ -636,7 +696,7 @@ impl LayaRouter {
             ("Router(lang_guess=...)", self.lang_guess.as_ref()),
         ];
         for (source, hint) in hints {
-            if let Some(english) = hint.and_then(|h| h.resolve(state)) {
+            if let Some(english) = hint.and_then(|h| h.resolve(given)) {
                 return Ok(RouteDecision {
                     model: if english {
                         LayaCheckpoint::English

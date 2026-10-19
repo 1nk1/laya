@@ -484,10 +484,12 @@ if let Some(window) = answer.window() {    // None for a single-pass state
 - **Router.** `LayaRouter::predict_long(state, &questions, &options, model, task, lang)` routes once,
   on the original state, then scans on the chosen checkpoint. A predictor without a scan capability
   (see `LayaPredictor::as_long_predictor`) gives `LayaError::NotSupported` rather than truncating.
+- **Warnings.** The two `warnings.warn` notices Python emits when it caps the window or reduces the
+  stride are sent, with Python's exact text, to the [`log`](https://docs.rs/log) facade at `warn`
+  level with target `laya`. Install any `log` backend (for example `env_logger`) to see them; with
+  none installed they are dropped.
 - **Not ported.** Per-call hooks, per-language temperatures and the confidence gate are not part of
-  `predict_long` here, and the two `warnings.warn` notices Python emits when it caps the window or
-  reduces the stride are not emitted (the crate has no logging dependency); the window and stride
-  themselves match.
+  `predict_long` here.
 
 ---
 
@@ -544,7 +546,7 @@ let router = LayaRouter::new(LayaRouterOptions::default())?.with_lang_guess("ro"
 // ... or per call, as a function of the state
 let hint = LangGuess::callback(|state| my_language_id_model(state));
 let decision = router.route_with_lang_guess(&json!("Care este ora in Tokyo?"), None, None, None, None, Some(&hint))?;
-# fn my_language_id_model(_: &serde_json::Value) -> Option<String> { None }
+# fn my_language_id_model(_: laya::laya_router::GuessInput<'_>) -> Option<String> { None }
 # Ok::<(), laya::LayaError>(())
 ```
 
@@ -729,9 +731,9 @@ Rust port groups the corresponding functions into a unit struct with associated 
   own; the three dialect functions here take `&serde_json::Value`, which can only ever hold
   JSON-representable data, so that fallback path has nothing to reach. The blank-criterion rule and
   the float/escaping rules are otherwise byte-for-byte identical to Python.
-- **No log-level warning for clamped temperatures.** `LayaConfig` still records
-  `clamped_temperatures`; emitting a warning from library code is left to the caller (this crate
-  has no logging dependency).
+- **Warnings use the `log` facade.** The clamped-temperature warning (`LayaConfig::parse`) and the
+  two `predict_long` window warnings are sent, with Python's text, to `log` at `warn` level with
+  target `laya`. `LayaConfig::clamped_temperatures` still records the clamped entries.
 - **`QuestionType` carries no methods.** The Python type name lives on
   `SequenceBuilder::type_name` rather than on the enum, and the `qtype` tensor's integer encoding
   is a plain `qtype as i64` cast (the enum's discriminants already match `QTYPES`). The reverse

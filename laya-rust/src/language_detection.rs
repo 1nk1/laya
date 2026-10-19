@@ -805,6 +805,29 @@ impl LanguageDetection {
         Self::state_text(state, 4000)
     }
 
+    /// The state Python's `_iter_text` sees for a `bytes`/`bytearray` state: the bytes decoded as
+    /// strict UTF-8, or no text at all when they are not valid UTF-8 (`lang.py:253-255`).
+    fn bytes_state(bytes: &[u8]) -> serde_json::Value {
+        serde_json::Value::String(std::str::from_utf8(bytes).unwrap_or("").to_string())
+    }
+
+    /// [`Self::state_text`] for a `bytes` state, as Python accepts one: strict UTF-8, and invalid
+    /// UTF-8 reads as no text (`""`).
+    pub fn state_text_bytes(state: &[u8], max_chars: usize) -> String {
+        Self::state_text(&Self::bytes_state(state), max_chars)
+    }
+
+    /// [`Self::analyse`] for a `bytes` state, as Python accepts one: strict UTF-8, and invalid
+    /// UTF-8 reads as no text.
+    pub fn analyse_bytes(state: &[u8]) -> LanguageAnalysis {
+        Self::analyse(&Self::bytes_state(state))
+    }
+
+    /// [`Self::is_english`] for a `bytes` state.
+    pub fn is_english_bytes(state: &[u8]) -> bool {
+        Self::analyse_bytes(state).is_english
+    }
+
     /// Dominant script of `text`: `"latin"`, `"han"`, `"devanagari"`, ... or `"unknown"` if there
     /// are no letters.
     ///

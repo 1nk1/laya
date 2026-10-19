@@ -1295,6 +1295,108 @@
       "body": "First\n \nSecond\n \n\nThird",
       "max_chars": 3000,
       "result": "First\n\nSecond\n\nThird"
+    },
+    {
+      "label": "pyre/boundary_after_no_superscript",
+      "body": "Please help me.\n\nThis email² is confidential and intended solely for you.",
+      "max_chars": 3000,
+      "result": "Please help me.\n\nThis email² is confidential and intended solely for you."
+    },
+    {
+      "label": "pyre/boundary_before_no_superscript",
+      "body": "Please help me.\n\nThis ²email is confidential and intended solely for you.",
+      "max_chars": 3000,
+      "result": "Please help me.\n\nThis ²email is confidential and intended solely for you."
+    },
+    {
+      "label": "pyre/boundary_after_combining_mark",
+      "body": "Please help me.\n\nThis emaiĺ is confidential and intended solely for you.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/boundary_before_combining_mark",
+      "body": "Please help me.\n\nThis ́email is confidential and intended solely for you.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/boundary_after_connector_punctuation",
+      "body": "Please help me.\n\nThis email‿ is confidential and intended solely for you.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/boundary_after_zero_width_joiner",
+      "body": "Please help me.\n\nThis email‍ is confidential and intended solely for you.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/boundary_after_circled_letter",
+      "body": "Please help me.\n\nThis emailⒶ is confidential and intended solely for you.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/boundary_after_roman_numeral",
+      "body": "Preciso de ajuda.\n\nEsta mensagemⅠ é confidencial.",
+      "max_chars": 3000,
+      "result": "Preciso de ajuda.\n\nEsta mensagemⅠ é confidencial."
+    },
+    {
+      "label": "pyre/ignorecase_dotted_capital_i_disclaimer",
+      "body": "Please help me.\n\nİf you received this email in error, delete it.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/ignorecase_dotless_i_disclaimer",
+      "body": "Please help me.\n\nIf you received this email ın error, delete it.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/ignorecase_dotless_i_device_footer",
+      "body": "Please help me.\nSent from my ıPhone",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/ignorecase_dotted_i_device_range",
+      "body": "Please help me.\nSent from my iPhone using İOS",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/ignorecase_dotless_i_signoff",
+      "body": "Please help me.\nKınd regards,\nJohn",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/ignorecase_dotless_i_pt_signoff",
+      "body": "Preciso de ajuda.\nCordıalmente,\nMaria",
+      "max_chars": 3000,
+      "result": "Preciso de ajuda."
+    },
+    {
+      "label": "pyre/ignorecase_dotted_i_original_message",
+      "body": "Please help me.\n-----Orİginal Message-----\nOld request.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/ignorecase_dotless_i_french_signoff",
+      "body": "Je demande de l'aide.\nBonne journée,\nMarıe",
+      "max_chars": 3000,
+      "result": "Je demande de l'aide."
+    },
+    {
+      "label": "pyre/ignorecase_long_s_and_kelvin_sign",
+      "body": "Please help me.\n\nThis email is confidential and intended ſolely for you, thankK you.",
+      "max_chars": 3000,
+      "result": "Please help me."
     }
   ],
   "state": [

@@ -48,6 +48,10 @@ unicode-normalization = "0.1"
 # lookbehind, so `email.py`'s one lookbehind pattern (`_SENTENCE`) is hand-written instead of
 # pulling in a second, heavier engine (`fancy-regex`) for a single pattern.
 regex = "1.13.1"
+# `predict_long` warnings (window capped, stride reduced): Python's `warnings.warn` text, sent to the
+# `log` facade at `warn` level with target `laya`. The facade only; no backend is linked, so a
+# program that installs none sees nothing. Already in the dependency tree through `ort`/`tokenizers`.
+log = "0.4"
 
 [dev-dependencies]
 proptest = "1"

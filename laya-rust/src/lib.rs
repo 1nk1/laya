@@ -34,9 +34,11 @@
 //!   JSON-representable data; there is no "opaque object with no JSON representation" case for a
 //!   fallback-to-`ToString()` path to handle. The blank-criterion rule and the float/escaping
 //!   rules are otherwise byte-for-byte identical to Python's `json.dumps`.
-//! - **No warning log for clamped temperatures.** [`laya_config::LayaConfig`] still records
-//!   [`laya_config::LayaConfig::clamped_temperatures`]; emitting a warning from library code is
-//!   left to the caller (this crate has no logging dependency).
+//! - **Warnings go through the `log` facade.** Python's `warnings.warn` calls that this crate
+//!   ports (a checkpoint whose temperatures were clamped, and `predict_long` capping the window or
+//!   reducing the stride) are sent to the [`log`](https://docs.rs/log) facade at `warn` level with
+//!   target `laya` and Python's text. [`laya_config::LayaConfig::clamped_temperatures`] still
+//!   records the clamped entries.
 
 pub mod answers;
 pub mod calibration;
@@ -73,7 +75,8 @@ pub use laya_options::{
 };
 pub use laya_presets::LayaPresets;
 pub use laya_router::{
-    LangGuess, LayaLongPredictor, LayaPredictor, LayaRouter, LayaRouterOptions, RouteDecision,
+    GuessInput, LangGuess, LayaLongPredictor, LayaPredictor, LayaRouter, LayaRouterOptions,
+    RouteDecision,
 };
 pub use laya_shortlist::{DEFAULT_SHORTLIST_K, LayaShortlist, ShortlistInfo};
 pub use long_prediction::LongOptions;

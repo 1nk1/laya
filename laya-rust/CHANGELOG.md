@@ -53,6 +53,24 @@ regenerated from laya (Python) 0.4.11 for the supported paths (see the known gap
 
 ### Fixed
 
+- `Calibration::round4` is now exactly Python's `round(x, 4)`: it rounds the exact binary value half
+  to even in integer arithmetic (it used to scale by 10 000 in floating point, which differed on
+  about 2% of probabilities, e.g. `0.00625` gave `0.0062` where Python gives `0.0063`) and keeps
+  the sign of a value that rounds to zero.
+- `predict_long` emits Python's two warnings (window capped, stride reduced), and loading a
+  checkpoint whose temperatures were clamped emits Python's warning, each with Python's text
+  through the `log` facade (`warn`, target `laya`); `log` is a new dependency.
+- A string in a checkpoint's `temperature` or `temperature_by_options` is read as Python's `float(str)` reads it (surrounding whitespace, any-script digits, single underscores, `inf`/`nan`) before clamping, instead of being replaced by 1.0.
+- A checkpoint whose temperature is a JSON integer too large for a float fails to load with `LayaError::InvalidConfig("OverflowError: int too large to convert to float")`, as Python's `clamp_temperature` raises; a float literal such as `1e400` is read as infinity and replaced by 1.0, as in Python.
+- `LangGuess` callbacks receive the state as Python passes it (`GuessInput::Value`, or the original
+  bytes as `GuessInput::Bytes` from `LayaRouter::route_bytes`).
+- Email cleaning matches Python's `re` where the `regex` crate differs: `\b` follows Python's `\w`
+  (superscripts and other `No` digits are word characters; combining marks, joiners and connector
+  punctuation other than `_` are not) and `re.I` folds U+0130 and U+0131 to `i`.
+- Added `LanguageDetection::{state_text_bytes, analyse_bytes, is_english_bytes}` and
+  `LayaRouter::route_bytes`: Python's `lang`/`router` accept a `bytes` state, decode it as strict
+  UTF-8 and read invalid UTF-8 as no text.
+
 - `LayaRouterOptions::max_loaded` defaults to 2, as Python's `Router(max_loaded=2)` does, so a
   router that alternates two languages no longer reloads a checkpoint on every request.
 - Language detection follows Python 0.4.11: the line-by-line and field-by-field scan of a state that

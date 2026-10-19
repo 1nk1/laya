@@ -11,8 +11,8 @@
 //! them, and `_SENTENCE` (`(?<=[.!?])\s+`, a lookbehind) is the small hand-written
 //! [`split_after_sentence`]. The English sign-off (`_is_english_signoff`) is hand-written too:
 //! its name rule is a Unicode category test on each token's first letter. Every other pattern
-//! uses `regex`, whose Unicode support is on by default, so `(?i)` case-folding and `\b` are
-//! Unicode-aware the same way Python's `re.I` is; `\s` is widened by [`py_regex`] to cover the
+//! uses `regex`, behind [`PyRegex`], which rewrites the haystack so the crate's `\w`/`\b` and
+//! `(?i)` agree with Python's `re` (see its docs); `\s` is widened by [`py_regex`] to cover the
 //! U+001C..U+001F that Python's `\s` accepts and the crate's does not.
 
 use crate::language_detection::{
@@ -21,6 +21,7 @@ use crate::language_detection::{
 };
 use regex::{Regex, RegexBuilder};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::sync::LazyLock;
 use unicode_general_category::{GeneralCategory, get_general_category};
 
@@ -39,18 +40,95 @@ fn py_regex(pattern: &str) -> Regex {
         .expect("email pattern is valid")
 }
 
+/// A pattern run the way Python's `re` runs it. Two things differ between `re` and the `regex`
+/// crate for the patterns here, and neither can be switched off in the crate:
+///
+/// - `\w` (so `\b`): Python's is `str.isalnum()` or `_`, so a superscript or other `No` digit
+///   is a word character, and a combining mark, a joiner, a connector other than `_` or a
+///   circled letter is not. The crate's `\w` is the other way round on exactly those.
+/// - `re.I`: Python also folds U+0130 and U+0131 to `i` (its simple lower-casing maps the first
+///   to `i`, and `_casefix` adds the second); the crate's simple case folding does not.
+///
+/// So the haystack is rewritten one character for one character before it reaches the crate:
+/// each character whose word-ness the two disagree on becomes a placeholder with Python's
+/// word-ness, and U+0130/U+0131 become `i`. The placeholders occur in no pattern and are neither
+/// whitespace nor digits, so nothing else about a match changes. Pure ASCII text is identical
+/// in both engines and goes through untouched.
+struct PyRegex {
+    regex: Regex,
+}
+
+/// A letter that no pattern here mentions: stands in for a character Python treats as `\w` and
+/// the crate does not.
+const PY_WORD_ONLY: char = '\u{416}';
+/// A non-word, non-space character that no pattern here mentions: stands in for a character the
+/// crate treats as `\w` and Python does not.
+const REGEX_WORD_ONLY: char = '#';
+
+static REGEX_WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\w$").unwrap());
+
+fn as_python_sees_it(ch: char) -> char {
+    if ch.is_ascii() {
+        return ch;
+    }
+    if ch == '\u{130}' || ch == '\u{131}' {
+        return 'i';
+    }
+    let mut buf = [0u8; 4];
+    let regex_word = REGEX_WORD.is_match(ch.encode_utf8(&mut buf));
+    match (is_word_char(ch), regex_word) {
+        (true, false) => PY_WORD_ONLY,
+        (false, true) => REGEX_WORD_ONLY,
+        _ => ch,
+    }
+}
+
+impl PyRegex {
+    fn new(pattern: &str) -> Self {
+        Self {
+            regex: py_regex(pattern),
+        }
+    }
+
+    fn view(text: &str) -> Cow<'_, str> {
+        if text.is_ascii() {
+            Cow::Borrowed(text)
+        } else {
+            Cow::Owned(text.chars().map(as_python_sees_it).collect())
+        }
+    }
+
+    /// `pattern.search(text)` is not `None`.
+    fn is_match(&self, text: &str) -> bool {
+        self.regex.is_match(&Self::view(text))
+    }
+
+    /// The byte offset in `text` where the leftmost match of `pattern.search(text)` ends.
+    fn find_end(&self, text: &str) -> Option<usize> {
+        let view = Self::view(text);
+        let end = self.regex.find(&view)?.end();
+        // The rewrite is one character for one character, so count characters, not bytes.
+        let chars = view[..end].chars().count();
+        Some(
+            text.char_indices()
+                .nth(chars)
+                .map_or(text.len(), |(offset, _)| offset),
+        )
+    }
+}
+
 /// A quote-header pattern, plus the rule `(?=.*\d)` that `regex` cannot express: the dated
 /// attribution of a mail client always carries a date, so a line without a digit is body text
 /// ("Em resposta ao que você escreveu:").
 struct QuoteHeader {
-    pattern: Regex,
+    pattern: PyRegex,
     needs_digit: bool,
 }
 
 impl QuoteHeader {
     fn new(pattern: &str, needs_digit: bool) -> Self {
         Self {
-            pattern: py_regex(pattern),
+            pattern: PyRegex::new(pattern),
             needs_digit,
         }
     }
@@ -108,11 +186,12 @@ static QUOTE_HEADERS: LazyLock<Vec<QuoteHeader>> = LazyLock::new(|| {
 /// Gmail wraps a long attribution line, leaving `fulano@x.com> escreveu:` alone on the next
 /// line. That tail cuts too, and takes the `On/Em/El/Le ...` head it belongs to with it. The
 /// French tail keeps its spaced colon (`support@x.com> a écrit :`).
-static ATTRIBUTION_TAIL: LazyLock<Regex> = LazyLock::new(|| {
-    py_regex(r"(?i)^.{0,120}\S@\S+\s+(wrote|escreveu|escribi[óo]|a [eé]crit)\s*:\s*$")
+static ATTRIBUTION_TAIL: LazyLock<PyRegex> = LazyLock::new(|| {
+    PyRegex::new(r"(?i)^.{0,120}\S@\S+\s+(wrote|escreveu|escribi[óo]|a [eé]crit)\s*:\s*$")
 });
 /// The head the tail belongs to: `On|Em|El|Le`, then a date (`(?=.*\d)`, checked separately).
-static ATTRIBUTION_HEAD: LazyLock<Regex> = LazyLock::new(|| py_regex(r"(?i)^\s*(On|Em|El|Le) "));
+static ATTRIBUTION_HEAD: LazyLock<PyRegex> =
+    LazyLock::new(|| PyRegex::new(r"(?i)^\s*(On|Em|El|Le) "));
 
 /// Exchange often leaves the address out of Outlook's reply header ("De: Maria Souza"), so a
 /// bare `De:` only cuts when the header's own `Enviado:` line, or a dated `Data:`/`Fecha:` line,
@@ -120,31 +199,31 @@ static ATTRIBUTION_HEAD: LazyLock<Regex> = LazyLock::new(|| py_regex(r"(?i)^\s*(
 /// same is true of a bare English `From: Maria Souza`; French Outlook writes `De : Marie Dupont`
 /// with `Envoyé :` underneath. Both allow the French spaced colon; the neighbours still do the
 /// telling apart.
-static HEADER_FROM_NAME: LazyLock<Regex> =
-    LazyLock::new(|| py_regex(r"(?i)^\s*(De|From)\s*:\s+\S"));
-static HEADER_NEXT: LazyLock<Regex> = LazyLock::new(|| {
-    py_regex(concat!(
+static HEADER_FROM_NAME: LazyLock<PyRegex> =
+    LazyLock::new(|| PyRegex::new(r"(?i)^\s*(De|From)\s*:\s+\S"));
+static HEADER_NEXT: LazyLock<PyRegex> = LazyLock::new(|| {
+    PyRegex::new(concat!(
         r"(?i)^\s*(Enviad[oa]( em| el)?:\s|Envoy[ée]( le)?\s*:\s|Sent:\s|",
         r"(Data|Fecha|Date):\s.*\d{4})",
     ))
 });
 
 /// Closing words of an English sign-off, with the optional suffix a closing may carry.
-static SIGNOFF_HEAD: LazyLock<Regex> = LazyLock::new(|| {
-    py_regex(concat!(
+static SIGNOFF_HEAD: LazyLock<PyRegex> = LazyLock::new(|| {
+    PyRegex::new(concat!(
         r"^\s*(?i:best|kind|warmest|warm|many thanks|thanks|thank you|regards|cheers|sincerely)",
         r"(?i:\s+(?:and|&)\s+regards|\s+(?:regards|wishes|again|in advance|a lot|so much|very much))?",
     ))
 });
 
-static SIGNATURE_DASHES: LazyLock<Regex> = LazyLock::new(|| py_regex(r"^\s*--\s*$"));
+static SIGNATURE_DASHES: LazyLock<PyRegex> = LazyLock::new(|| PyRegex::new(r"^\s*--\s*$"));
 
 /// Portuguese/Spanish/French sign-offs match only on their own: "Obrigado pelo retorno, mas ..."
 /// is a request, not a signature, so unlike the English marker no trailing words are allowed.
 /// "Merci pour votre aide, mais ..." stays, while a bare "Cordialement," or "Merci," goes with
 /// the name underneath it.
-static SIGNOFF_TRANSLATED: LazyLock<Regex> = LazyLock::new(|| {
-    py_regex(concat!(
+static SIGNOFF_TRANSLATED: LazyLock<PyRegex> = LazyLock::new(|| {
+    PyRegex::new(concat!(
         r"(?i)^\s*(atenciosamente|att|abraços?|abs|um abraço|cordialmente|grat[oa]|",
         r"(muito )?obrigad[oa]s?( desde já| pela atenção)?|(com os melhores )?cumprimentos|",
         r"saudações|(un )?saludos?( cordiales)?|atentamente|(muchas )?gracias( de antemano)?|",
@@ -161,8 +240,8 @@ const DEVICE: &str = concat!(
     "iphone|ipad|android|ios|mobile|celular|telemóvel|móvil|galaxy|smartphone|samsung|tablet|",
     "outlook|yahoo|mail|e-?mail|gmail|windows",
 );
-static DEVICE_FOOTER: LazyLock<Regex> = LazyLock::new(|| {
-    py_regex(&format!(
+static DEVICE_FOOTER: LazyLock<PyRegex> = LazyLock::new(|| {
+    PyRegex::new(&format!(
         concat!(
             r"(?i)^\s*((enviad[oa] (do|pelo|pela|via|desde|a partir do)( meu| minha| mi)?|",
             r"sent from( my)?|envoy[ée] (depuis|de)( mon| ma| mes)?)",
@@ -173,8 +252,8 @@ static DEVICE_FOOTER: LazyLock<Regex> = LazyLock::new(|| {
     ))
 });
 
-static DISCLAIMER: LazyLock<Regex> = LazyLock::new(|| {
-    py_regex(concat!(
+static DISCLAIMER: LazyLock<PyRegex> = LazyLock::new(|| {
+    PyRegex::new(concat!(
         // English: tied to a disclaimer noun and a disclaimer tail, the way the Portuguese
         // branches below are. The bare word matched any sentence that merely mentioned it, so
         // "Is this confidential?" and "Confidential: I need a refund." were deleted whole.
@@ -267,10 +346,10 @@ fn signoff_tail_matches(tail: &[char]) -> bool {
 /// each token's first letter is judged by category (`Lu`, `Lt`, `Lo`). Combining marks ride along
 /// with the letter before them (`Jose\u0301` is `José`).
 fn is_english_signoff(line: &str) -> bool {
-    let Some(head) = SIGNOFF_HEAD.find(line) else {
+    let Some(head_end) = SIGNOFF_HEAD.find_end(line) else {
         return false;
     };
-    let tail = drop_marks(&line[head.end()..]);
+    let tail = drop_marks(&line[head_end..]);
     if !signoff_tail_matches(&tail) {
         return false;
     }
