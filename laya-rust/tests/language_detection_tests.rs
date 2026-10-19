@@ -242,6 +242,27 @@ fn guess_latin_language_matches_named_cases() {
 }
 
 #[test]
+fn state_text_spends_the_budget_like_python() {
+    // Values from Python lang.state_text: a leaf that ends exactly at the budget gets no
+    // trailing space; a leaf that crosses it is cut.
+    let exact = json!(["a".repeat(3999), "b"]);
+    assert_eq!(
+        LanguageDetection::state_text_default(&exact),
+        "a".repeat(3999)
+    );
+    let crossing = json!(["a".repeat(3998), "bb"]);
+    assert_eq!(
+        LanguageDetection::state_text_default(&crossing),
+        format!("{} b", "a".repeat(3998))
+    );
+    let long_leaf = json!({"x": "a".repeat(4000), "y": "b"});
+    assert_eq!(
+        LanguageDetection::state_text_default(&long_leaf),
+        "a".repeat(4000)
+    );
+}
+
+#[test]
 fn state_text_flattens_nested_state() {
     let dict_state = json!({"body": "charged twice", "n": 3});
     assert!(LanguageDetection::state_text_default(&dict_state).contains("charged twice"));
@@ -448,9 +469,100 @@ fn lang_probe_matches_every_entry() {
             actual.non_latin_fraction,
             a["non_latin_fraction"].as_f64().unwrap(),
         );
+        assert_eq!(
+            actual.mixed_segment.as_deref(),
+            a["mixed_segment"].as_str(),
+            "{label}: analyse.mixed_segment"
+        );
     }
     eprintln!(
         "lang_probe_matches_every_entry: checked {} cases",
         cases.len()
     );
+}
+
+// ---------------------------------------------------------------------- 0.4.11 behaviours
+
+#[test]
+fn mixed_segment_is_set_only_by_the_segment_scan() {
+    let state = json!(
+        "Please review the error and send me the details.\nEu nao consigo entrar na minha conta."
+    );
+    let det = LanguageDetection::analyse(&state);
+    assert!(!det.is_english);
+    assert_eq!(det.language.as_deref(), Some("pt"));
+    assert_eq!(
+        det.mixed_segment.as_deref(),
+        Some("Eu nao consigo entrar na minha conta.")
+    );
+    // a value flipped by the per-value read keeps `mixed_segment` unset, as Python does
+    let flipped = json!({
+        "note": "Please review the error and send me the details. ".repeat(5),
+        "x": "žluťoučký kůň úpěl ďábelské ódy",
+    });
+    let det = LanguageDetection::analyse(&flipped);
+    assert!(!det.is_english);
+    assert!(det.mixed_segment.is_none());
+}
+
+#[test]
+fn shouted_acronym_lines_are_not_named_foreign() {
+    for text in [
+        "MON DES EST LA",
+        "STORES LOS ANGELES LAS VEGAS EL PASO CLOSED",
+    ] {
+        let det = LanguageDetection::analyse(&json!(text));
+        assert!(
+            det.is_english,
+            "{text}: an acronym line is not a foreign sentence"
+        );
+        assert!(det.language_undecided, "{text}");
+    }
+    // ...while shouted prose with a long matched stopword, or diacritics, still is
+    for (text, lang) in [
+        ("EU NAO CONSIGO ENTRAR NA MINHA CONTA", Some("pt")),
+        ("ICH HABE MEIN PAKET NOCH NICHT BEKOMMEN", Some("de")),
+    ] {
+        let det = LanguageDetection::analyse(&json!(text));
+        assert!(!det.is_english, "{text}");
+        assert_eq!(det.language.as_deref(), lang, "{text}");
+    }
+    assert!(!LanguageDetection::is_english(&json!(
+        "WIE SPÄT IST ES IN KÖLN"
+    )));
+}
+
+#[test]
+fn nordic_swedish_and_english_rescue_rules() {
+    assert_eq!(
+        LanguageDetection::guess_latin_language("glömt lösenord").as_deref(),
+        Some("sv")
+    );
+    assert_eq!(
+        LanguageDetection::guess_latin_language("kan inte logga in").as_deref(),
+        Some("sv")
+    );
+    // a lone Swedish-Danish overlap word has no language but still is not English
+    let overlap = LanguageDetection::latin_profile("hej min vän");
+    assert_eq!(overlap.language, None);
+    assert!(overlap.looks_non_english);
+    // one accented loanword does not pull plain English off the English checkpoint
+    assert!(LanguageDetection::is_english(&json!(
+        "Please send me the café receipt today."
+    )));
+    assert!(!LanguageDetection::is_english(&json!(
+        "ñandú ñandú ñandú the please"
+    )));
+}
+
+#[test]
+fn latin_cutoff_counts_ipa_and_fullwidth_as_latin_and_unclaimed_letters_as_other() {
+    assert_eq!(LanguageDetection::detect_script("ＡＢＣＤ"), "latin");
+    assert_eq!(LanguageDetection::detect_script("ɐɪɲ"), "latin");
+    // modifier letters (U+02B0 and up) are alphabetic but claimed by no range
+    assert_eq!(LanguageDetection::detect_script("\u{2b0}\u{2b2}"), "other");
+    assert_eq!(LanguageDetection::detect_script("ㄅㄆㄇ"), "other");
+    let profile = LanguageDetection::script_profile("ab ㄅㄆ");
+    assert!((profile["latin"] - 0.5).abs() < 1e-12);
+    assert!((profile["other"] - 0.5).abs() < 1e-12);
 }

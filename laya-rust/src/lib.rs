@@ -73,7 +73,7 @@ pub use laya_options::{
 };
 pub use laya_presets::LayaPresets;
 pub use laya_router::{
-    LayaLongPredictor, LayaPredictor, LayaRouter, LayaRouterOptions, RouteDecision,
+    LangGuess, LayaLongPredictor, LayaPredictor, LayaRouter, LayaRouterOptions, RouteDecision,
 };
 pub use laya_shortlist::{DEFAULT_SHORTLIST_K, LayaShortlist, ShortlistInfo};
 pub use long_prediction::LongOptions;

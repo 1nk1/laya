@@ -10,7 +10,7 @@ use common::routing_golden;
 use laya::answers::{LayaResult, Usage};
 use laya::error::Result;
 use laya::laya_options::LayaCheckpoint;
-use laya::laya_router::{LayaPredictor, LayaRouter, LayaRouterOptions};
+use laya::laya_router::{LangGuess, LayaPredictor, LayaRouter, LayaRouterOptions};
 use laya::questions::QuestionSet;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -456,7 +456,12 @@ fn router_from_kwargs(kwargs: &Value) -> LayaRouter {
     // RouteDecision carries; this port's RouteDecision has no `repo` field (see laya_router.rs),
     // so those two knobs have no observable effect on `model`/`reason`/`detection`/`workflow` and
     // are intentionally not threaded through here.
-    LayaRouter::new(options).expect("router construction never fails (preload is off)")
+    let router =
+        LayaRouter::new(options).expect("router construction never fails (preload is off)");
+    match kwargs.get("lang_guess").and_then(Value::as_str) {
+        Some(code) => router.with_lang_guess(code),
+        None => router,
+    }
 }
 
 #[test]
@@ -479,8 +484,20 @@ fn route_probe_matches_every_entry() {
         let task = route_kwargs.get("task").and_then(Value::as_str);
         let lang = route_kwargs.get("lang").and_then(Value::as_str);
 
+        let lang_guess = route_kwargs
+            .get("lang_guess")
+            .and_then(Value::as_str)
+            .map(LangGuess::from);
+
         let decision = router
-            .route(state, questions.as_ref(), model, task, lang)
+            .route_with_lang_guess(
+                state,
+                questions.as_ref(),
+                model,
+                task,
+                lang,
+                lang_guess.as_ref(),
+            )
             .unwrap_or_else(|e| panic!("{label}: route failed: {e}"));
 
         let expected = &case["decision"];
@@ -518,6 +535,16 @@ fn route_probe_matches_every_entry() {
                     want["is_english"].as_bool().unwrap(),
                     "{label}: detection.is_english"
                 );
+                assert_eq!(
+                    got.mixed_segment.as_deref(),
+                    want["mixed_segment"].as_str(),
+                    "{label}: detection.mixed_segment"
+                );
+                assert_eq!(
+                    got.language_undecided,
+                    want["language_undecided"].as_bool().unwrap(),
+                    "{label}: detection.language_undecided"
+                );
             }
             (got, want) => {
                 panic!("{label}: detection presence mismatch: got {got:?}, want {want:?}")
@@ -527,5 +554,222 @@ fn route_probe_matches_every_entry() {
     eprintln!(
         "route_probe_matches_every_entry: checked {} cases",
         cases.len()
+    );
+}
+
+// ---------------------------------------------------------------------- lang_guess (callbacks)
+//
+// The golden can only carry string hints; callbacks (a language-identification model) are pinned
+// here. Mirrors the callable cases of `tests/test_lang_guess.py`.
+
+const ROMANIAN: &str = "Care este ora in Tokyo?";
+
+fn route_model(router: &LayaRouter, state: &str, guess: Option<&LangGuess>) -> LayaCheckpoint {
+    router
+        .route_with_lang_guess(&json!(state), None, None, None, None, guess)
+        .unwrap()
+        .model
+}
+
+#[test]
+fn lang_guess_callback_code_is_used_and_receives_the_state() {
+    let router = LayaRouter::new(LayaRouterOptions::default()).unwrap();
+    let to_romanian = LangGuess::callback(|_| Some("ro".to_string()));
+    assert_eq!(
+        route_model(&router, ROMANIAN, Some(&to_romanian)),
+        LayaCheckpoint::Multilingual
+    );
+    let by_content = LangGuess::callback(|state| {
+        Some(
+            if state.as_str().is_some_and(|s| s.contains("Tokyo")) {
+                "en"
+            } else {
+                "ro"
+            }
+            .to_string(),
+        )
+    });
+    assert_eq!(
+        route_model(&router, ROMANIAN, Some(&by_content)),
+        LayaCheckpoint::English
+    );
+}
+
+#[test]
+fn lang_guess_callback_that_abstains_falls_through_to_detection() {
+    let router = LayaRouter::new(LayaRouterOptions::default()).unwrap();
+    let baseline = router
+        .route(&json!(ROMANIAN), None, None, None, None)
+        .unwrap();
+    for abstain in [
+        LangGuess::callback(|_| None),
+        LangGuess::callback(|_| Some(String::new())),
+        LangGuess::callback(|_| Some("C".to_string())),
+    ] {
+        let decision = router
+            .route_with_lang_guess(&json!(ROMANIAN), None, None, None, None, Some(&abstain))
+            .unwrap();
+        assert_eq!(decision.model, baseline.model);
+        assert_eq!(decision.reason, baseline.reason);
+        assert!(
+            decision.detection.is_some(),
+            "an abstaining hint must leave detection intact"
+        );
+    }
+}
+
+#[test]
+fn installed_lang_guess_applies_to_every_request_and_per_call_overrides_it() {
+    let router = LayaRouter::new(LayaRouterOptions::default())
+        .unwrap()
+        .with_lang_guess("ro");
+    assert_eq!(
+        route_model(&router, ROMANIAN, None),
+        LayaCheckpoint::Multilingual
+    );
+    let english = LangGuess::from("en");
+    assert_eq!(
+        route_model(&router, ROMANIAN, Some(&english)),
+        LayaCheckpoint::English
+    );
+    // a per-call hint that abstains leaves the installed one in force
+    let abstain = LangGuess::from("POSIX");
+    assert_eq!(
+        route_model(&router, ROMANIAN, Some(&abstain)),
+        LayaCheckpoint::Multilingual
+    );
+    let decision = router
+        .route(&json!(ROMANIAN), None, None, None, None)
+        .unwrap();
+    assert_eq!(
+        decision.reason,
+        "Router(lang_guess=...): the caller identified this as non-English text"
+    );
+    assert!(decision.detection.is_none());
+}
+
+#[test]
+fn installed_callback_works_and_lang_guess_is_off_by_default() {
+    let plain = LayaRouter::new(LayaRouterOptions::default()).unwrap();
+    assert_eq!(route_model(&plain, ROMANIAN, None), LayaCheckpoint::English);
+    let router = plain.with_lang_guess(LangGuess::callback(|_| Some("ro".into())));
+    assert_eq!(
+        route_model(&router, ROMANIAN, None),
+        LayaCheckpoint::Multilingual
+    );
+}
+
+#[test]
+fn explicit_model_task_and_lang_beat_lang_guess() {
+    let router = LayaRouter::new(LayaRouterOptions::default()).unwrap();
+    let ro = LangGuess::from("ro");
+    let by_model = router
+        .route_with_lang_guess(
+            &json!(ROMANIAN),
+            None,
+            Some("english"),
+            None,
+            None,
+            Some(&ro),
+        )
+        .unwrap();
+    assert_eq!(by_model.model, LayaCheckpoint::English);
+    let by_task = router
+        .route_with_lang_guess(
+            &json!(ROMANIAN),
+            None,
+            None,
+            Some("typed_decisions"),
+            None,
+            Some(&ro),
+        )
+        .unwrap();
+    assert_eq!(by_task.model, LayaCheckpoint::TypedDecisions);
+    let by_lang = router
+        .route_with_lang_guess(&json!(ROMANIAN), None, None, None, Some("en"), Some(&ro))
+        .unwrap();
+    assert_eq!(by_lang.model, LayaCheckpoint::English);
+    assert_eq!(by_lang.reason, "explicit lang='en'");
+}
+
+#[test]
+fn lang_guess_is_forwarded_by_predict() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let router = fake_router(2, log).with_lang_guess("ro");
+    let questions = noul_question_set(&["a"]);
+    let result = router
+        .predict(json!(ROMANIAN), &questions, None, None, None)
+        .unwrap();
+    assert_eq!(result.model(), "multilingual");
+    let english = LangGuess::from("en");
+    let result = router
+        .predict_with_lang_guess(
+            json!(ROMANIAN),
+            &questions,
+            None,
+            None,
+            None,
+            Some(&english),
+        )
+        .unwrap();
+    assert_eq!(result.model(), "english");
+}
+
+#[test]
+fn blank_and_language_agnostic_lang_codes_fall_through_to_detection() {
+    let router = LayaRouter::new(LayaRouterOptions::default()).unwrap();
+    for lang in [
+        "", "   ", "C", "c.utf-8", "POSIX", "und", "zxx", "mul", ".", ".UTF-8",
+    ] {
+        let decision = router
+            .route(
+                &json!("Hello there my friend"),
+                None,
+                None,
+                None,
+                Some(lang),
+            )
+            .unwrap();
+        assert!(
+            decision.detection.is_some(),
+            "lang {lang:?} names no language, so detection must decide"
+        );
+    }
+    for (lang, model) in [
+        ("en_US.UTF-8", LayaCheckpoint::English),
+        ("EN", LayaCheckpoint::English),
+        (" english ", LayaCheckpoint::English),
+        ("pt-BR", LayaCheckpoint::Multilingual),
+        ("qq", LayaCheckpoint::Multilingual),
+    ] {
+        let decision = router
+            .route(&json!("hola"), None, None, None, Some(lang))
+            .unwrap();
+        assert_eq!(decision.model, model, "lang {lang:?}");
+        assert!(decision.detection.is_none());
+    }
+}
+
+#[test]
+fn mixed_segment_reason_truncates_to_sixty_characters() {
+    let router = LayaRouter::new(LayaRouterOptions::default()).unwrap();
+    // enough English that the whole-state read stays English and the segment scan decides
+    let english =
+        "Please review the error and send me the details of this and what you would like to do.\n"
+            .repeat(6);
+    let state = json!(format!(
+        "{english}Eu nao consigo entrar na minha conta e depois eu nao sei mais o que fazer."
+    ));
+    let decision = router.route(&state, None, None, None, None).unwrap();
+    assert_eq!(decision.model, LayaCheckpoint::Multilingual);
+    let mixed = decision.detection.unwrap().mixed_segment.unwrap();
+    assert!(mixed.chars().count() > 60);
+    let expected: String = mixed.chars().take(60).collect();
+    assert_eq!(
+        decision.reason,
+        format!(
+            "Latin script, mostly English, but a line or field reads as 'pt' ('{expected}'); \
+             the English checkpoint cannot read it"
+        )
     );
 }

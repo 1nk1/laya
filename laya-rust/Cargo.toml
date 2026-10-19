@@ -41,6 +41,9 @@ ort = "2.0.0-rc.13"
 # L* only, which `char::is_alphabetic` does not match (it also accepts combining marks). This
 # crate gives a direct category lookup instead of hand-rolling Unicode tables.
 unicode-general-category = "1.1.0"
+# Routing port (`language_detection.rs`): `unicodedata.combining` (canonical combining class) decides
+# which characters never split a non-Latin word, and it is not derivable from the general category.
+unicode-normalization = "0.1"
 # Routing port (`laya_email.rs`): quote-header, signature and disclaimer detection. `regex` has no
 # lookbehind, so `email.py`'s one lookbehind pattern (`_SENTENCE`) is hand-written instead of
 # pulling in a second, heavier engine (`fancy-regex`) for a single pattern.

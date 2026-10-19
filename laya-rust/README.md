@@ -527,6 +527,27 @@ println!("{}", result.routing().unwrap().reason);   // "English Latin text"
 `router.route(state, Some(&questions), None, None, None)` decides without loading or running
 anything. `router.preload(None)` builds every checkpoint up front for a server or demo.
 
+A state that reads English as a whole is still checked line by line and field by field, so a
+Portuguese message under an English stack trace goes to the multilingual checkpoint
+(`LanguageAnalysis::mixed_segment` names the line). An explicit `lang` that names no language
+(blank, `C`, `POSIX`, `C.UTF-8`, `und`, `zxx`, `mul`) falls through to detection instead of pinning a
+checkpoint. If you already run a language-identification model, hand its answer to the router as a
+`LangGuess` -- a code or a callback, checked after an explicit `lang` and before detection, and
+abstaining (`None`, blank, `C`, ...) falls through:
+
+```rust,no_run
+use laya::laya_router::{LangGuess, LayaRouter, LayaRouterOptions};
+use serde_json::json;
+
+// one hint for every request ...
+let router = LayaRouter::new(LayaRouterOptions::default())?.with_lang_guess("ro");
+// ... or per call, as a function of the state
+let hint = LangGuess::callback(|state| my_language_id_model(state));
+let decision = router.route_with_lang_guess(&json!("Care este ora in Tokyo?"), None, None, None, None, Some(&hint))?;
+# fn my_language_id_model(_: &serde_json::Value) -> Option<String> { None }
+# Ok::<(), laya::LayaError>(())
+```
+
 **Email cleaning** strips quoted history, signatures and disclaimers before you ask any questions:
 
 ```rust,no_run
@@ -535,6 +556,12 @@ use laya::laya_email::LayaEmail;
 let cleaned = LayaEmail::clean_body(raw_body, laya::laya_email::DEFAULT_MAX_CHARS);
 let state = LayaEmail::state(subject, raw_body, Some("user@acme.com"), true, std::iter::empty());
 ```
+
+It reads English, Portuguese, Spanish and French mail (Gmail's `Em ... escreveu:` / `Le ... a écrit :`,
+Outlook's `-----Mensagem original-----`, `Atenciosamente` / `Cordialement`, `Envoyé depuis mon
+iPhone`, confidentiality footers). `max_chars` is a slice budget: raise it for a long message
+(`LayaEmail::state_with_max_chars`, `clean_body_signed`). `0` gives an empty body and a negative value
+trims from the end, exactly as in Python, so "no limit" means a budget larger than the body.
 
 **Embedding shortlist** narrows a high-cardinality choice question before the model sees it, using
 a caller-supplied embedding function (bring your own bi-encoder — this SDK does not include one):
@@ -718,9 +745,10 @@ Rust port groups the corresponding functions into a unit struct with associated 
 
 ## Known gaps
 
-- **Python 0.4.0's routing defaults, script counting and fused-line disclaimer fixes are ported**
-  and checked against freshly regenerated probes. New mixed-field language heuristics remain
-  a follow-up; these probes are not a claim of full coverage of every new Python feature.
+- **Language detection, routing and email cleaning follow Python 0.4.11** and are checked against
+  routing probes regenerated at that version (mixed-segment scan, Nordic/Swedish rules, English
+  rescue, all-caps rules, `lang_guess`, multilingual quote headers and sign-offs, `max_chars`).
+  The probes are a corpus, not a proof: a Python change after 0.4.11 needs the probes regenerated.
 
 - **Opt-in features are not ported yet:** abstention (`min_confidence`, including per-bucket
   thresholds), histogram-binning calibration, and per-language temperatures
