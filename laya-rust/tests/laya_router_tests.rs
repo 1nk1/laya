@@ -198,6 +198,19 @@ fn lru_cap_one_keeps_newest() {
 }
 
 #[test]
+fn default_keeps_two_checkpoints_like_python() {
+    // Python's Router(max_loaded=2) since #180: alternating two languages must not reload.
+    assert_eq!(LayaRouterOptions::default().max_loaded, 2);
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let router = fake_router(LayaRouterOptions::default().max_loaded, log.clone());
+    router.load("english").unwrap();
+    router.load("multilingual").unwrap();
+    router.load("english").unwrap();
+    assert_eq!(router.loaded().len(), 2, "both checkpoints stay resident");
+    assert_eq!(log.lock().unwrap().len(), 2, "switching back does not rebuild english");
+}
+
+#[test]
 fn lru_cap_two_evicts_oldest() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let router = fake_router(2, log);

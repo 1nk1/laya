@@ -40,6 +40,11 @@ goldens for the supported paths (see the known gaps below).
 - Opt-in model download from Hugging Face (Cargo feature `download`).
 - Samples: quickstart, routing and benchmark.
 
+### Fixed
+
+- `LayaRouterOptions::max_loaded` defaults to 2, as Python's `Router(max_loaded=2)` does, so a
+  router that alternates two languages no longer reloads a checkpoint on every request.
+
 ### Known gaps
 
 - Routing, script counting and fused-line email disclaimers follow the regenerated Python 0.4.0

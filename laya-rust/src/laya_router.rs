@@ -181,7 +181,8 @@ pub struct LayaRouterOptions {
     /// `allow_download`, cache directory, HF token) is copied as-is.
     pub engine_options: LayaOptions,
     /// How many checkpoints may stay resident at once before the least-recently-used one is
-    /// evicted. Always at least 1.
+    /// evicted. Always at least 1. Defaults to 2, as Python's `Router(max_loaded=2)` does, so
+    /// alternating two languages does not reload a checkpoint on every request.
     pub max_loaded: usize,
     /// Checkpoint used when [`LayaRouter::route`] cannot find any letters in the state at all.
     /// Also used for undecided Latin text. Multilingual by default, matching Python 0.4.0;
@@ -200,7 +201,7 @@ impl Default for LayaRouterOptions {
     fn default() -> Self {
         Self {
             engine_options: LayaOptions::default(),
-            max_loaded: 1,
+            max_loaded: 2,
             default: LayaCheckpoint::Multilingual,
             auto_task_detection: false,
             preload: false,
