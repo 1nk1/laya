@@ -24,6 +24,30 @@ public static class Calibration
         double.IsNaN(t) || double.IsInfinity(t) ? 1.0 : Math.Min(TempMax, Math.Max(TempMin, t));
 
     /// <summary>
+    /// <see cref="ClampTemperature(double)"/> for a value read from JSON, exactly as Python's
+    /// <c>clamp_temperature</c> treats it: a <see cref="bool"/> is 1.0, and so is anything
+    /// <c>float()</c> refuses (<see langword="null"/>, a list, a dictionary, a non-numeric string).
+    /// A numeric string such as <c>"2.5"</c>, <c>" 2.5 "</c> or <c>"1e1"</c> is read the way
+    /// <c>float()</c> reads it.
+    /// </summary>
+    public static double ClampTemperature(object? t)
+    {
+        if (t is bool) return 1.0;
+        return PythonFloat.TryConvert(t, out var value) ? ClampTemperature(value) : 1.0;
+    }
+
+    /// <summary>
+    /// Python's <c>temperature_rejected</c>: whether <paramref name="raw"/> is not the number
+    /// <see cref="ClampTemperature(object?)"/> turned into <paramref name="applied"/>. A bool, or a
+    /// value that will not convert, is rejected; so is a number that had to move.
+    /// </summary>
+    public static bool TemperatureRejected(object? raw, double applied)
+    {
+        if (raw is bool) return true;
+        return !PythonFloat.TryConvert(raw, out var value) || value != applied;
+    }
+
+    /// <summary>
     /// The calibration bucket key for a question type and option count, e.g. <c>"choice:3-5"</c>.
     /// </summary>
     public static string TempBucket(QuestionType type, int optionCount)

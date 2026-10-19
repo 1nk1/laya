@@ -11,6 +11,15 @@ goldens: 0.4.12).
 
 ### Added
 
+- `LangGuess` (a language code or a callback of the state), Python's `lang_guess`: per call through new
+  `LayaRouter.Route`, `Predict` and `PredictLong` overloads, and for every request through
+  `LayaRouterOptions.LangGuess`. Precedence is explicit `lang`, then `lang_guess`, then detection;
+  a hint that names no language falls through. Existing signatures are unchanged.
+- `LayaEmail.State` overload taking Python's `max_chars`, consumed (never a state field) and applied only
+  when cleaning.
+- `LayaConfig.TemperatureRawValues` / `TemperatureByOptionsRawValues` and
+  `Calibration.ClampTemperature(object?)` / `TemperatureRejected`: Python's `clamp_temperature` and
+  `temperature_rejected` on the JSON value itself.
 - `LayaEngine.PredictLong` and `LayaRouter.PredictLong`, ported from Python
   `ONNXAgent.predict_long`: overlapping token windows, batched inference, deciding-window
   attribution, per-type aggregation and summed scan diagnostics.
@@ -26,6 +35,38 @@ goldens: 0.4.12).
 
 ### Fixed
 
+- Language detection: a line or state written in capitals is no longer named a language on acronym-shaped
+  evidence (`MON DES EST LA`, `STORES LOS ANGELES LAS VEGAS`), as Python's `_shouted` rules; combining
+  marks count with their script only when they have a combining class, so Devanagari matras read as the
+  script; the per-field read falls through to the diacritic rule when a named language is disbelieved; the
+  `\w`/`\d`/`\s`/`isupper`/`strip` classes follow Python, including for characters outside the BMP.
+- Checkpoint config JSON is read by a reader that follows CPython's `json.loads` (`PythonJsonReader`): the bare
+  `NaN`, `Infinity` and `-Infinity` are accepted in value position only (`{NaN: 1}`, `nan`, `+Infinity`, `01`,
+  trailing commas, comments and single quotes stay errors), integer and float literals keep their Python type
+  (`-0` is the int `0`, `7.0` a float, a 30-digit int prints in full), floats are bit-identical to `float()`,
+  and no marker text stands in for a token. `tokenizer_config.json` is read the same way. A temperature given as
+  an integer too large for a float fails the load with Python's `OverflowError: int too large to convert to
+  float` (`InvalidDataException`), while a float literal such as `1e400` reads as infinity and falls back to 1.0.
+- A warning is traced once per process for the same text and call site, as Python's default filter does
+  (`stacklevel`): the site is the caller of `LayaEngine.Create` / `FromDirectory` (temperature warning) or of
+  `PredictLong` (window and stride warnings), through the router the router's own call. The `predict_long`
+  window and stride warnings now carry Python's texts.
+- `rl_agent_config.json` and `tokenizer_config.json` are read as strict UTF-8 and a BOM is rejected, as
+  Python's `json.load(open(path))` does on a UTF-8 locale (it opens them without an `encoding`, so on a default
+  Windows install it would use the ANSI code page; the two agree on ASCII files).
+- Email patterns count and bound code points, not UTF-16 units, so characters outside the BMP next to a
+  keyword or inside a `.{0,300}` window behave as in Python.
+- `byte[]` states are decoded as strict UTF-8 for detection, and invalid UTF-8 is no text, as in Python;
+  serializing one for a prediction throws, as Python's `TypeError` does.
+- Route: a blank, whitespace, `C`, `C.UTF-8`, `POSIX`, `und`, `zxx`, `mul` or `.` `lang` falls through to
+  detection, and locale codes (`en_US`, `en_US.UTF-8`, ` EN `) normalise as Python does; reasons quote
+  caller text with Python's `repr` (non-printable characters escaped).
+- Email cleaning: a negative `maxChars` slices as Python does (including the `max_chars * 4` pre-cut);
+  U+001C..U+001F count as whitespace, `\b` follows Python's `\w`, and case-insensitive matching treats
+  `i`, `I`, `ı` and `İ` as one letter, as `re.I` does.
+- Checkpoint temperatures are read as Python does: a numeric string (`"2.5"`, `" 2.5 "`, `"1e1"`) is a
+  number, and `true`, `null`, lists, dictionaries and non-numeric strings fall back to 1.0. The load
+  warning is one message with Python's text, listing each entry as `name=repr -> applied`.
 - `LayaRouterOptions.MaxLoaded` defaults to 2, as Python's `Router(max_loaded=2)` does, so a
   router that alternates two languages no longer reloads a checkpoint on every request.
 - Undetermined Latin text uses the router's configured default, including its route reason.
@@ -45,7 +86,5 @@ goldens: 0.4.12).
 
 - Python-only opt-in features are not yet ported: abstention (`min_confidence`),
   `lang_temperatures`, hooks, batching APIs, question option ordering and digest controls.
-- `LayaEmail.State` does not expose Python's `max_chars` keyword; use `CleanBody` with a custom
-  budget and pass the cleaned body with `clean: false`.
 - New Python usage diagnostics (`state_tokens`, `truncated`, `state_tokens_dropped` and
   `truncated_questions`) are populated for `PredictLong`, but not ordinary `Predict`.

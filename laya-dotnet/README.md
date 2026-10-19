@@ -543,6 +543,15 @@ Console.WriteLine(result.Routing!.Reason);   // "English Latin text"
 or testing the routing logic in isolation. `Preload()` builds every checkpoint up front for a
 server or demo, so no request pays a cold load.
 
+**Language hints.** Precedence is explicit `model` > `task` > detected typed-decisions workflow (opt-in) >
+explicit `lang` > `LangGuess` > detection > default. An explicit `lang` decides only when its code names a
+language (`en`, `EN`, `en-US`, `en_US`, `en_US.UTF-8`, `pt-BR`); blank, `C`, `C.UTF-8`, `POSIX`, `und`, `zxx`
+and `mul` fall through to detection. A `LangGuess` is Python's `lang_guess`, a code or a callback of the state
+(a callback returning `null` abstains, so a language-identification model can decline); pass one per call
+to the `Route`/`Predict`/`PredictLong` overloads that end in `LangGuess? langGuess`, or install one for every
+request with `new LayaRouterOptions { LangGuess = LangGuess.FromCallback(state => Identify(state)) }`.
+Route reasons quote caller text with Python's `repr`, escaping non-printable characters.
+
 **Email cleaning** strips quoted history, signatures and disclaimers before you ask any questions:
 
 ```csharp
@@ -550,6 +559,11 @@ var cleaned = LayaEmail.CleanBody(rawBody);
 var state = LayaEmail.State(subject, rawBody, sender: "user@acme.com");
 var answers = router.Predict(state, LayaPresets.Email());
 ```
+
+`LayaEmail.State(subject, body, sender, clean, extra, maxChars)` takes Python's `max_chars` budget (default 3000).
+It is a slice budget, applied as Python slices: `0` gives an empty body and a negative value cuts from the end
+(`5 * |maxChars|` characters in all), so pass a number larger than the body to mean "no limit". It is ignored
+when `clean` is `false` and is never added to the state as a field.
 
 **Embedding shortlist** narrows a high-cardinality choice question before the model sees it, using
 a caller-supplied embedding function (bring your own bi-encoder — this SDK does not include one):
@@ -656,8 +670,9 @@ The contents of `rl_agent_config.json`. Missing keys fall back to the same defau
 | `int HeadMaxLen` | Budget for instructions plus all option fragments (256 on multilingual). |
 | `IReadOnlyList<double> Temperature` | Per-question-type temperature `[choice, score, noul]`, clamped. Always 3 entries. |
 | `IReadOnlyDictionary<string, double> TemperatureByOptions` | Per-bucket temperature, clamped. Keys look like `choice:3-5` (buckets `2`, `3-5`, `6-10`, `11+`). |
-| `IReadOnlyList<double> TemperatureRaw` / `TemperatureByOptionsRaw` | What the checkpoint shipped, before clamping. |
-| `IReadOnlyList<string> ClampedTemperatures` | Every temperature that was clamped into `[0.5, 5.0]`. A non-empty list means confidence from those buckets is uncalibrated. Each entry is also logged at load time via `Trace.TraceWarning`. |
+| `IReadOnlyList<double> TemperatureRaw` / `TemperatureByOptionsRaw` | What the checkpoint shipped, before clamping, as numbers (a value that is not a number reads `NaN`). |
+| `IReadOnlyList<object?> TemperatureRawValues` / `IReadOnlyDictionary<string, object?> TemperatureByOptionsRawValues` | The same entries as the JSON held them (`long`, `double`, `string`, `bool`, `null`, list). |
+| `IReadOnlyList<string> ClampedTemperatures` | Every temperature that was clamped into `[0.5, 5.0]`. A non-empty list means confidence from those buckets is uncalibrated. Entries read `name=<Python repr of the value> -> <applied>`, as Python's warning lists them. One `Trace.TraceWarning` listing every entry is raised at load time. |
 
 ```csharp
 foreach (var warning in engine.Config.ClampedTemperatures)
@@ -932,8 +947,6 @@ disclaimer, signature and reply-header rules, including Portuguese, Spanish and 
   Python, so default predictions are unaffected. They are planned as follow-ups.
 - **Other Python-only APIs are not ported:** hooks, batching APIs, question option ordering and
   digest controls.
-- **Custom email-state body budgets:** `LayaEmail.State` does not expose Python's `max_chars`
-  keyword. Call `LayaEmail.CleanBody(body, maxChars)` and pass its result with `clean: false`.
 - **Usage diagnostics:** Python's `state_tokens`, `truncated`, `state_tokens_dropped` and
   `truncated_questions` are exposed for `PredictLong` only; ordinary `Predict` still reports
   just input/output tokens.

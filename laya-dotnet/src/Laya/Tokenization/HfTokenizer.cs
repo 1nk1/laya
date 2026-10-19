@@ -327,8 +327,8 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
             // 2a. Fused layout: tokenizer_config.json says "cls_token": "[CLS]" (for ModernBERT)
             //     or "cls_token": "<bos>" (for mmBERT). HuggingFace sometimes stores these as
             //     plain strings and sometimes as {"content": "...", ...} dicts.
-            using var f = File.OpenRead(configPath);
-            using var cfg = JsonDocument.Parse(f);
+            // Python reads this file with json.load, which accepts NaN / Infinity / -Infinity tokens.
+            using var cfg = PythonJsonReader.ParseDocument(PythonJsonReader.ReadAllText(configPath));
             var r = cfg.RootElement;
             clsStr  = RequireTokenString(r, "cls_token",  configPath);
             sepStr  = RequireTokenString(r, "sep_token",  configPath);

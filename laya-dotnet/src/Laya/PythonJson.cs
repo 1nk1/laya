@@ -183,6 +183,12 @@ public static class PythonJson
                 sb.Append(Repr((double)dec));
                 break;
 
+            // Python's bytes/bytearray are not JSON serializable (TypeError); a state that is bytes can be
+            // routed (lang.py decodes it) but never predicted on. Under default=str Python writes str(b"..."),
+            // which is not ported, so that path keeps the array rendering.
+            case byte[] when !fallbackToStr:
+                throw new JsonException("Object of type bytes is not JSON serializable");
+
             // Dictionaries: more-specific IEnumerable<KVP> before general IDictionary before general IEnumerable.
             case IEnumerable<KeyValuePair<string, object?>> kvpEnum:
                 WriteKvpSequence(sb, kvpEnum, escapeNonAscii, fallbackToStr, seen);
