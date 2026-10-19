@@ -172,6 +172,23 @@ It attaches a `reliability` diagnostic block to each choice question's answer:
 - `variant_choices`: Mapping of variant name to decoded choice.
 - `variant_support`: Mapping of variant name to probability mass on the primary choice.
 
+### What it costs
+
+One forward pass, not several, but a wider one: the variants are extra rows in the same batch.
+A four-option `choice` costs 3 rows under `variants="fast"` and 7 under `"full"`, against 1 with
+no hook. On a GPU or MPS those extra rows are largely absorbed by the batch; on a CPU they are
+not, and the cost is close to linear in rows. Measured here on one 4-option choice, CPU, median
+of 15 calls after 4 warmups:
+
+| | rows | median | against baseline |
+|---|---:|---:|---:|
+| no hook | 1 | 62.5 ms | 1.00x |
+| `variants="fast"` | 3 | 123.9 ms | 1.98x |
+| `variants="full"` | 7 | 230.5 ms | 3.69x |
+
+So on CPU this is a diagnostic to enable deliberately, per request or on a sample of traffic,
+rather than everywhere by default. Scale the row counts by option count from the table in #908.
+
 ## Convenience types
 
 ```python
