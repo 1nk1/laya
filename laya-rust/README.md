@@ -747,23 +747,23 @@ Rust port groups the corresponding functions into a unit struct with associated 
   `null`, list or object is refused when the engine is created, with the `TypeError` text Python
   raises at its first prediction (`head_max_len` is met first); a negative value is refused with
   `max_len=-5: must be a non-negative integer`, since Python slices from the end for it. Python
-  also tolerates a fractional `head_max_len` below about 4.0; that is refused here too.
+  also tolerates a small fractional `head_max_len` (roughly up to 8 plus 4 per option); that is
+  refused here too.
 - **Lone surrogate escapes in config JSON are refused.** `"\ud800"` loads in Python and is an error
   here, because a Rust `String` cannot hold a lone surrogate.
 - **JSON nesting is cut off at 1000 levels.** Python's limit depends on the interpreter's
   recursion limit.
-- **A `temperature` list shorter than three** loads and fails with `IndexError: list index out of
-  range` for the first question whose type index it lacks, as Python does; entries past the third
-  are ignored.
+- **Config files are decoded as strict UTF-8.** Python opens them with the locale's encoding (cp1252
+  on a default Windows install), which only differs for non-ASCII bytes; a BOM is rejected, as
+  `json.loads` does.
 
 ---
 
 ## Known gaps
 
-- **Language detection, routing and email cleaning follow Python 0.4.11** and are checked against
-  routing probes regenerated at that version (mixed-segment scan, Nordic/Swedish rules, English
-  rescue, all-caps rules, `lang_guess`, multilingual quote headers and sign-offs, `max_chars`).
-  The probes are a corpus, not a proof: a Python change after 0.4.11 needs the probes regenerated.
+- **Language detection, routing and email cleaning follow Python 0.4.12** and are checked against
+  routing probes and a seeded differential corpus regenerated at that version
+  (`tools/regen_golden.py --checkpoint routing`). A later Python change needs them regenerated.
 
 - **Opt-in features are not ported yet:** abstention (`min_confidence`, including per-bucket
   thresholds), histogram-binning calibration, and per-language temperatures
