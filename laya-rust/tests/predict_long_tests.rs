@@ -487,11 +487,13 @@ impl Drop for ScratchDir {
     }
 }
 
-/// Python loads a checkpoint whose `max_len` / `head_max_len` has the wrong type and raises the
-/// `TypeError` at the first prediction (`build_head`, `window_budget`); `LayaEngine` must do the
-/// same. The messages were produced by Python's `common.build_sequence` and `window_budget`.
+/// Checkpoint configs whose `max_len` / `head_max_len` / `temperature` Python reads loosely. A
+/// wrongly typed or negative length is refused when the engine is created, with the `TypeError`
+/// text Python raises at the first prediction; a `temperature` list shorter than three loads and
+/// fails with Python's `IndexError` for a question type whose index it lacks; a longer one is
+/// fine. The messages were produced by Python's `common.build_sequence` and `_decode_answers`.
 #[test]
-fn a_wrongly_typed_length_in_the_config_fails_at_the_first_prediction() {
+fn config_lengths_and_temperatures_are_refused_or_deferred_as_agreed() {
     let Some(source) = common::test_artifacts::locate(LayaCheckpoint::English).filter(|dir| {
         dir.join("model.onnx").is_file() && dir.join("tokenizer").join("tokenizer.json").is_file()
     }) else {
@@ -510,19 +512,47 @@ fn a_wrongly_typed_length_in_the_config_fails_at_the_first_prediction() {
     );
     let operand =
         |kind: &str| format!("TypeError: unsupported operand type(s) for -: '{kind}' and 'int'");
+    let make = |change: Option<(&str, Value)>| {
+        let _ = std::fs::remove_dir_all(&scratch.0);
+        link_tree(&source, &scratch.0);
+        let config_path = scratch.0.join("rl_agent_config.json");
+        std::fs::remove_file(&config_path).unwrap();
+        let mut config: Value = serde_json::from_str(&config_text).unwrap();
+        if let Some((key, value)) = change {
+            config[key] = value;
+        }
+        std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
+        LayaEngine::from_directory(&scratch.0)
+    };
 
-    // (key, JSON value, expected message); `None` keeps the shipped config as it is.
-    let cases = [
-        (Some(("max_len", Value::from("512"))), Some(operand("str"))),
+    // Refused at create / from_directory.
+    let refused = [
+        (("max_len", Value::from("512")), operand("str")),
+        (("head_max_len", Value::Null), operand("NoneType")),
         (
-            Some(("head_max_len", Value::Null)),
-            Some(operand("NoneType")),
+            ("max_len", Value::from(300.5)),
+            "TypeError: slice indices must be integers or None or have an __index__ method"
+                .to_string(),
         ),
-        // Python indexes `self.temperature[2]` for a noul question: a one-entry list fails there
-        // with IndexError, and entries past the third are ignored.
+        (
+            ("max_len", Value::from(-5)),
+            "max_len=-5: must be a non-negative integer".to_string(),
+        ),
+    ];
+    for (change, expected) in refused {
+        match make(Some(change)) {
+            Err(LayaError::InvalidConfig(got)) => assert_eq!(expected, got),
+            Err(other) => panic!("expected InvalidConfig({expected}), got {other:?}"),
+            Ok(_) => panic!("expected InvalidConfig({expected}), but the engine loaded"),
+        }
+    }
+
+    // Loads; the short temperature list fails predict and predict_long (a noul question needs
+    // index 2); a longer list and the shipped config predict normally.
+    let cases = [
         (
             Some(("temperature", serde_json::json!([1.0]))),
-            Some("IndexError: list index out of range".to_string()),
+            Some("IndexError: list index out of range"),
         ),
         (
             Some(("temperature", serde_json::json!([1.0, 1.0, 1.0, 9.0]))),
@@ -531,18 +561,7 @@ fn a_wrongly_typed_length_in_the_config_fails_at_the_first_prediction() {
         (None, None),
     ];
     for (change, expected) in cases {
-        let _ = std::fs::remove_dir_all(&scratch.0);
-        link_tree(&source, &scratch.0);
-        let config_path = scratch.0.join("rl_agent_config.json");
-        std::fs::remove_file(&config_path).unwrap();
-        let mut config: Value = serde_json::from_str(&config_text).unwrap();
-        if let Some((key, value)) = &change {
-            config[*key] = value.clone();
-        }
-        std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
-
-        let engine = LayaEngine::from_directory(&scratch.0)
-            .expect("loading succeeds: Python only fails at the first prediction");
+        let engine = make(change).expect("these configs load");
         let predicted = engine.predict("Please refund my order.", &questions);
         let scanned =
             engine.predict_long("Please refund my order.", &questions, &LongOptions::new());
@@ -556,50 +575,10 @@ fn a_wrongly_typed_length_in_the_config_fails_at_the_first_prediction() {
                 }
             }
             None => {
-                predicted.expect("a valid config predicts normally");
-                scanned.expect("a valid config scans normally");
+                predicted.expect("predicts normally");
+                scanned.expect("scans normally");
             }
         }
         drop(engine);
     }
-
-    // Only a float is wrong (`max_len` 300.5, so Python's float window is max(64, 300.5 - 192 - 8)
-    // = 100.5 tokens). Python's `predict_long` without questions answers a state that fits it
-    // (empty answers, `windows: 1`) and fails on the first slice of a longer one; with questions
-    // both `predict` and `predict_long` raise the slice-indices TypeError. Probed with Python's
-    // `ONNXAgent.predict_long` on a session-less agent.
-    let slice = "TypeError: slice indices must be integers or None or have an __index__ method";
-    let _ = std::fs::remove_dir_all(&scratch.0);
-    link_tree(&source, &scratch.0);
-    let config_path = scratch.0.join("rl_agent_config.json");
-    std::fs::remove_file(&config_path).unwrap();
-    let mut config: Value = serde_json::from_str(&config_text).unwrap();
-    config["max_len"] = Value::from(300.5);
-    config["head_max_len"] = Value::from(192);
-    std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
-    let engine = LayaEngine::from_directory(&scratch.0).expect("loading succeeds");
-    let none = QuestionSet::new();
-    let options = LongOptions::new();
-
-    let short = engine
-        .predict_long("short text", &none, &options)
-        .expect("a state inside the float window is answered");
-    assert!(short.ids().is_empty());
-    assert_eq!(Some(1), short.scan_usage().map(|u| u.windows));
-
-    let long_state = "word ".repeat(400);
-    match engine.predict_long(long_state.as_str(), &none, &options) {
-        Err(LayaError::InvalidConfig(got)) => assert_eq!(slice, got),
-        other => panic!("expected the slice TypeError, got {other:?}"),
-    }
-    for outcome in [
-        engine.predict("short text", &questions),
-        engine.predict_long("short text", &questions, &options),
-    ] {
-        match outcome {
-            Err(LayaError::InvalidConfig(got)) => assert_eq!(slice, got),
-            other => panic!("expected the slice TypeError, got {other:?}"),
-        }
-    }
-    drop(engine);
 }

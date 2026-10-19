@@ -71,8 +71,7 @@ pub struct LayaEngine {
     tokenizer: Box<dyn LayaTokenizer>,
     config: LayaConfig,
     artifacts: ModelArtifacts,
-    /// A `max_len` / `head_max_len` of the wrong type: Python loads the checkpoint and raises
-    /// `TypeError` at the first prediction, so this is returned from `predict*`, not from `create`.
+    /// What Python only discovers at prediction time (a `temperature` list shorter than three).
     deferred: Deferred,
 }
 
@@ -236,29 +235,7 @@ impl LayaEngine {
         options: &LongOptions,
     ) -> Result<LayaResult> {
         options.check_aggregate()?;
-        // Python reads `cfg.get("max_len")` right after the argument checks, and
-        // `window_budget` is the first thing to use it.
         let tokenizer = self.tokenizer.as_ref();
-        if let Some(error) = &self.deferred.length {
-            if !questions.is_empty() {
-                return Err(LayaError::InvalidConfig(error.with_questions.clone()));
-            }
-            let Some(window) = error.no_questions_window else {
-                return Err(LayaError::InvalidConfig(error.no_questions.clone()));
-            };
-            // Only floats are wrong and there are no questions: Python's `window_budget` passes,
-            // a state that fits the float window is answered (with no answers) in one pass, and
-            // a longer one fails on its first slice.
-            let state_ids = SequenceBuilder::encode_state(tokenizer, &state)?;
-            if state_ids.len() as f64 > window {
-                return Err(LayaError::InvalidConfig(error.with_questions.clone()));
-            }
-            let single = self.predict_states(&[state], questions)?.remove(0);
-            return Ok(single.with_scan_usage(ScanUsage {
-                windows: 1,
-                truncated_windows: 0,
-            }));
-        }
         let explicit_window = options.window.unwrap_or(0);
         let (budget, warnings) = long_prediction::window_budget_warned(
             tokenizer,
@@ -326,9 +303,6 @@ impl LayaEngine {
                 .iter()
                 .map(|_| LayaResult::new(MODEL_NAME, Vec::new(), HashMap::new(), Usage::default()))
                 .collect());
-        }
-        if let Some(error) = &self.deferred.length {
-            return Err(LayaError::InvalidConfig(error.with_questions.clone()));
         }
 
         let mut items = Vec::with_capacity(ids.len() * states.len());

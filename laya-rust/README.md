@@ -742,6 +742,19 @@ Rust port groups the corresponding functions into a unit struct with associated 
 - **`Agent::new_with_defaults()`, reused across all five files in one download.** Matches Python's
   single reused HTTP session, but there's no async cancellation token — a download that must be
   cancellable should run on its own thread and be dropped/joined by the caller.
+- **Config values Python reads loosely are refused at load.** `max_len` and `head_max_len` accept a
+  non-negative JSON integer or a bool (`true` is 1, `false` is 0), as Python does. A float, string,
+  `null`, list or object is refused when the engine is created, with the `TypeError` text Python
+  raises at its first prediction (`head_max_len` is met first); a negative value is refused with
+  `max_len=-5: must be a non-negative integer`, since Python slices from the end for it. Python
+  also tolerates a fractional `head_max_len` below about 4.0; that is refused here too.
+- **Lone surrogate escapes in config JSON are refused.** `"\ud800"` loads in Python and is an error
+  here, because a Rust `String` cannot hold a lone surrogate.
+- **JSON nesting is cut off at 1000 levels.** Python's limit depends on the interpreter's
+  recursion limit.
+- **A `temperature` list shorter than three** loads and fails with `IndexError: list index out of
+  range` for the first question whose type index it lacks, as Python does; entries past the third
+  are ignored.
 
 ---
 

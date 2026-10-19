@@ -83,7 +83,10 @@ fn max_len_and_head_max_len_follow_python() {
         assert_eq!(operand("list"), error_of(&format!(r#"{{"{key}": []}}"#)));
         assert_eq!(operand("dict"), error_of(&format!(r#"{{"{key}": {{}}}}"#)));
         assert_eq!(slice, error_of(&format!(r#"{{"{key}": 512.0}}"#)));
-        assert!(error_of(&format!(r#"{{"{key}": -5}}"#)).contains("negative"));
+        assert_eq!(
+            format!("{key}=-5: must be a non-negative integer"),
+            error_of(&format!(r#"{{"{key}": -5}}"#))
+        );
     }
 }
 

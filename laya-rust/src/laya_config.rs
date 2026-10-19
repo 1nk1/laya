@@ -291,47 +291,36 @@ fn check_option_layout(root: &PyJson) -> Result<()> {
     }
 }
 
-/// What `cfg.get(key, default)` gave for `max_len` / `head_max_len`, as Python's arithmetic and
-/// slicing read it.
-enum Length {
-    Value(usize),
-    /// A float, string, `null`, list or object: Python raises `TypeError` the first time it builds
-    /// a sequence. The Python type name.
-    BadType(&'static str),
-}
-
-/// The checks behind [`Length`]:
-/// - missing: the default; `true`/`false` are the ints 1/0; `-0` is 0; an integer beyond the
-///   platform's range is as good as unbounded here;
-/// - a negative integer slices from the end in Python, which has no counterpart in this port: an
-///   error naming that (a float `head_max_len` below 4.0 also survives in Python; that corner is
-///   not ported).
-fn config_length(root: &PyJson, key: &str, default: usize) -> Result<Length> {
+/// `cfg.get(key, default)` for `max_len` / `head_max_len`, as Python's arithmetic and slicing
+/// read it. Accepted: a non-negative integer, a bool (`true` is 1, `false` is 0), `-0` (0), and
+/// an integer beyond the platform's range (as good as unbounded). Refused at load:
+/// - a float, string, `null`, list or object: Python's `TypeError`, which it raises the first
+///   time a prediction builds a sequence;
+/// - a negative integer: Python slices from the end for it, which this port does not emulate.
+fn config_length(root: &PyJson, key: &str, default: usize) -> Result<usize> {
+    let refused = |kind: &str| LayaError::InvalidConfig(length_type_error(kind));
     match root.get(key) {
-        None => Ok(Length::Value(default)),
-        Some(PyJson::Bool(b)) => Ok(Length::Value(usize::from(*b))),
+        None => Ok(default),
+        Some(PyJson::Bool(b)) => Ok(usize::from(*b)),
         Some(PyJson::Int(literal)) => {
             let digits = literal.trim_start_matches('-');
             if digits.bytes().all(|b| b == b'0') {
-                Ok(Length::Value(0))
+                Ok(0)
             } else if literal.starts_with('-') {
                 Err(LayaError::InvalidConfig(format!(
-                    "{key}={literal} is negative: Python slices from the end for it, which this \
-                     port does not support"
+                    "{key}={literal}: must be a non-negative integer"
                 )))
             } else {
-                Ok(Length::Value(
-                    digits
-                        .parse::<u64>()
-                        .map_or(usize::MAX, |v| usize::try_from(v).unwrap_or(usize::MAX)),
-                ))
+                Ok(digits
+                    .parse::<u64>()
+                    .map_or(usize::MAX, |v| usize::try_from(v).unwrap_or(usize::MAX)))
             }
         }
-        Some(PyJson::Float(_)) => Ok(Length::BadType("float")),
-        Some(PyJson::Str(_)) => Ok(Length::BadType("str")),
-        Some(PyJson::Null) => Ok(Length::BadType("NoneType")),
-        Some(PyJson::Array(_)) => Ok(Length::BadType("list")),
-        Some(PyJson::Object(_)) => Ok(Length::BadType("dict")),
+        Some(PyJson::Float(_)) => Err(refused("float")),
+        Some(PyJson::Str(_)) => Err(refused("str")),
+        Some(PyJson::Null) => Err(refused("NoneType")),
+        Some(PyJson::Array(_)) => Err(refused("list")),
+        Some(PyJson::Object(_)) => Err(refused("dict")),
     }
 }
 
@@ -344,74 +333,14 @@ fn length_type_error(kind: &str) -> String {
     }
 }
 
-/// A `max_len` / `head_max_len` that makes Python raise `TypeError` at the first prediction,
-/// while loading the checkpoint succeeds. The engine keeps it and returns it from `predict` /
-/// `predict_long`.
-#[derive(Debug, Clone)]
-pub(crate) struct DeferredLengthError {
-    /// Raised by a prediction with questions: `build_head` meets `head_max_len` first, then
-    /// `max_len`.
-    pub(crate) with_questions: String,
-    /// Raised by `predict_long` without questions, where `window_budget` evaluates
-    /// `max_len - head_max_len - 8` first.
-    pub(crate) no_questions: String,
-    /// Set when `predict_long` without questions gets past that expression because only floats
-    /// are wrong: Python then scans against this float window (`max(64, max_len - head_max_len -
-    /// 8)`), which a state at most that long fits in one pass, and anything longer fails with the
-    /// slice `TypeError` in `with_questions`.
-    pub(crate) no_questions_window: Option<f64>,
-}
-
 /// What Python only discovers when a prediction needs it, kept by the engine (not part of the
 /// public [`LayaConfig`]).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Deferred {
-    /// A `max_len` / `head_max_len` of the wrong type.
-    pub(crate) length: Option<DeferredLengthError>,
     /// The real length of a `temperature` list shorter than three: Python indexes
     /// `self.temperature[qtype]` for every question, so a question type at or past it raises
     /// `IndexError`, however its bucket resolves.
     pub(crate) short_temperature: Option<usize>,
-}
-
-fn deferred_length_error(
-    root: &PyJson,
-    max: &Length,
-    head: &Length,
-) -> Option<DeferredLengthError> {
-    let kind = |l: &Length| -> &'static str {
-        match l {
-            Length::Value(_) => "int",
-            Length::BadType(k) => k,
-        }
-    };
-    let with_questions = match (head, max) {
-        (Length::BadType(k), _) | (_, Length::BadType(k)) => length_type_error(k),
-        _ => return None,
-    };
-    // Without questions `window_budget` starts with `max_len - head_max_len`; a float on its own
-    // survives that, anything else does not.
-    let (left, right) = (kind(max), kind(head));
-    let non_numeric = |k: &str| !matches!(k, "int" | "float");
-    let float_only = !(non_numeric(left) || non_numeric(right));
-    let no_questions = if float_only {
-        with_questions.clone()
-    } else {
-        format!("TypeError: unsupported operand type(s) for -: '{left}' and '{right}'")
-    };
-    let as_f64 = |key: &str, default: f64| match root.get(key) {
-        Some(PyJson::Float(f)) => *f,
-        Some(PyJson::Bool(b)) => f64::from(u8::from(*b)),
-        Some(PyJson::Int(literal)) => literal.parse().unwrap_or(default),
-        _ => default,
-    };
-    let no_questions_window = float_only
-        .then(|| (as_f64("max_len", 512.0) - as_f64("head_max_len", 192.0) - 8.0).max(64.0));
-    Some(DeferredLengthError {
-        with_questions,
-        no_questions,
-        no_questions_window,
-    })
 }
 
 /// Python opens the file in text mode, which turns `\r\n` and a lone `\r` into `\n` before
@@ -431,13 +360,12 @@ impl LayaConfig {
         Self::parse(&python_text_mode(std::fs::read_to_string(path)?))
     }
 
-    /// [`Self::load`] for the engine: a `max_len` / `head_max_len` of the wrong type is returned
-    /// instead of refused, because Python only fails at the first prediction.
+    /// [`Self::load`] for the engine, which also keeps what Python only discovers at prediction
+    /// time.
     #[track_caller]
     pub(crate) fn load_deferred(path: impl AsRef<Path>) -> Result<(Self, Deferred)> {
         Self::parse_with(
             &python_text_mode(std::fs::read_to_string(path)?),
-            true,
             std::panic::Location::caller(),
         )
     }
@@ -445,14 +373,10 @@ impl LayaConfig {
     /// Parse a config from JSON text.
     #[track_caller]
     pub fn parse(json: &str) -> Result<Self> {
-        Self::parse_with(json, false, std::panic::Location::caller()).map(|(config, _)| config)
+        Self::parse_with(json, std::panic::Location::caller()).map(|(config, _)| config)
     }
 
-    fn parse_with(
-        json: &str,
-        defer_length_types: bool,
-        at: &std::panic::Location<'_>,
-    ) -> Result<(Self, Deferred)> {
+    fn parse_with(json: &str, at: &std::panic::Location<'_>) -> Result<(Self, Deferred)> {
         let root = PyJson::parse(json)?;
         check_option_layout(&root)?;
         // Python builds `[clamp_temperature(t) for t in temperature]` and then the by-options dict,
@@ -503,36 +427,16 @@ impl LayaConfig {
             }
         }
 
+        // Refused at load: Python's `build_head` meets `head_max_len` before `max_len`.
+        let head_max_len = config_length(&root, "head_max_len", 192)?;
+        let max_len = config_length(&root, "max_len", 512)?;
+
         if let Some(warning) = temperature_warning(&options, &elements) {
             emit_warnings(&[warning], at);
         }
 
-        // Python reads these with `cfg.get("max_len", 512)` and only fails when a prediction uses
-        // them. `parse` refuses a value of the wrong type at load, after the load-time warning
-        // above; the engine defers it to its first prediction, as Python does.
-        let max = config_length(&root, "max_len", 512)?;
-        let head = config_length(&root, "head_max_len", 192)?;
         let deferred = Deferred {
-            length: deferred_length_error(&root, &max, &head),
             short_temperature: (elements.len() < 3).then_some(elements.len()),
-        };
-        if !defer_length_types && deferred.length.is_some() {
-            let kind_of = |l: &Length| match l {
-                Length::BadType(k) => Some(*k),
-                Length::Value(_) => None,
-            };
-            let kind = kind_of(&max)
-                .or_else(|| kind_of(&head))
-                .unwrap_or("NoneType");
-            return Err(LayaError::InvalidConfig(length_type_error(kind)));
-        }
-        let max_len = match max {
-            Length::Value(v) => v,
-            Length::BadType(_) => 512,
-        };
-        let head_max_len = match head {
-            Length::Value(v) => v,
-            Length::BadType(_) => 192,
         };
 
         Ok((
@@ -555,93 +459,59 @@ impl LayaConfig {
 mod tests {
     use super::LayaConfig;
 
-    // Messages from Python 3.12: `common.build_sequence` / `window_budget` with these two values,
-    // which is what the first prediction (with and without questions) hits.
+    // Python 3.12: the `TypeError` the first prediction with questions raises (`build_head` meets
+    // `head_max_len` first, then `max_len`); a wrongly typed or negative length is refused at load.
     #[test]
-    fn engine_load_defers_a_wrongly_typed_length_with_pythons_messages() {
-        let operand = |l: &str, r: &str| {
-            format!("TypeError: unsupported operand type(s) for -: '{l}' and '{r}'")
+    fn a_wrongly_typed_or_negative_length_is_refused_at_load_with_pythons_text() {
+        let operand = |kind: &str| {
+            format!("TypeError: unsupported operand type(s) for -: '{kind}' and 'int'")
         };
         let slice = "TypeError: slice indices must be integers or None or have an __index__ method";
-        let cases: [(&str, String, String); 8] = [
-            (
-                r#"{"max_len": "512"}"#,
-                operand("str", "int"),
-                operand("str", "int"),
-            ),
-            (
-                r#"{"max_len": null}"#,
-                operand("NoneType", "int"),
-                operand("NoneType", "int"),
-            ),
-            (
-                r#"{"head_max_len": "x"}"#,
-                operand("str", "int"),
-                operand("int", "str"),
-            ),
-            (
-                r#"{"head_max_len": null}"#,
-                operand("NoneType", "int"),
-                operand("int", "NoneType"),
-            ),
+        let cases: [(&str, String); 9] = [
+            (r#"{"max_len": "512"}"#, operand("str")),
+            (r#"{"max_len": null}"#, operand("NoneType")),
+            (r#"{"head_max_len": "x"}"#, operand("str")),
+            (r#"{"head_max_len": null}"#, operand("NoneType")),
+            (r#"{"max_len": 512.0}"#, slice.to_string()),
+            (r#"{"head_max_len": [1]}"#, operand("list")),
+            // both wrong: head_max_len is met first
             (
                 r#"{"max_len": "x", "head_max_len": null}"#,
-                operand("NoneType", "int"),
-                operand("str", "NoneType"),
+                operand("NoneType"),
             ),
+            (r#"{"max_len": 512.0, "head_max_len": "x"}"#, operand("str")),
             (
-                r#"{"max_len": 512.0}"#,
+                r#"{"max_len": "x", "head_max_len": 192.0}"#,
                 slice.to_string(),
-                slice.to_string(),
-            ),
-            (
-                r#"{"max_len": 512.0, "head_max_len": "x"}"#,
-                operand("str", "int"),
-                operand("float", "str"),
-            ),
-            (
-                r#"{"head_max_len": [1]}"#,
-                operand("list", "int"),
-                operand("int", "list"),
             ),
         ];
-        for (config, with_questions, no_questions) in cases {
-            // Refused by the public `parse`, loaded (with the defaults) for the engine.
-            assert!(LayaConfig::parse(config).is_err(), "{config}");
-            let (loaded, deferred) =
-                LayaConfig::parse_with(config, true, std::panic::Location::caller()).unwrap();
-            let deferred = deferred
-                .length
-                .unwrap_or_else(|| panic!("{config}: nothing deferred"));
-            assert_eq!(with_questions, deferred.with_questions, "{config}");
-            assert_eq!(no_questions, deferred.no_questions, "{config}");
-            assert_eq!(
-                (512, 192),
-                (loaded.max_len, loaded.head_max_len),
-                "{config}"
-            );
+        for (config, expected) in cases {
+            match LayaConfig::parse(config) {
+                Err(crate::error::LayaError::InvalidConfig(got)) => {
+                    assert_eq!(expected, got, "{config}");
+                }
+                other => panic!("{config}: expected InvalidConfig, got {other:?}"),
+            }
         }
-        // Only floats wrong and no questions: Python's `window_budget` passes with this window
-        // (a state of at most that many tokens is answered, a longer one hits the slice error).
-        for (config, window) in [
-            (r#"{"max_len": 512.0}"#, Some(312.0)),
-            (r#"{"head_max_len": 192.0}"#, Some(312.0)),
-            (r#"{"max_len": 300.5}"#, Some(100.5)),
-            (r#"{"max_len": 100.0, "head_max_len": 10.0}"#, Some(82.0)),
-            (r#"{"max_len": 100.0, "head_max_len": 90.0}"#, Some(64.0)),
-            (r#"{"max_len": "x"}"#, None),
-            (r#"{"max_len": 512.0, "head_max_len": "x"}"#, None),
+        for (config, expected) in [
+            (
+                r#"{"max_len": -5}"#,
+                "max_len=-5: must be a non-negative integer",
+            ),
+            (
+                r#"{"head_max_len": -1}"#,
+                "head_max_len=-1: must be a non-negative integer",
+            ),
         ] {
-            let (_, deferred) =
-                LayaConfig::parse_with(config, true, std::panic::Location::caller()).unwrap();
-            let deferred = deferred.length.unwrap();
-            assert_eq!(window, deferred.no_questions_window, "{config}");
+            match LayaConfig::parse(config) {
+                Err(crate::error::LayaError::InvalidConfig(got)) => assert_eq!(expected, got),
+                other => panic!("{config}: expected InvalidConfig, got {other:?}"),
+            }
         }
-        for config in [r#"{}"#, r#"{"max_len": 256, "head_max_len": true}"#] {
-            let (_, deferred) =
-                LayaConfig::parse_with(config, true, std::panic::Location::caller()).unwrap();
-            assert!(deferred.length.is_none(), "{config}");
-        }
+    }
+
+    #[test]
+    fn a_short_temperature_list_is_kept_for_the_engine_and_a_longer_one_is_ignored() {
         // A `temperature` list shorter than three loads; the engine fails the question types whose
         // index it lacks (checked against `_decode_answers`: choice needs 1 entry, score 2, noul
         // 3, with or without a matching `temperature_by_options` bucket). Longer lists are fine.
@@ -655,7 +525,7 @@ mod tests {
             (r#"{}"#, None),
         ] {
             let (loaded, deferred) =
-                LayaConfig::parse_with(config, true, std::panic::Location::caller()).unwrap();
+                LayaConfig::parse_with(config, std::panic::Location::caller()).unwrap();
             assert_eq!(short, deferred.short_temperature, "{config}");
             assert_eq!(3, loaded.temperature.len().min(3), "{config}");
         }
@@ -664,12 +534,6 @@ mod tests {
         assert_eq!(
             3.0,
             crate::calibration::Calibration::resolve_temperature(&longer, noul, 2)
-        );
-
-        // A negative length stays refused even for the engine.
-        assert!(
-            LayaConfig::parse_with(r#"{"max_len": -5}"#, true, std::panic::Location::caller())
-                .is_err()
         );
     }
 }
