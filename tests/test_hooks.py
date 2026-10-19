@@ -1443,7 +1443,9 @@ contexts = []
 
 def slow_start(ctx):
     time.sleep(0.01)
-    contexts.append(id(ctx))
+    # Keep the context itself, not id(ctx): once a call returns its context can be freed and
+    # a later call's context can reuse the address, so ids alone undercount on a busy machine.
+    contexts.append(ctx)
 
 
 f = make_fake()
@@ -1454,7 +1456,7 @@ for t in threads:
     t.start()
 for t in threads:
     t.join()
-check("concurrency/one independent context per call", len(set(contexts)), 5)
+check("concurrency/one independent context per call", len({id(c) for c in contexts}), 5)
 
 
 class ConcHook:
