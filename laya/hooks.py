@@ -682,6 +682,14 @@ def _seed_of(state: Any) -> str:
     return state if isinstance(state, str) else repr(state)
 
 
+def _has_semantic_description(val: Any) -> bool:
+    if val is None or val == "":
+        return False
+    if isinstance(val, str) and not val.strip():
+        return False
+    return True
+
+
 class OptionStabilityHook(BaseHook):
     """Opt-in reliability signal via metamorphic option reordering and renaming (#635).
 
@@ -822,7 +830,16 @@ class OptionStabilityHook(BaseHook):
         new_q = dict(q)
         crit = q.get("criteria")
         if isinstance(crit, dict):
-            new_q["criteria"] = {s: crit[orig] for s, orig in zip(shown, order)}
+            if relabel:
+                # If an option has no semantic description (None, empty, or whitespace),
+                # preserve the original label as the description so the model still receives
+                # the semantic text under letter renaming (#1285).
+                new_q["criteria"] = {
+                    s: (crit[orig] if _has_semantic_description(crit[orig]) else orig)
+                    for s, orig in zip(shown, order)
+                }
+            else:
+                new_q["criteria"] = {s: crit[orig] for s, orig in zip(shown, order)}
         elif isinstance(crit, (list, tuple)):
             if relabel:
                 new_q["criteria"] = {s: orig for s, orig in zip(shown, order)}

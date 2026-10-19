@@ -375,6 +375,95 @@ with _test_warnings.catch_warnings(record=True) as _warn_records:
     check_true("normalization/bogus emits warning", any("unknown option_layout" in str(w.message) for w in _warn_records))
 
 
+# 7. Issue #1285: Preserve option labels when renaming choices without descriptions
+q_dict_none = {"type": "choice", "instructions": "Action?", "criteria": {"approve": None, "reject": None}}
+vq_none_rel, back_none_rel = OptionStabilityHook._variant_question(q_dict_none, ["approve", "reject"], relabel=True)
+check("issue1285/none_desc relabel preserves labels as descriptions", vq_none_rel["criteria"], {"A": "approve", "B": "reject"})
+check("issue1285/none_desc back map", back_none_rel, {"A": "approve", "B": "reject"})
+
+vq_none_ord, back_none_ord = OptionStabilityHook._variant_question(q_dict_none, ["reject", "approve"], relabel=False)
+check("issue1285/none_desc reorder preserves original keys and values", vq_none_ord["criteria"], {"reject": None, "approve": None})
+check("issue1285/none_desc reorder back map", back_none_ord, {"reject": "reject", "approve": "approve"})
+
+q_dict_empty = {"type": "choice", "instructions": "Action?", "criteria": {"approve": "", "reject": ""}}
+vq_empty_rel, _ = OptionStabilityHook._variant_question(q_dict_empty, ["approve", "reject"], relabel=True)
+check("issue1285/empty_str relabel preserves labels as descriptions", vq_empty_rel["criteria"], {"A": "approve", "B": "reject"})
+
+q_dict_ws = {"type": "choice", "instructions": "Action?", "criteria": {"approve": "   ", "reject": "  "}}
+vq_ws_rel, _ = OptionStabilityHook._variant_question(q_dict_ws, ["approve", "reject"], relabel=True)
+check("issue1285/whitespace relabel preserves labels as descriptions", vq_ws_rel["criteria"], {"A": "approve", "B": "reject"})
+
+q_list = {"type": "choice", "instructions": "Action?", "criteria": ["approve", "reject"]}
+vq_list_rel, _ = OptionStabilityHook._variant_question(q_list, ["approve", "reject"], relabel=True)
+check("issue1285/list and dict forms produce identical rename criteria", vq_none_rel["criteria"], vq_list_rel["criteria"])
+
+q_mixed = {"type": "choice", "instructions": "Action?", "criteria": {"approve": "Confirm order", "reject": None}}
+vq_mixed_rel, _ = OptionStabilityHook._variant_question(q_mixed, ["approve", "reject"], relabel=True)
+check("issue1285/mixed keeps text description and fills missing with label", vq_mixed_rel["criteria"], {"A": "Confirm order", "B": "reject"})
+
+q_falsy = {"type": "choice", "instructions": "Action?", "criteria": {"level_0": 0, "flag": False}}
+vq_falsy_rel, _ = OptionStabilityHook._variant_question(q_falsy, ["level_0", "flag"], relabel=True)
+check("issue1285/falsy numeric and boolean descriptions preserved", vq_falsy_rel["criteria"], {"A": 0, "B": False})
+
+# End-to-end hook execution with undescribed dict criteria (#1285)
+ctx_undescribed = PredictContext(
+    states=["Please confirm my invoice"],
+    questions={"action": {"type": "choice", "instructions": "Choose action", "criteria": {"approve": None, "reject": None}}},
+)
+hook_undescribed = OptionStabilityHook(accept=0.77, escalate=0.61, seed="undescribed-test")
+hook_undescribed.on_predict_start(ctx_undescribed)
+
+# Original question criteria must remain untouched
+check("issue1285/e2e original question criteria unchanged", ctx_undescribed.questions["action"]["criteria"], {"approve": None, "reject": None})
+# Injected rename variant questions have original labels as descriptions
+rename_variants = [q for k, q in ctx_undescribed.questions.items() if k.startswith("action::rel") and list(q["criteria"].keys())[0] == "A"]
+check_true("issue1285/e2e rename variants present", len(rename_variants) > 0)
+for rv in rename_variants:
+    check("issue1285/e2e rename variant preserves option semantic text", set(rv["criteria"].values()), {"approve", "reject"})
+
+# Simulate inference response and verify back-mapping restores original labels
+sim_answers = {}
+for qk, qv in ctx_undescribed.questions.items():
+    crit = qv["criteria"]
+    # Model chooses option representing "approve"
+    chosen_key = [k for k, v in crit.items() if (v == "approve" or k == "approve")][0]
+    other_key = [k for k in crit if k != chosen_key][0]
+    sim_answers[qk] = {
+        "type": "choice",
+        "choice": chosen_key,
+        "probabilities": {chosen_key: 0.9, other_key: 0.1},
+        "confidence": 0.8,
+        "answer_confidence": 0.9,
+    }
+
+ctx_undescribed.results = [{"model": "fake", "answers": sim_answers, "usage": {}}]
+hook_undescribed.on_predict_end(ctx_undescribed)
+
+ans_e2e = ctx_undescribed.results[0]["answers"]["action"]
+check("issue1285/e2e decoded choice is approve", ans_e2e["choice"], "approve")
+check("issue1285/e2e distinct choices is approve", ans_e2e["reliability"]["distinct_choices"], ["approve"])
+check("issue1285/e2e stability is 1.0", ans_e2e["reliability"]["stability"], 1.0)
+check("issue1285/e2e decision is ACCEPT", ans_e2e["reliability"]["decision"], "ACCEPT")
+
+# Parity check: list criteria vs dict-with-None criteria generate matching variants
+ctx_list_parity = PredictContext(
+    states=["Please confirm my invoice"],
+    questions={"action": {"type": "choice", "instructions": "Choose action", "criteria": ["approve", "reject"]}},
+)
+hook_list_parity = OptionStabilityHook(accept=0.77, escalate=0.61, seed="undescribed-test")
+hook_list_parity.on_predict_start(ctx_list_parity)
+check("issue1285/parity injected variant count matches", len(ctx_undescribed.questions), len(ctx_list_parity.questions))
+for (k1, q1), (k2, q2) in zip(sorted(ctx_undescribed.questions.items()), sorted(ctx_list_parity.questions.items())):
+    if k1.startswith("action::rel"):
+        c1, c2 = q1["criteria"], q2["criteria"]
+        if isinstance(c1, dict) and isinstance(c2, dict):
+            check("issue1285/parity rename criteria match %s" % k1, c1, c2)
+        else:
+            # Reorder probe: dict keys match list entries exactly
+            check("issue1285/parity reorder ordering matches %s" % k1, list(c1.keys()), list(c2))
+hook_list_parity.on_error(ctx_list_parity)
+
+
 # --------------------------------------------------------------- report
 print("\n%d passed, %d failed" % (len(PASS), len(FAIL)))
 for f in FAIL:
