@@ -106,6 +106,61 @@ internal static class PythonStr
         return cased;
     }
 
+    private static bool IsCased(int cp)
+    {
+        if (cp is >= 0xD800 and <= 0xDFFF) return false;
+        var rune = new Rune(cp);
+        return IsUpper(rune) || IsLower(rune) || Rune.GetUnicodeCategory(rune) == UnicodeCategory.TitlecaseLetter;
+    }
+
+    // Case_Ignorable: Mn, Me, Cf, Lm, Sk, and the Word_Break MidLetter / MidNumLet / Single_Quote characters.
+    private static bool IsCaseIgnorable(int cp)
+    {
+        if (cp is 0x27 or 0x2E or 0x3A or 0xB7 or 0x387 or 0x55F or 0x5F4 or 0x2018 or 0x2019 or 0x2024 or 0x2027
+            or 0xFE13 or 0xFE52 or 0xFE55 or 0xFF07 or 0xFF0E or 0xFF1A) return true;
+        if (cp is >= 0xD800 and <= 0xDFFF) return false;
+        return Rune.GetUnicodeCategory(new Rune(cp)) is UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark
+            or UnicodeCategory.Format or UnicodeCategory.ModifierLetter or UnicodeCategory.ModifierSymbol;
+    }
+
+    /// <summary>
+    /// <c>s.lower()</c>: the simple lowercase of every character, U+0130 as <c>i</c> + U+0307, and a capital sigma as
+    /// the final form U+03C2 when a cased letter precedes it and none follows (case-ignorable characters skipped).
+    /// </summary>
+    internal static string Lower(string s)
+    {
+        var points = new List<int>(s.Length);
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (char.IsHighSurrogate(s[i]) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1]))
+            {
+                points.Add(char.ConvertToUtf32(s[i], s[i + 1]));
+                i++;
+            }
+            else points.Add(s[i]);
+        }
+        var sb = new StringBuilder(s.Length);
+        for (var i = 0; i < points.Count; i++)
+        {
+            var cp = points[i];
+            if (cp is >= 0xD800 and <= 0xDFFF) sb.Append((char)cp);
+            else if (cp == 0x130) sb.Append("i\u0307");
+            else if (cp == 0x3A3) sb.Append(FinalSigma(points, i) ? '\u03C2' : '\u03C3');
+            else sb.Append(Rune.ToLowerInvariant(new Rune(cp)).ToString());
+        }
+        return sb.ToString();
+    }
+
+    private static bool FinalSigma(List<int> points, int index)
+    {
+        var j = index - 1;
+        while (j >= 0 && IsCaseIgnorable(points[j])) j--;
+        if (j < 0 || !IsCased(points[j])) return false;
+        j = index + 1;
+        while (j < points.Count && IsCaseIgnorable(points[j])) j++;
+        return j == points.Count || !IsCased(points[j]);
+    }
+
     /// <summary><c>s.strip()</c>.</summary>
     internal static string Strip(string s)
     {

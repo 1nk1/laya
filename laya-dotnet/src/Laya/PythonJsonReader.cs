@@ -24,7 +24,8 @@ internal static class PythonJsonReader
 {
     // Python 3.11+ refuses to turn more digits than this into an int (sys.int_info.default_max_str_digits).
     private const int MaxIntDigits = 4300;
-    private const int MaxDepth = 1000;
+    // The nesting at which CPython 3.12's C scanner raises RecursionError (measured: 2997 levels load).
+    internal const int MaxDepth = 2997;
 
     /// <summary>
     /// Read a JSON file the way Python's <c>json.load(open(path))</c> does. The reference opens these files
@@ -35,14 +36,17 @@ internal static class PythonJsonReader
     /// </summary>
     internal static string ReadAllText(string path)
     {
-        try { return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(File.ReadAllBytes(path)); }
+        string text;
+        try { text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(File.ReadAllBytes(path)); }
         catch (DecoderFallbackException e) { throw new JsonException($"{path} is not valid UTF-8: {e.Message}", e); }
+        // Text mode (universal newlines): "\r\n" and a lone "\r" read as "\n", which is what json.load sees and counts lines by.
+        return text.Replace("\r\n", "\n").Replace('\r', '\n');
     }
 
     internal static object? Parse(string text)
     {
-        if (text.StartsWith('\uFEFF')) throw new JsonException("Unexpected UTF-8 BOM (decode using utf-8-sig): char 0");
         var p = new State(text);
+        if (text.StartsWith('\uFEFF')) throw p.Error("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0);
         p.SkipWhitespace();
         var value = p.Value(0);
         p.SkipWhitespace();
@@ -54,14 +58,41 @@ internal static class PythonJsonReader
     /// Parse, then re-emit as a <see cref="JsonDocument"/> for code that reads through that API. NaN and
     /// the infinities, which JSON text cannot hold, become <c>null</c>.
     /// </summary>
-    internal static JsonDocument ParseDocument(string text)
+    internal static JsonDocument ParseDocument(string text) => ParseDocument(text, out _);
+
+    /// <summary>
+    /// <see cref="ParseDocument(string)"/> that also hands back the Python-typed value tree, so a caller can tell
+    /// when a value it reads was altered by the re-emission (NaN and infinities become <c>null</c>, a lone
+    /// surrogate becomes U+FFFD). Nesting up to <see cref="MaxDepth"/> levels, which Python loads, is kept.
+    /// </summary>
+    internal static JsonDocument ParseDocument(string text, out object? tree)
     {
-        var value = Parse(text);
+        tree = Parse(text);
         using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream))
-            Write(writer, value);
-        return JsonDocument.Parse(stream.ToArray());
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { MaxDepth = MaxDepth + 8 }))
+            Write(writer, tree);
+        return JsonDocument.Parse(stream.ToArray(), new JsonDocumentOptions { MaxDepth = MaxDepth + 8 });
     }
+
+    private static bool HasLoneSurrogate(string s)
+    {
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (char.IsHighSurrogate(s[i]) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1])) { i++; continue; }
+            if (char.IsSurrogate(s[i])) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Whether re-emitting <paramref name="value"/> as JSON text changes what a reader of it sees.</summary>
+    internal static bool IsAlteredByReEmission(object? value) => value switch
+    {
+        double d => !double.IsFinite(d),
+        string s => HasLoneSurrogate(s),
+        List<object?> list => list.Any(IsAlteredByReEmission),
+        IEnumerable<KeyValuePair<string, object?>> map => map.Any(kv => IsAlteredByReEmission(kv.Key) || IsAlteredByReEmission(kv.Value)),
+        _ => false,
+    };
 
     private static void Write(Utf8JsonWriter w, object? value)
     {
@@ -98,7 +129,22 @@ internal static class PythonJsonReader
     {
         internal int Pos;
 
-        internal JsonException Error(string message) => new($"{message}: char {Pos}");
+        // json.decoder.JSONDecodeError: "<msg>: line L column C (char P)", the position counted in code points.
+        internal JsonException Error(string message, int at = -1)
+        {
+            if (at < 0) at = Pos;
+            var line = 1;
+            var lastNewline = -1;
+            var codePoints = 0;
+            for (var i = 0; i < at && i < text.Length; i++)
+            {
+                if (char.IsLowSurrogate(text[i]) && i > 0 && char.IsHighSurrogate(text[i - 1])) continue;
+                if (text[i] == '\n') { line++; lastNewline = codePoints; }
+                codePoints++;
+            }
+            var column = lastNewline < 0 ? codePoints + 1 : codePoints - lastNewline;
+            return new JsonException($"{message}: line {line} column {column} (char {codePoints})");
+        }
 
         internal void SkipWhitespace()
         {
@@ -107,13 +153,18 @@ internal static class PythonJsonReader
 
         internal object? Value(int depth)
         {
-            if (depth > MaxDepth) throw Error("maximum recursion depth exceeded");
             if (Pos >= text.Length) throw Error("Expecting value");
             switch (text[Pos])
             {
                 case '"': Pos++; return String();
-                case '{': Pos++; return Object(depth + 1);
-                case '[': Pos++; return Array(depth + 1);
+                case '{':
+                    if (depth >= MaxDepth) throw new JsonException("maximum recursion depth exceeded while decoding a JSON object from a unicode string");
+                    Pos++;
+                    return Object(depth + 1);
+                case '[':
+                    if (depth >= MaxDepth) throw new JsonException("maximum recursion depth exceeded while decoding a JSON array from a unicode string");
+                    Pos++;
+                    return Array(depth + 1);
                 case 'n' when Literal("null"): return null;
                 case 't' when Literal("true"): return true;
                 case 'f' when Literal("false"): return false;
@@ -169,7 +220,7 @@ internal static class PythonJsonReader
                 return double.Parse(literal, NumberStyles.Float, CultureInfo.InvariantCulture);   // correctly rounded; overflow is infinity
             var digits = integerEnd - start - (text[start] == '-' ? 1 : 0);
             if (digits > MaxIntDigits)
-                throw new JsonException($"Exceeds the limit ({MaxIntDigits} digits) for integer string conversion: value has {digits} digits");
+                throw new JsonException($"Exceeds the limit ({MaxIntDigits} digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit");
             return long.TryParse(literal, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var l)
                 ? (object)l   // not a bare `l`: the conditional would widen it to BigInteger
                 : BigInteger.Parse(literal, CultureInfo.InvariantCulture);
@@ -178,15 +229,16 @@ internal static class PythonJsonReader
         // py_scanstring with strict=True: control characters below U+0020 are errors, lone surrogates stay.
         private string String()
         {
+            var start = Pos - 1;   // the opening quote: where "Unterminated string" is reported
             var sb = new StringBuilder();
             while (true)
             {
-                if (Pos >= text.Length) throw Error("Unterminated string starting at");
+                if (Pos >= text.Length) throw Error("Unterminated string starting at", start);
                 var c = text[Pos++];
                 if (c == '"') return sb.ToString();
-                if (c < ' ') throw Error("Invalid control character at");
+                if (c < ' ') throw Error("Invalid control character at", Pos - 1);
                 if (c != '\\') { sb.Append(c); continue; }
-                if (Pos >= text.Length) throw Error("Unterminated string starting at");
+                if (Pos >= text.Length) throw Error("Unterminated string starting at", start);
                 var e = text[Pos++];
                 switch (e)
                 {
@@ -199,20 +251,20 @@ internal static class PythonJsonReader
                     case 'r': sb.Append('\r'); break;
                     case 't': sb.Append('\t'); break;
                     case 'u': sb.Append(Hex4()); break;
-                    default: throw Error("Invalid \\escape");
+                    default: throw Error("Invalid \\escape", Pos - 2);
                 }
             }
         }
 
         private char Hex4()
         {
-            if (Pos + 4 > text.Length) throw Error("Invalid \\uXXXX escape");
+            if (Pos + 4 > text.Length) throw Error("Invalid \\uXXXX escape", Pos - 1);
             var value = 0;
             for (var k = 0; k < 4; k++)
             {
                 var h = text[Pos + k];
                 var digit = h is >= '0' and <= '9' ? h - '0' : h is >= 'a' and <= 'f' ? h - 'a' + 10 : h is >= 'A' and <= 'F' ? h - 'A' + 10 : -1;
-                if (digit < 0) throw Error("Invalid \\uXXXX escape");
+                if (digit < 0) throw Error("Invalid \\uXXXX escape", Pos - 1);
                 value = value * 16 + digit;
             }
             Pos += 4;

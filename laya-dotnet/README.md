@@ -668,7 +668,7 @@ The contents of `rl_agent_config.json`. Missing keys fall back to the same defau
 | `string? Encoder` | The encoder the checkpoint was trained on. For information only. |
 | `int MaxLen` | Total sequence budget, in tokens (1024 on multilingual). |
 | `int HeadMaxLen` | Budget for instructions plus all option fragments (256 on multilingual). |
-| `IReadOnlyList<double> Temperature` | Per-question-type temperature `[choice, score, noul]`, clamped. Always 3 entries. |
+| `IReadOnlyList<double> Temperature` | Per-question-type temperature `[choice, score, noul]`, clamped; the entries of the config as written (a list shorter than three fails at the prediction that needs the missing one, as Python does). |
 | `IReadOnlyDictionary<string, double> TemperatureByOptions` | Per-bucket temperature, clamped. Keys look like `choice:3-5` (buckets `2`, `3-5`, `6-10`, `11+`). |
 | `IReadOnlyList<double> TemperatureRaw` / `TemperatureByOptionsRaw` | What the checkpoint shipped, before clamping, as numbers (a value that is not a number reads `NaN`). |
 | `IReadOnlyList<object?> TemperatureRawValues` / `IReadOnlyDictionary<string, object?> TemperatureByOptionsRawValues` | The same entries as the JSON held them (`long`, `double`, `string`, `bool`, `null`, list). |

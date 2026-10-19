@@ -63,6 +63,10 @@ public static class Calibration
     public static double ResolveTemperature(LayaConfig config, QuestionType type, int optionCount)
     {
         ArgumentNullException.ThrowIfNull(config);
+        // `self.temperature_by_options.get(bucket, self.temperature[qt])` evaluates the default first, so a
+        // list too short for the question's type fails even when the bucket is present (onnx_agent.py:727).
+        if ((int)type >= config.Temperature.Count)
+            throw new InvalidOperationException("IndexError: list index out of range");
         return config.TemperatureByOptions.TryGetValue(TempBucket(type, optionCount), out var t)
             ? t
             : config.Temperature[(int)type];

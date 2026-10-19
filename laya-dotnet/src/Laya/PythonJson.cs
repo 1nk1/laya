@@ -120,7 +120,7 @@ public static class PythonJson
         v is IDictionary or IEnumerable<KeyValuePair<string, object?>>;
 
     private static bool IsListLike(object? v) =>
-        v is IEnumerable and not string && !IsDictLike(v);
+        v is IList or System.Runtime.CompilerServices.ITuple && !IsDictLike(v);
 
     /// <summary>
     /// Whether <paramref name="value"/> is the .NET analogue of Python's <c>isinstance(state,
@@ -198,8 +198,14 @@ public static class PythonJson
                 WriteGenericDict(sb, dict, escapeNonAscii, fallbackToStr, seen);
                 break;
 
-            case IEnumerable seq:
+            // Only a list or tuple is a JSON array. A set, a generator and the like are not serializable in Python
+            // (TypeError), so they fall through to the default branch below.
+            case IList seq:
                 WriteArray(sb, seq, escapeNonAscii, fallbackToStr, seen);
+                break;
+
+            case System.Runtime.CompilerServices.ITuple tuple:
+                WriteArray(sb, Enumerable.Range(0, tuple.Length).Select(i => tuple[i]).ToList(), escapeNonAscii, fallbackToStr, seen);
                 break;
 
             default:

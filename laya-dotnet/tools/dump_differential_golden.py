@@ -396,6 +396,72 @@ def email_body():
     return keep(body)
 
 
+# ------------------------------------------------------------------------------ lower() cases
+# Characters whose lower-casing is context-dependent or one-to-many: Greek capital sigma (final
+# sigma), dotted capital I, combining marks and apostrophes (case-ignorable), the Kelvin and
+# Angstrom signs, sharp s, a titlecase digraph, plus plain letters and separators.
+LOWER_ALPHABET = ["\u03a3", "\u03c3", "\u03c2", "\u0391", "\u03b1", "A", "a", "\u0130", "\u212a", "\u212b",
+                  "\u1e9e", "\u00df", "\u01c5", "\u0301", "\u0308", "'", ".", " ", "-", "1", "\u00b7",
+                  "\u2019", "\u0345", "\u200d", "\n", "\u03a9", "\u03bf"]
+
+
+def build_lower(count=600):
+    out = []
+    for text in ["\u03a3", "\u0391\u03a3", "\u0391\u03a3 \u0391", "\u039f\u0394\u039f\u03a3", "\u03a3\u0391",
+                 "\u0391\u0301\u03a3", "\u0391'\u03a3", "\u0391.\u03a3", "\u0391\u03a3'", "\u0391\u03a3'\u0391",
+                 "\u0391 \u03a3", "1\u03a3", "\u0130", "\u212a", "I\u0307", "\u1e9e"]:
+        out.append({"text": text, "lower": text.lower()})
+    while len(out) < count:
+        text = "".join(pick(LOWER_ALPHABET) for _ in range(rng.randint(1, 12)))
+        out.append({"text": text, "lower": text.lower()})
+    return out
+
+
+# ------------------------------------------------------------------------------ JSON error cases
+JSON_BASES = [
+    '{"a": 1, "b": [true, false, null], "c": {"d": "e"}}',
+    '[1, 2.5, -3e2, "x\\ny", {"k": []}]',
+    '{\n  "name": "caf\u00e9",\n  "values": [1, 2, 3],\n  "nested": {"x": NaN, "y": -Infinity}\n}',
+    '{"s": "tab\\there", "t": "\u00e9\u4e2d", "n": 12345678901234567890}',
+    '"just a string"',
+    '[[[1], [2]], [[3], [4]]]',
+    '{"\u00e9": "\u4e2d", "k": 0.5}',
+]
+JSON_INSERTS = ["{", "}", "[", "]", ",", ":", '"', chr(92), " ", "\n", "\t", "x", "0", "-", ".", "e", "+", "N", "I",
+                "\u00e9", "\u4e2d", "'", "nul", "tru", "u"]
+
+
+def build_json_cases(count=1500):
+    texts = [
+        "", "  ", "{", '{"a"', '{"a":', "[1,]", "[,1]", "1 2", "{} x", "\ufeff{}", "-", "--1", "01", "[01]",
+        "NaN1", "Infinit", '"abc', '"ab' + chr(92) + 'x"', '"ab' + chr(92) + 'u12"', '"a\nb"', "1" * 4300,
+        "-" + "1" * 4300, "[" + "1" * 4301 + "]", "-" + "1" * 4301, "\n\n  x", '{"a":\n  [1,\n  2 3]}',
+    ]
+    texts += JSON_BASES
+    while len(texts) < count:
+        base = pick(JSON_BASES)
+        kind = rng.randrange(4)
+        i = rng.randrange(len(base) + 1)
+        if kind == 0:
+            text = base[:i] + base[i + 1:]
+        elif kind == 1:
+            text = base[:i] + pick(JSON_INSERTS) + base[i:]
+        elif kind == 2:
+            text = base[:i]
+        else:
+            text = base[:i] + pick(JSON_INSERTS) + base[i + 1:]
+        texts.append(text)
+    out = []
+    for text in texts:
+        try:
+            json.loads(text)
+            error = None
+        except ValueError as e:  # JSONDecodeError and the integer digit limit are both ValueError
+            error = str(e)
+        out.append({"text": text, "error": error})
+    return out
+
+
 # ------------------------------------------------------------------------------ build
 def decision(router, **kwargs):
     d = router.route(**kwargs)
@@ -447,7 +513,8 @@ def main():
                              "result": email_state(subject, body, sender, clean_flag, **extra)})
 
     out = {"seed": SEED, "email_budgets": EMAIL_BUDGETS, "lang": langs, "route": routes,
-           "email_clean": clean, "email_state": email_states}
+           "email_clean": clean, "email_state": email_states, "lower": build_lower(),
+           "json_errors": build_json_cases()}
     text_out = json.dumps(out, ensure_ascii=False, allow_nan=False, separators=(",", ":")) + "\n"
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:

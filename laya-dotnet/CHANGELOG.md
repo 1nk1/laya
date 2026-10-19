@@ -54,6 +54,15 @@ goldens: 0.4.12).
 - `rl_agent_config.json` and `tokenizer_config.json` are read as strict UTF-8 and a BOM is rejected, as
   Python's `json.load(open(path))` does on a UTF-8 locale (it opens them without an `encoding`, so on a default
   Windows install it would use the ANSI code page; the two agree on ASCII files).
+- Config and detection follow Python's loader for the cases the review found: JSON errors carry Python's exact text
+  (`Expecting value: line L column C (char P)`, the integer-digit limit text), nesting up to CPython's limit loads,
+  config files are read in text mode so CRLF and a lone CR count as one newline; `temperature` is iterated as Python
+  does (a string yields its characters, a dict its keys, a number or null raises `TypeError`), `temperature_by_options`
+  must be a mapping (`AttributeError`), `option_layout` other than `sequential` is refused, a `temperature` list shorter
+  than three fails at the first prediction that needs the missing entry (`IndexError`), and a wrong-typed `max_len` /
+  `head_max_len` loads and fails at the first prediction with Python's `TypeError`. `str.lower()` is exact (final sigma,
+  U+0130), only lists and tuples are walked for text (a set holds none and is not JSON serializable), and any
+  `IReadOnlyDictionary` is walked as a mapping.
 - Case-insensitive email matching also treats the long s with `s` and the Kelvin sign with `k`, as `re.I` does.
 - Email patterns count and bound code points, not UTF-16 units, so characters outside the BMP next to a
   keyword or inside a `.{0,300}` window behave as in Python.

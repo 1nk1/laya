@@ -180,10 +180,46 @@ public sealed class DifferentialParityTests
         }
     }
 
+    // str.lower(): final sigma, dotted capital I, Kelvin, sharp S, titlecase letters.
+    private static void CheckLower(JsonElement cases, List<Mismatch> output)
+    {
+        foreach (var c in cases.EnumerateArray())
+        {
+            var text = c.GetProperty("text").GetString()!;
+            var expected = c.GetProperty("lower").GetString()!;
+            var got = LanguageDetection.PythonLower(text);
+            if (got != expected) output.Add(new("lower", Show(text), Show(expected), Show(got)));
+        }
+    }
+
+    // json.loads against the reader that backs the config parsers: the exact ValueError / JSONDecodeError text, or none.
+    private static void CheckJsonErrors(JsonElement cases, List<Mismatch> output)
+    {
+        foreach (var c in cases.EnumerateArray())
+        {
+            var text = c.GetProperty("text").GetString()!;
+            var expected = Str(c.GetProperty("error"));
+            string? got = null;
+            try { PythonJsonReader.Parse(text); }
+            catch (JsonException e) { got = e.Message; }
+            if (got != expected)
+                output.Add(new("json error (reader)", Show(text), expected is null ? "valid" : Show(expected), got is null ? "valid" : Show(got)));
+            if (expected is not null)
+            {
+                // The config parser reports the same text for a document that is not JSON.
+                string? viaConfig = null;
+                try { LayaConfig.Parse(text); }
+                catch (JsonException e) { viaConfig = e.Message; }
+                catch (Exception) { }
+                if (viaConfig != expected)
+                    output.Add(new("json error (LayaConfig.Parse)", Show(text), Show(expected), viaConfig is null ? "no JsonException" : Show(viaConfig)));
+            }
+        }
+    }
+
     [Fact]
     public void GeneratedCorpusMatchesPython()
     {
-        if (!RoutingGoldenData.Available) return;
         using var doc = RoutingGoldenData.Load("differential_probe.json");
         var root = doc.RootElement;
         var lang = root.GetProperty("lang");
@@ -197,9 +233,13 @@ public sealed class DifferentialParityTests
         CheckEmailClean(budgets, root.GetProperty("email_clean"), mismatches);
         var afterClean = mismatches.Count;
         CheckEmailState(root.GetProperty("email_state"), mismatches);
+        var afterState = mismatches.Count;
+        CheckLower(root.GetProperty("lower"), mismatches);
+        var afterLower = mismatches.Count;
+        CheckJsonErrors(root.GetProperty("json_errors"), mismatches);
 
         var summary = $"lang {afterLang}, route {afterRoutes - afterLang}, email_clean {afterClean - afterRoutes}, "
-            + $"email_state {mismatches.Count - afterClean}";
+            + $"email_state {afterState - afterClean}, lower {afterLower - afterState}, json_errors {mismatches.Count - afterLower}";
         Assert.True(mismatches.Count == 0,
             $"{mismatches.Count} mismatches against Python ({summary}); first {Math.Min(20, mismatches.Count)}:"
             + string.Concat(mismatches.Take(20).Select(m =>

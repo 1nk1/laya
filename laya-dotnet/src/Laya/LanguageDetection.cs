@@ -262,14 +262,26 @@ public static class LanguageDetection
             case System.Collections.IDictionary dict:
                 foreach (System.Collections.DictionaryEntry entry in dict) CollectText(entry.Value, leaves, depth + 1);
                 return;
-            case System.Collections.IEnumerable seq:
-                foreach (var item in seq) CollectText(item, leaves, depth + 1);
+            // Any other mapping type (an IReadOnlyDictionary only, say): its values, as Python walks any Mapping.
+            case System.Collections.IEnumerable mapping when IsMapping(state):
+                foreach (var entry in mapping)
+                    CollectText(entry!.GetType().GetProperty("Value")!.GetValue(entry), leaves, depth + 1);
+                return;
+            // _iter_text walks lists and tuples only. A set, a generator or any other iterable holds no text.
+            case System.Collections.IList list:
+                foreach (var item in list) CollectText(item, leaves, depth + 1);
+                return;
+            case System.Runtime.CompilerServices.ITuple tuple:
+                for (var i = 0; i < tuple.Length; i++) CollectText(tuple[i], leaves, depth + 1);
                 return;
             default:
                 // Numbers, booleans and other scalars contribute nothing, matching _iter_text.
                 return;
         }
     }
+
+    private static bool IsMapping(object state) =>
+        state.GetType().GetInterfaces().Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IReadOnlyDictionary<,>));
 
     /// <summary>
     /// Dominant script of <paramref name="text"/>: <c>"latin"</c>, <c>"han"</c>,
@@ -824,23 +836,8 @@ public static class LanguageDetection
 
     // ── code-point-aware slicing ─────────────────────────────────────────────
 
-    /// <summary>
-    /// Python's <c>str.lower()</c>: full (locale-independent default) Unicode lowercasing,
-    /// including the one unconditional 1-to-2-code-point special case, U+0130 (LATIN CAPITAL
-    /// LETTER I WITH DOT ABOVE) → U+0069 U+0307 ("i" + combining dot above).
-    /// </summary>
-    /// <remarks>
-    /// This project builds with <c>InvariantGlobalization</c> enabled, under which
-    /// <see cref="string.ToLowerInvariant()"/> uses a compiled-in simple (1-to-1) Unicode casing
-    /// table rather than ICU's full <c>SpecialCasing.txt</c> rules: it lowercases ordinary
-    /// accented letters correctly (é, ß, ...) but leaves U+0130 completely untouched rather than
-    /// expanding it, so the fix-up below only ever needs to look for a leftover U+0130.
-    /// </remarks>
-    internal static string PythonLower(string text)
-    {
-        var lowered = text.ToLowerInvariant();
-        return lowered.Contains('İ') ? lowered.Replace("İ", "i̇") : lowered;
-    }
+    /// <summary>Python's <c>str.lower()</c>; see <see cref="PythonStr.Lower"/>.</summary>
+    internal static string PythonLower(string text) => PythonStr.Lower(text);
 
     /// <summary>Python's <c>s[:maxCodePoints]</c>: a prefix measured in Unicode code points.</summary>
     /// <remarks>Internal rather than private so <see cref="LayaEmail"/> can reuse it for <c>max_chars</c>.</remarks>

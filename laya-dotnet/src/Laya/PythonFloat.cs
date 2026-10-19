@@ -85,6 +85,18 @@ internal static partial class PythonFloat
         _ => value.ToString() ?? "None",
     };
 
+    /// <summary>Python's <c>type(value).__name__</c> for a JSON-derived value.</summary>
+    internal static string TypeName(object? value) => value switch
+    {
+        null => "NoneType",
+        bool => "bool",
+        long or BigInteger => "int",
+        double => "float",
+        string => "str",
+        List<object?> => "list",
+        _ => "dict",
+    };
+
     /// <summary>Python's <c>"%g"</c> for a temperature already clamped into [0.5, 5].</summary>
     internal static string FormatG(double value) => value.ToString("G6", CultureInfo.InvariantCulture);
 }
