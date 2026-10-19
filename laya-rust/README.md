@@ -33,6 +33,7 @@ Mirrors the [Laya Python SDK](https://github.com/NandhaKishorM/laya/blob/main/RE
 - [Writing questions](#writing-questions)
 - [Built-in presets](#built-in-presets)
 - [Reading results](#reading-results)
+- [Long prediction](#long-prediction)
 - [Thread safety](#thread-safety)
 - [Execution providers and cargo features](#execution-providers-and-cargo-features)
 - [Async usage](#async-usage)
@@ -439,6 +440,57 @@ let options = LayaOptions {
 
 ---
 
+## Long prediction
+
+`predict` reads one sequence: a state longer than the room the questions leave is truncated (the
+start is kept, or the end for a conversation-turn list). `LayaEngine::predict_long` scans the whole
+state instead, in overlapping token windows, and keeps one answer per question. It ports
+`ONNXAgent.predict_long` with `aggregate="auto"`:
+
+```rust,no_run
+# use laya::{LayaEngine, LongOptions, QuestionSet};
+# let engine = LayaEngine::from_directory("x")?; let questions = QuestionSet::new();
+# let long_transcript = "";
+let options = LongOptions::new().window(96).stride(48).batch_size(8);
+let result = engine.predict_long(long_transcript, &questions, &options)?;
+
+result.scan_usage().unwrap().windows;      // windows scored (1 = no scan was needed)
+let answer = &result["refund_requested"];
+if let Some(window) = answer.window() {    // None for a single-pass state
+    println!("decided by window {}/{} (tokens {}..{})",
+             window.index + 1, window.count, window.token_start, window.token_end);
+}
+# Ok::<(), laya::LayaError>(())
+```
+
+- **Aggregation.** `noul` takes the window with the greatest P(true). `choice` and `score` take the
+  window with the greatest `answer_confidence`. A tie goes to the first window. The probabilities
+  are that window's, **not** a calibrated number for the whole document.
+- **One pass.** A state that fits the room the questions leave (with an explicit
+  `LongOptions::window`, a state that fits that window) is scored by the ordinary `predict` pass:
+  one window, no `Answer::window()`.
+- **Options.** `window`, `stride` and `batch_size` are optional and `0` counts as unset. The default
+  window is `max(64, max_len - head_max_len - 8)`, capped at the smallest state room any question
+  leaves; the default stride is half the effective window. A stride that would skip tokens between
+  windows is `LayaError::InvalidWindow`, as is a question set whose options leave no room for the
+  state. `aggregate` accepts only `"auto"` (`LayaError::UnsupportedAggregate` otherwise).
+- **Usage.** `result.usage().input_tokens` is summed over windows. `result.state_usage()` sums
+  `state_tokens` and `state_tokens_dropped` over windows and lists the last window's truncated
+  questions; `result.scan_usage()` gives the window count and how many windows lost state tokens.
+- **Re-encoding.** Each window is decoded back to text with special tokens kept (Python's default
+  `decode`) and scored as an ordinary state, so its tokens can differ slightly from the original
+  after re-encoding, exactly as in Python. A tokenizer that does not override `LayaTokenizer::decode`
+  makes `predict_long` fail with `LayaError::Tokenizer`.
+- **Router.** `LayaRouter::predict_long(state, &questions, &options, model, task, lang)` routes once,
+  on the original state, then scans on the chosen checkpoint. A predictor without a scan capability
+  (see `LayaPredictor::as_long_predictor`) gives `LayaError::NotSupported` rather than truncating.
+- **Not ported.** Per-call hooks, per-language temperatures and the confidence gate are not part of
+  `predict_long` here, and the two `warnings.warn` notices Python emits when it caps the window or
+  reduces the stride are not emitted (the crate has no logging dependency); the window and stride
+  themselves match.
+
+---
+
 ## Routing, language detection, email and shortlist
 
 Runnable end-to-end example: [`samples/laya-routing`](https://github.com/NandhaKishorM/laya/tree/main/laya-rust/samples/laya-routing).
@@ -611,7 +663,7 @@ invocation that has the `download` feature enabled (the default) with no externa
 |---|---|---|
 | `src/python_json.rs` | Byte-for-byte `json.dumps` dialects | `PythonJson` |
 | `src/questions.rs` | Typed question definitions | `QuestionType`, `Question`, `ChoiceQuestion`, `ScoreQuestion`, `NoulQuestion`, `QuestionSet` |
-| `src/answers.rs` | Typed answer results | `Answer`, `ChoiceAnswer`, `ScoreAnswer`, `NoulAnswer`, `ActionInfo`, `LayaResult`, `Usage` |
+| `src/answers.rs` | Typed answer results | `Answer`, `ChoiceAnswer`, `ScoreAnswer`, `NoulAnswer`, `ActionInfo`, `LayaResult`, `Usage`, `ScanUsage`, `StateUsage`, `WindowInfo` |
 | `src/calibration.rs` | Temperature scaling and confidence math | `Calibration` |
 | `src/laya_config.rs` | Parsed `rl_agent_config.json` | `LayaConfig` |
 | `src/laya_options.rs` | Engine construction options | `LayaOptions`, `LayaCheckpoint`, `LayaExecutionProvider`, `ArtifactDownloadProgress` |
@@ -622,6 +674,7 @@ invocation that has the `download` feature enabled (the default) with no externa
 | `src/tokenization/laya_tokenizer.rs` | Tokenizer abstraction | `LayaTokenizer` (trait) |
 | `src/tokenization/hf_tokenizer.rs` | HuggingFace tokenizer implementation | `HfTokenizer` |
 | `src/laya_engine.rs` | Loads the ONNX model and answers questions | `LayaEngine` |
+| `src/long_prediction.rs` | Window plan and aggregation for `predict_long` | `LongOptions` |
 | `src/error.rs` | Error type | `LayaError`, `Result<T>` — every fallible call in this crate returns `Result<T, LayaError>` |
 
 Where the equivalent Python code is a module of related functions (`common.py`, `agent.py`), the
@@ -670,6 +723,7 @@ Rust port groups the corresponding functions into a unit struct with associated 
   a follow-up; these probes are not a claim of full coverage of every new Python feature.
 
 - **Opt-in features are not ported yet:** abstention (`min_confidence`, including per-bucket
-  thresholds), histogram-binning calibration, `predict_long`, and per-language temperatures
-  (`lang_temperatures`). They are off by default in
+  thresholds), histogram-binning calibration, and per-language temperatures
+  (`lang_temperatures`). `predict_long` is ported, without hooks, per-language temperatures or
+  the confidence gate. They are off by default in
   Python, so default predictions are unaffected. They are planned as follow-ups.

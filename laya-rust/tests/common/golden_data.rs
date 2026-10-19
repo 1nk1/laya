@@ -130,6 +130,22 @@ impl CheckpointGoldenData {
             .collect()
     }
 
+    /// Cases recorded with `"kind": "long"` that return a result (`ONNXAgent.predict_long`).
+    pub fn long_cases(&self) -> Vec<GoldenCaseInfo> {
+        self.index()
+            .into_iter()
+            .filter(|c| c.kind.as_deref() == Some("long") && !c.expects_error)
+            .collect()
+    }
+
+    /// Cases recorded with `"kind": "long"` that raise a Python `ValueError`.
+    pub fn long_error_cases(&self) -> Vec<GoldenCaseInfo> {
+        self.index()
+            .into_iter()
+            .filter(|c| c.kind.as_deref() == Some("long") && c.expects_error)
+            .collect()
+    }
+
     /// Cases recorded with `"kind": "shortlist"` (`shortlist_many_options`): a hashing-embedder
     /// reduced choice question run through the ordinary predict pipeline, not a plain
     /// `Agent.predict` recording, so it is kept out of [`Self::success_cases`].

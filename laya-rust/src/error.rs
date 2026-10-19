@@ -102,6 +102,20 @@ pub enum LayaError {
         /// The configured total sequence budget.
         max_len: usize,
     },
+
+    /// `predict_long` was given an aggregation mode other than `"auto"`.
+    #[error("predict_long: only aggregate='auto' is supported")]
+    UnsupportedAggregate(String),
+
+    /// The scan window or stride cannot cover the state (no room for the state, or a stride that
+    /// would leave tokens between windows unread). The text matches Python's `ValueError`.
+    #[error("{0}")]
+    InvalidWindow(String),
+
+    /// The chosen predictor does not support the requested operation (a `predict_long` through a
+    /// router whose predictor has no scan capability).
+    #[error("{0}")]
+    NotSupported(String),
 }
 
 #[cfg(test)]

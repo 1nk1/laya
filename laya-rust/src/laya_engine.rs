@@ -13,13 +13,15 @@
 //! Tokenization needs no such lock: `tokenizers::Tokenizer::encode` takes `&self`.
 
 use crate::answers::{
-    ActionInfo, Answer, ChoiceAnswer, LayaResult, NoulAnswer, ScoreAnswer, StateUsage, Usage,
+    ActionInfo, Answer, ChoiceAnswer, LayaResult, NoulAnswer, ScanUsage, ScoreAnswer, StateUsage,
+    Usage,
 };
 use crate::calibration::Calibration;
 use crate::collator::{CollatedBatch, Collator, SequenceItem};
 use crate::error::{LayaError, Result};
 use crate::laya_config::LayaConfig;
 use crate::laya_options::{LayaCheckpoint, LayaExecutionProvider, LayaOptions};
+use crate::long_prediction::{self, LongOptions};
 use crate::model_artifacts::{ModelArtifacts, ModelPaths};
 use crate::questions::{Question, QuestionSet};
 use crate::sequence_builder::SequenceBuilder;
@@ -172,59 +174,186 @@ impl LayaEngine {
                 "no questions to answer".to_string(),
             ));
         }
+        let mut results = self.predict_states(&[state], questions)?;
+        Ok(results.remove(0))
+    }
 
-        let ids: Vec<String> = questions.ids().map(str::to_string).collect();
-        let mut items = Vec::with_capacity(ids.len());
-        let mut state_usage = StateUsage {
-            state_tokens: 0,
-            state_tokens_dropped: 0,
-            truncated: false,
-            truncated_questions: Vec::new(),
-            options: IndexMap::new(),
+    /// Scan a state longer than one sequence in overlapping token windows and keep, per question,
+    /// the most confident window. Ports `ONNXAgent.predict_long` with `aggregate="auto"`:
+    ///
+    /// * `noul`: the window with the greatest P(true);
+    /// * `choice` and `score`: the window with the greatest `answer_confidence`;
+    /// * ties go to the first window.
+    ///
+    /// The returned probabilities are the deciding window's, **not** a calibrated number for the
+    /// whole document. Each answer's [`Answer::window`] names that window, and
+    /// [`LayaResult::scan_usage`] / [`LayaResult::state_usage`] sum the scan.
+    ///
+    /// A state the questions leave room for (or, with an explicit [`LongOptions::window`], a state
+    /// that fits that window) takes the ordinary [`Self::predict`] pass: no scan, one window, no
+    /// window attribution. Otherwise each window is decoded back to text (special tokens kept, as
+    /// Python's default `decode`) and scored as an ordinary state, so a window's tokens may differ
+    /// slightly from the original after re-encoding, exactly as in Python. Windows go through the
+    /// model together unless [`LongOptions::batch_size`] or the automatic cap chunks them.
+    ///
+    /// Per-call hooks, per-language temperatures and the confidence gate are not part of this
+    /// port. Errors: [`LayaError::UnsupportedAggregate`], [`LayaError::InvalidWindow`] (no room
+    /// for the state, or a stride that leaves gaps), plus everything [`Self::predict`] returns.
+    pub fn predict_long(
+        &self,
+        state: impl Into<Value>,
+        questions: &QuestionSet,
+        options: &LongOptions,
+    ) -> Result<LayaResult> {
+        self.predict_long_value(state.into(), questions, options)
+    }
+
+    /// [`Self::predict_long`], for a state that implements [`serde::Serialize`] but not
+    /// `Into<serde_json::Value>`.
+    pub fn predict_long_serialize(
+        &self,
+        state: &impl Serialize,
+        questions: &QuestionSet,
+        options: &LongOptions,
+    ) -> Result<LayaResult> {
+        let value = serde_json::to_value(state)?;
+        self.predict_long_value(value, questions, options)
+    }
+
+    fn predict_long_value(
+        &self,
+        state: Value,
+        questions: &QuestionSet,
+        options: &LongOptions,
+    ) -> Result<LayaResult> {
+        options.check_aggregate()?;
+        let tokenizer = self.tokenizer.as_ref();
+        let explicit_window = options.window.unwrap_or(0);
+        let budget = long_prediction::window_budget(
+            tokenizer,
+            questions,
+            self.config.max_len,
+            self.config.head_max_len,
+            explicit_window,
+            options.stride.unwrap_or(0),
+        )?;
+        let state_ids = SequenceBuilder::encode_state(tokenizer, &state)?;
+
+        // `predict` reads the whole room the questions leave, so the default window must not force
+        // a scan there; an explicit window still bounds the single pass (Python 3e9bda30).
+        let one_pass = if explicit_window > 0 {
+            budget.window
+        } else {
+            budget.room
         };
+        if state_ids.len() <= one_pass {
+            let single = self.predict_states(&[state], questions)?.remove(0);
+            let truncated_windows = single.state_usage().is_some_and(|u| u.truncated) as usize;
+            return Ok(single.with_scan_usage(ScanUsage {
+                windows: 1,
+                truncated_windows,
+            }));
+        }
 
-        // A conversation-turn list is serialized newest-last (see `PythonJson::state`), so the
-        // default right-truncation of an over-long state would silently drop the newest turn.
-        // Truncate from the left for lists so the most recent turn survives instead. Ports
-        // `Agent._encode_state`'s `truncate_left = isinstance(state, list)` (laya/agent.py, laya
-        // 0.3.21) — 0.3.6 never set this, so every state was right-truncated regardless of shape.
-        let truncate_left = matches!(state, Value::Array(_));
+        let spans = long_prediction::spans(state_ids.len(), budget.window, budget.stride);
+        let windows = spans
+            .iter()
+            .map(|span| {
+                tokenizer
+                    .decode(&state_ids[span.token_start..span.token_end])
+                    .map(Value::String)
+            })
+            .collect::<Result<Vec<Value>>>()?;
+        let cap = long_prediction::batch_cap(
+            spans.len(),
+            budget.window,
+            long_prediction::default_window(self.config.max_len, self.config.head_max_len),
+            options.batch_size.unwrap_or(0),
+        )
+        .unwrap_or(spans.len());
+        let mut results = Vec::with_capacity(spans.len());
+        for chunk in windows.chunks(cap) {
+            results.extend(self.predict_states(chunk, questions)?);
+        }
+        Ok(long_prediction::aggregate(
+            MODEL_NAME, questions, &results, &spans,
+        ))
+    }
 
-        // The tokenizer here needs no lock: tokenizers::Tokenizer::encode takes &self.
-        for id in &ids {
-            let question = &questions[id.as_str()];
-            let (seq, markers, stats) = SequenceBuilder::build_with_stats(
-                self.tokenizer.as_ref(),
-                &state,
-                question,
-                self.config.max_len,
-                self.config.head_max_len,
-                truncate_left,
-            )?;
-            state_usage.state_tokens = stats.tokens;
-            state_usage.state_tokens_dropped = state_usage.state_tokens_dropped.max(stats.dropped);
-            if stats.dropped > 0 {
-                state_usage.truncated = true;
-                state_usage.truncated_questions.push(id.clone());
+    /// Scores every question against every state in one collate and one forward pass, returning
+    /// one result (with its own state usage) per state, in order. With no questions each result is
+    /// empty and carries no state usage. `predict` is this with one state.
+    pub(crate) fn predict_states(
+        &self,
+        states: &[Value],
+        questions: &QuestionSet,
+    ) -> Result<Vec<LayaResult>> {
+        let ids: Vec<String> = questions.ids().map(str::to_string).collect();
+        if ids.is_empty() {
+            return Ok(states
+                .iter()
+                .map(|_| LayaResult::new(MODEL_NAME, Vec::new(), HashMap::new(), Usage::default()))
+                .collect());
+        }
+
+        let mut items = Vec::with_capacity(ids.len() * states.len());
+        let mut state_usages = Vec::with_capacity(states.len());
+        for state in states {
+            let mut state_usage = StateUsage {
+                state_tokens: 0,
+                state_tokens_dropped: 0,
+                truncated: false,
+                truncated_questions: Vec::new(),
+                options: IndexMap::new(),
+            };
+
+            // A conversation-turn list is serialized newest-last (see `PythonJson::state`), so the
+            // default right-truncation of an over-long state would silently drop the newest turn.
+            // Truncate from the left for lists so the most recent turn survives instead. Ports
+            // `Agent._encode_state`'s `truncate_left = isinstance(state, list)` (laya/agent.py,
+            // laya 0.3.21) — 0.3.6 never set this, so every state was right-truncated regardless
+            // of shape.
+            let truncate_left = matches!(state, Value::Array(_));
+
+            // The tokenizer here needs no lock: tokenizers::Tokenizer::encode takes &self.
+            for id in &ids {
+                let question = &questions[id.as_str()];
+                let (seq, markers, stats) = SequenceBuilder::build_with_stats(
+                    self.tokenizer.as_ref(),
+                    state,
+                    question,
+                    self.config.max_len,
+                    self.config.head_max_len,
+                    truncate_left,
+                )?;
+                state_usage.state_tokens = stats.tokens;
+                state_usage.state_tokens_dropped =
+                    state_usage.state_tokens_dropped.max(stats.dropped);
+                if stats.dropped > 0 {
+                    state_usage.truncated = true;
+                    state_usage.truncated_questions.push(id.clone());
+                }
+                if let Some(options) = stats.options {
+                    state_usage.options.insert(id.clone(), options);
+                }
+
+                // A marker dropped for landing past max_len means an option is not in the
+                // sequence at all, so its logit would score whatever token happens to sit at
+                // position 0.
+                let expected_markers = SequenceBuilder::render_options(question).len();
+                if markers.len() != expected_markers {
+                    return Err(LayaError::NoMarkers {
+                        id: id.clone(),
+                        head_max_len: self.config.head_max_len,
+                        actual_markers: markers.len(),
+                        expected_markers,
+                        max_len: self.config.max_len,
+                    });
+                }
+
+                items.push(SequenceItem::new(seq, markers, question.question_type()));
             }
-            if let Some(options) = stats.options {
-                state_usage.options.insert(id.clone(), options);
-            }
-
-            // A marker dropped for landing past max_len means an option is not in the sequence at
-            // all, so its logit would score whatever token happens to sit at position 0.
-            let expected_markers = SequenceBuilder::render_options(question).len();
-            if markers.len() != expected_markers {
-                return Err(LayaError::NoMarkers {
-                    id: id.clone(),
-                    head_max_len: self.config.head_max_len,
-                    actual_markers: markers.len(),
-                    expected_markers,
-                    max_len: self.config.max_len,
-                });
-            }
-
-            items.push(SequenceItem::new(seq, markers, question.question_type()));
+            state_usages.push(state_usage);
         }
 
         let batch = Collator::collate(&items, self.tokenizer.special().pad_id)?;
@@ -234,35 +363,48 @@ impl LayaEngine {
         // hardcoded so this stays correct if the graph is re-exported with a wider action head.
         let n_act = output.act_logits.len() / batch.count;
 
-        let mut answers = HashMap::with_capacity(ids.len());
-        for (row, id) in ids.iter().enumerate() {
-            let question = &questions[id.as_str()];
-            let k = batch.marker_counts[row];
-            let temperature =
-                Calibration::resolve_temperature(&self.config, question.question_type(), k);
-            let row_start = row * batch.marker_count;
-            let row_logits = &output.logits[row_start..row_start + batch.marker_count];
-            let p = Calibration::probabilities(row_logits, k, temperature);
+        let mut results = Vec::with_capacity(states.len());
+        for (state_index, state_usage) in state_usages.into_iter().enumerate() {
+            let offset = state_index * ids.len();
+            let mut answers = HashMap::with_capacity(ids.len());
+            for (q, id) in ids.iter().enumerate() {
+                let row = offset + q;
+                let question = &questions[id.as_str()];
+                let k = batch.marker_counts[row];
+                let temperature =
+                    Calibration::resolve_temperature(&self.config, question.question_type(), k);
+                let row_start = row * batch.marker_count;
+                let row_logits = &output.logits[row_start..row_start + batch.marker_count];
+                let p = Calibration::probabilities(row_logits, k, temperature);
 
-            let act_start = row * n_act;
-            let act_row = &output.act_logits[act_start..act_start + n_act];
-            let action = ActionInfo {
-                act_probability: Calibration::round4(Calibration::softmax(act_row)[0]),
-            };
+                let act_start = row * n_act;
+                let act_row = &output.act_logits[act_start..act_start + n_act];
+                let action = ActionInfo {
+                    act_probability: Calibration::round4(Calibration::softmax(act_row)[0]),
+                };
 
-            answers.insert(id.clone(), build_answer(question, &p, action));
+                answers.insert(id.clone(), build_answer(question, &p, action));
+            }
+
+            // This state's own non-padding tokens; with one state it equals `batch.input_tokens`.
+            let input_tokens: usize = items[offset..offset + ids.len()]
+                .iter()
+                .map(|item| item.ids.len())
+                .sum();
+            results.push(
+                LayaResult::new(
+                    MODEL_NAME,
+                    ids.clone(),
+                    answers,
+                    Usage {
+                        input_tokens: input_tokens as u32,
+                        output_tokens: 0,
+                    },
+                )
+                .with_state_usage(state_usage),
+            );
         }
-
-        Ok(LayaResult::new(
-            MODEL_NAME,
-            ids,
-            answers,
-            Usage {
-                input_tokens: batch.input_tokens as u32,
-                output_tokens: 0,
-            },
-        )
-        .with_state_usage(state_usage))
+        Ok(results)
     }
 
     /// One forward pass over a collated batch, returning the raw graph outputs. See the

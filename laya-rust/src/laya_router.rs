@@ -41,6 +41,7 @@ use crate::error::{LayaError, Result};
 use crate::language_detection::{LanguageAnalysis, LanguageDetection};
 use crate::laya_engine::LayaEngine;
 use crate::laya_options::{LayaCheckpoint, LayaOptions};
+use crate::long_prediction::LongOptions;
 use crate::questions::QuestionSet;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -58,11 +59,48 @@ use std::sync::{Arc, Mutex};
 pub trait LayaPredictor: Send + Sync {
     /// Answer every question in `questions` about `state`.
     fn predict(&self, state: Value, questions: &QuestionSet) -> Result<LayaResult>;
+
+    /// This predictor's scan capability, if it has one. The default is `None`, so implementing
+    /// [`LayaPredictor`] elsewhere keeps compiling; [`LayaEngine`] and [`LayaRouter`] return
+    /// themselves. [`LayaRouter::predict_long`] needs it: Rust has no run-time interface check on
+    /// a `dyn LayaPredictor`, and a predictor without it must fail loudly rather than silently
+    /// truncate a long state.
+    fn as_long_predictor(&self) -> Option<&dyn LayaLongPredictor> {
+        None
+    }
+}
+
+/// A [`LayaPredictor`] that can also scan a state longer than one sequence. The Rust counterpart
+/// of Python's router checking `getattr(agent, "predict_long", None)`.
+pub trait LayaLongPredictor: LayaPredictor {
+    /// Scan overlapping state-token windows and select one answer per question. See
+    /// [`LayaEngine::predict_long`].
+    fn predict_long(
+        &self,
+        state: Value,
+        questions: &QuestionSet,
+        options: &LongOptions,
+    ) -> Result<LayaResult>;
 }
 
 impl LayaPredictor for LayaEngine {
     fn predict(&self, state: Value, questions: &QuestionSet) -> Result<LayaResult> {
         LayaEngine::predict(self, state, questions)
+    }
+
+    fn as_long_predictor(&self) -> Option<&dyn LayaLongPredictor> {
+        Some(self)
+    }
+}
+
+impl LayaLongPredictor for LayaEngine {
+    fn predict_long(
+        &self,
+        state: Value,
+        questions: &QuestionSet,
+        options: &LongOptions,
+    ) -> Result<LayaResult> {
+        LayaEngine::predict_long(self, state, questions, options)
     }
 }
 
@@ -554,6 +592,34 @@ impl LayaRouter {
         let result = engine.predict(state, questions)?;
         Ok(result.with_routing(decision))
     }
+
+    /// Route once, on the original state, then scan the whole state on the chosen checkpoint with
+    /// [`LayaEngine::predict_long`]. The result's [`LayaResult::routing`] records the decision.
+    ///
+    /// Returns [`LayaError::NotSupported`] when the chosen predictor (for example one registered
+    /// with [`Self::attach`]) has no scan capability, rather than truncating the state.
+    pub fn predict_long(
+        &self,
+        state: impl Into<Value>,
+        questions: &QuestionSet,
+        options: &LongOptions,
+        model: Option<&str>,
+        task: Option<&str>,
+        lang: Option<&str>,
+    ) -> Result<LayaResult> {
+        let state = state.into();
+        let decision = self.route(&state, Some(questions), model, task, lang)?;
+        let engine = self.load_checkpoint(decision.model)?;
+        let scanner = engine.as_long_predictor().ok_or_else(|| {
+            LayaError::NotSupported(format!(
+                "the predictor for '{}' has no predict_long, so a state longer than its window \
+                 cannot be scanned",
+                decision.model.subdir()
+            ))
+        })?;
+        let result = scanner.predict_long(state, questions, options)?;
+        Ok(result.with_routing(decision))
+    }
 }
 
 impl LayaPredictor for LayaRouter {
@@ -561,6 +627,22 @@ impl LayaPredictor for LayaRouter {
     /// or lang) — the entry point `laya_shortlist`'s generic `&dyn LayaPredictor` path uses.
     fn predict(&self, state: Value, questions: &QuestionSet) -> Result<LayaResult> {
         LayaRouter::predict(self, state, questions, None, None, None)
+    }
+
+    fn as_long_predictor(&self) -> Option<&dyn LayaLongPredictor> {
+        Some(self)
+    }
+}
+
+impl LayaLongPredictor for LayaRouter {
+    /// [`LayaRouter::predict_long`] with every override left at its default.
+    fn predict_long(
+        &self,
+        state: Value,
+        questions: &QuestionSet,
+        options: &LongOptions,
+    ) -> Result<LayaResult> {
+        LayaRouter::predict_long(self, state, questions, options, None, None, None)
     }
 }
 

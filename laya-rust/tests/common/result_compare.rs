@@ -42,6 +42,12 @@ pub fn assert_result_matches(where_case: &str, expected: &Value, result: &LayaRe
         "{where_case}: usage.output_tokens"
     );
 
+    assert_answers_match(where_case, expected, result);
+}
+
+/// Assert the answer ids (in order) and every answer's type, confidences, action and per-type
+/// probabilities match the golden `expected` result, ignoring its model name and usage.
+pub fn assert_answers_match(where_case: &str, expected: &Value, result: &LayaResult) {
     let answers = expected["answers"].as_object().unwrap();
     let expected_ids: Vec<&str> = answers.keys().map(String::as_str).collect();
     assert_eq!(

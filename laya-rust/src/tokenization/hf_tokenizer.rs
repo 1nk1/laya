@@ -91,6 +91,14 @@ impl LayaTokenizer for HfTokenizer {
     fn special(&self) -> &SpecialTokens {
         &self.special
     }
+
+    fn decode(&self, ids: &[u32]) -> Result<String> {
+        // skip_special_tokens = false keeps `[CLS]`, `<bos>`, ... in the text, as Python's default
+        // `decode` does, so the re-encoded window sees the same tokens the scan cut out.
+        self.inner
+            .decode(ids, false)
+            .map_err(|e| LayaError::Tokenizer(format!("failed to decode tokens: {e}")))
+    }
 }
 
 // ── special-token resolution ─────────────────────────────────────────────────

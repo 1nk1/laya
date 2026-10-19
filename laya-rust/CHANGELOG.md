@@ -11,6 +11,16 @@ goldens for the supported paths (see the known gaps below).
 
 ### Added
 
+- `LayaEngine::predict_long` and `LayaRouter::predict_long` (`aggregate="auto"`): scan a state
+  longer than one sequence in overlapping token windows and keep the most confident window per
+  question, with `Answer::window()` attribution, `LayaResult::scan_usage()` and summed
+  `state_usage()`. Matches Python's `ONNXAgent.predict_long` and the .NET SDK; hooks, per-language
+  temperatures and the confidence gate are not part of it. New `LongOptions`, `LayaLongPredictor`,
+  `LayaError::{UnsupportedAggregate, InvalidWindow, NotSupported}` and a default
+  `LayaTokenizer::decode`. `LayaError` is not `#[non_exhaustive]`, so an exhaustive `match` on it
+  outside the crate needs arms for the three new variants.
+- `predict` now runs through a shared multi-state core that scores several states in one forward
+  pass; its results are unchanged.
 - Advisory parity CI on every push and PR: regenerate fixtures from the current Python checkout,
   test all checkpoints, and reject skipped tests. No golden cache or crate publication.
 - Python float-repr parity probes, including exact half-even decimal ties and random bit patterns.
@@ -35,4 +45,4 @@ goldens for the supported paths (see the known gaps below).
 - Routing, script counting and fused-line email disclaimers follow the regenerated Python 0.4.0
   probes. New mixed-field language heuristics are not yet ported.
 - Not yet ported: abstention (`min_confidence`, including per-bucket thresholds),
-  histogram-binning calibration, `predict_long` and `lang_temperatures`.
+  histogram-binning calibration and `lang_temperatures`.
