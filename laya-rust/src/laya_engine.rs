@@ -19,7 +19,7 @@ use crate::answers::{
 use crate::calibration::Calibration;
 use crate::collator::{CollatedBatch, Collator, SequenceItem};
 use crate::error::{LayaError, Result};
-use crate::laya_config::LayaConfig;
+use crate::laya_config::{Deferred, LayaConfig};
 use crate::laya_options::{LayaCheckpoint, LayaExecutionProvider, LayaOptions};
 use crate::long_prediction::{self, LongOptions};
 use crate::model_artifacts::{ModelArtifacts, ModelPaths};
@@ -71,6 +71,9 @@ pub struct LayaEngine {
     tokenizer: Box<dyn LayaTokenizer>,
     config: LayaConfig,
     artifacts: ModelArtifacts,
+    /// A `max_len` / `head_max_len` of the wrong type: Python loads the checkpoint and raises
+    /// `TypeError` at the first prediction, so this is returned from `predict*`, not from `create`.
+    deferred: Deferred,
 }
 
 impl LayaEngine {
@@ -85,7 +88,7 @@ impl LayaEngine {
     #[track_caller]
     pub fn create(options: LayaOptions) -> Result<Self> {
         let artifacts = ModelArtifacts::resolve(&options)?;
-        let config = LayaConfig::load(&artifacts.config_path)?;
+        let (config, deferred) = LayaConfig::load_deferred(&artifacts.config_path)?;
 
         if let Some(expected_checkpoint) = artifacts.checkpoint {
             validate_encoder(
@@ -117,6 +120,7 @@ impl LayaEngine {
             tokenizer: Box::new(tokenizer),
             config,
             artifacts,
+            deferred,
         })
     }
 
@@ -232,7 +236,29 @@ impl LayaEngine {
         options: &LongOptions,
     ) -> Result<LayaResult> {
         options.check_aggregate()?;
+        // Python reads `cfg.get("max_len")` right after the argument checks, and
+        // `window_budget` is the first thing to use it.
         let tokenizer = self.tokenizer.as_ref();
+        if let Some(error) = &self.deferred.length {
+            if !questions.is_empty() {
+                return Err(LayaError::InvalidConfig(error.with_questions.clone()));
+            }
+            let Some(window) = error.no_questions_window else {
+                return Err(LayaError::InvalidConfig(error.no_questions.clone()));
+            };
+            // Only floats are wrong and there are no questions: Python's `window_budget` passes,
+            // a state that fits the float window is answered (with no answers) in one pass, and
+            // a longer one fails on its first slice.
+            let state_ids = SequenceBuilder::encode_state(tokenizer, &state)?;
+            if state_ids.len() as f64 > window {
+                return Err(LayaError::InvalidConfig(error.with_questions.clone()));
+            }
+            let single = self.predict_states(&[state], questions)?.remove(0);
+            return Ok(single.with_scan_usage(ScanUsage {
+                windows: 1,
+                truncated_windows: 0,
+            }));
+        }
         let explicit_window = options.window.unwrap_or(0);
         let (budget, warnings) = long_prediction::window_budget_warned(
             tokenizer,
@@ -300,6 +326,9 @@ impl LayaEngine {
                 .iter()
                 .map(|_| LayaResult::new(MODEL_NAME, Vec::new(), HashMap::new(), Usage::default()))
                 .collect());
+        }
+        if let Some(error) = &self.deferred.length {
+            return Err(LayaError::InvalidConfig(error.with_questions.clone()));
         }
 
         let mut items = Vec::with_capacity(ids.len() * states.len());
@@ -377,6 +406,17 @@ impl LayaEngine {
                 let row = offset + q;
                 let question = &questions[id.as_str()];
                 let k = batch.marker_counts[row];
+                // `self.temperature_by_options.get(bucket, self.temperature[qt])` evaluates the
+                // default first, so a missing list entry fails even when the bucket is found.
+                if self
+                    .deferred
+                    .short_temperature
+                    .is_some_and(|len| question.question_type() as usize >= len)
+                {
+                    return Err(LayaError::InvalidConfig(
+                        "IndexError: list index out of range".to_string(),
+                    ));
+                }
                 let temperature =
                     Calibration::resolve_temperature(&self.config, question.question_type(), k);
                 let row_start = row * batch.marker_count;

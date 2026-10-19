@@ -920,6 +920,14 @@ EMAIL_CLEAN_CASES = [
      "Please help me.\nOn Monday 1 Jan, " + "\U0001d400" * 301 + " wrote:\n> old request\nStill mine.", 3000),
     ("pyre/astral_digit_boundary",
      "Please help me.\n\nThis email\U0001d7ce is confidential and intended solely for you.", 3000),
+    # the other `re.I` equivalences: long s with s, the Kelvin sign with k
+    ("pyre/ignorecase_long_s_original_message",
+     "Please help me.\n-----Menſagem original-----\nOld request.", 3000),
+    ("pyre/ignorecase_long_s_forwarded_message",
+     "Please help me.\n----- Forwarded Meſsage -----\nOld request.", 3000),
+    ("pyre/ignorecase_long_s_pt_signoff", "Preciso de ajuda.\nſaludoſ cordiales,\nMaria", 3000),
+    ("pyre/ignorecase_kelvin_sign_signoff", "Please help me.\nThanK you,\nJohn", 3000),
+    ("pyre/ignorecase_kelvin_sign_device_footer", "Please help me.\nSent from my iPhone using KIT", 3000),
 ]
 
 EMAIL_STATE_CASES = [

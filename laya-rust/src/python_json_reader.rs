@@ -4,14 +4,17 @@
 //! `serde_json` differs from Python in ways the checkpoint loaders can observe:
 //! - it refuses the bare constants `NaN`, `Infinity` and `-Infinity`, which Python reads as floats;
 //! - it refuses a float literal that overflows (`1e400`, which Python reads as `inf`);
-//! - it turns an integer above `u64::MAX` (or `-0`) into a float, where Python keeps an `int`.
+//! - it turns an integer above `u64::MAX` (or `-0`) into a float, where Python keeps an `int`;
+//! - its error messages differ from Python's `JSONDecodeError`.
 //!
 //! [`PyJson`] keeps all of those apart from strings and from each other, so nothing is encoded
 //! in-band: an integer keeps its literal text, a float is a correctly rounded `f64` (possibly
-//! non-finite), and a string is always a string. Anything Python rejects is rejected here: the
-//! constants are values only (never object keys), numbers follow the JSON grammar exactly, and
-//! trailing commas or trailing data are errors. One known difference remains: a lone surrogate
-//! escape (`"\ud800"`) loads in Python and is an error here, since a Rust `String` cannot hold one.
+//! non-finite), and a string is always a string. Anything Python rejects is rejected here with
+//! Python's message, line, column and character offset (`Expecting ',' delimiter: line 1 column 7
+//! (char 6)`); the constants are values only (never object keys), numbers follow the JSON grammar
+//! as Python's scanner matches it, and trailing commas or trailing data are errors. One known
+//! difference remains: a lone surrogate escape (`"\ud800"`) loads in Python and is an error here,
+//! since a Rust `String` cannot hold one.
 
 use crate::error::{LayaError, Result};
 use serde::de::Error as _;
@@ -19,6 +22,11 @@ use serde_json::Value;
 
 /// Python's recursion limit makes `json.loads` fail on arrays nested about a thousand deep.
 const MAX_DEPTH: usize = 1000;
+
+/// Python 3.11+ refuses to turn an integer literal of more than this many digits into an `int`
+/// (`sys.get_int_max_str_digits()`), so `json.loads` raises `ValueError` for it. The sign does
+/// not count.
+const MAX_INT_DIGITS: usize = 4300;
 
 /// A parsed JSON value with Python's number kinds.
 #[derive(Debug, Clone, PartialEq)]
@@ -36,34 +44,59 @@ pub(crate) enum PyJson {
     Object(Vec<(String, PyJson)>),
 }
 
+/// Why a read stopped: a `JSONDecodeError` (message and byte offset of the fault) or the plain
+/// `ValueError` of the integer digit limit.
+enum ReadError {
+    Decode { message: &'static str, at: usize },
+    IntegerLimit(usize),
+}
+
+type Read<T> = std::result::Result<T, ReadError>;
+
+fn decode<T>(message: &'static str, at: usize) -> Read<T> {
+    Err(ReadError::Decode { message, at })
+}
+
 impl PyJson {
     /// Parse `text` as `json.loads` does.
     pub(crate) fn parse(text: &str) -> Result<PyJson> {
         let mut reader = Reader {
+            text,
             bytes: text.as_bytes(),
             pos: 0,
         };
-        let outcome = reader
-            .skip_ws()
-            .and_then(|()| reader.value(0))
-            .and_then(|value| {
-                reader.skip_ws()?;
+        let outcome = if text.starts_with('\u{feff}') {
+            decode("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0)
+        } else {
+            reader.skip_ws();
+            reader.value(0).and_then(|value| {
+                reader.skip_ws();
                 if reader.pos == reader.bytes.len() {
                     Ok(value)
                 } else {
-                    Err("trailing characters after the JSON value".to_string())
+                    decode("Extra data", reader.pos)
                 }
-            });
+            })
+        };
         match outcome {
             Ok(value) => Ok(value),
-            // Prefer serde_json's own message (line and column) when it also rejects the text.
-            Err(message) => match serde_json::from_str::<Value>(text) {
-                Err(e) => Err(LayaError::Json(e)),
-                Ok(_) => Err(LayaError::Json(serde_json::Error::custom(format!(
-                    "{message} at byte {}",
-                    reader.pos
-                )))),
-            },
+            Err(ReadError::IntegerLimit(digits)) => Err(LayaError::InvalidConfig(format!(
+                "Exceeds the limit ({MAX_INT_DIGITS} digits) for integer string conversion: value \
+                 has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"
+            ))),
+            Err(ReadError::Decode { message, at }) => {
+                // `JSONDecodeError`: offsets count characters, columns start at 1.
+                let before = &text[..at];
+                let chars = before.chars().count();
+                let line = before.matches('\n').count() + 1;
+                let column = match before.rfind('\n') {
+                    Some(newline) => before[newline + 1..].chars().count() + 1,
+                    None => chars + 1,
+                };
+                Err(LayaError::Json(serde_json::Error::custom(format!(
+                    "{message}: line {line} column {column} (char {chars})"
+                ))))
+            }
         }
     }
 
@@ -78,14 +111,6 @@ impl PyJson {
     pub(crate) fn as_str(&self) -> Option<&str> {
         match self {
             PyJson::Str(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    /// An integer literal as a `u64`, as `Value::as_u64` reads one (floats do not count).
-    pub(crate) fn as_u64(&self) -> Option<u64> {
-        match self {
-            PyJson::Int(literal) => literal.parse().ok(),
             _ => None,
         }
     }
@@ -128,25 +153,25 @@ impl PyJson {
 }
 
 struct Reader<'a> {
+    text: &'a str,
     bytes: &'a [u8],
     pos: usize,
 }
 
 impl Reader<'_> {
-    fn skip_ws(&mut self) -> std::result::Result<(), String> {
+    fn skip_ws(&mut self) {
         while matches!(self.bytes.get(self.pos), Some(b' ' | b'\t' | b'\n' | b'\r')) {
             self.pos += 1;
         }
-        Ok(())
     }
 
     fn starts_with(&self, word: &str) -> bool {
         self.bytes[self.pos..].starts_with(word.as_bytes())
     }
 
-    fn value(&mut self, depth: usize) -> std::result::Result<PyJson, String> {
+    fn value(&mut self, depth: usize) -> Read<PyJson> {
         if depth > MAX_DEPTH {
-            return Err("nested too deeply".to_string());
+            return decode("Expecting value", self.pos);
         }
         match self.bytes.get(self.pos) {
             Some(b'"') => self.string().map(PyJson::Str),
@@ -163,18 +188,18 @@ impl Reader<'_> {
                 self.word("-Infinity", PyJson::Float(f64::NEG_INFINITY))
             }
             Some(b'-' | b'0'..=b'9') => self.number(),
-            _ => Err("expecting a value".to_string()),
+            _ => decode("Expecting value", self.pos),
         }
     }
 
-    fn word(&mut self, word: &str, value: PyJson) -> std::result::Result<PyJson, String> {
+    fn word(&mut self, word: &str, value: PyJson) -> Read<PyJson> {
         self.pos += word.len();
         Ok(value)
     }
 
     /// `-? (0 | [1-9][0-9]*) (. [0-9]+)? ([eE] [+-]? [0-9]+)?`, the longest such prefix. A
     /// literal with a fraction or an exponent is a float; otherwise it is an int.
-    fn number(&mut self) -> std::result::Result<PyJson, String> {
+    fn number(&mut self) -> Read<PyJson> {
         let start = self.pos;
         let digits = |reader: &mut Self| {
             let from = reader.pos;
@@ -191,7 +216,7 @@ impl Reader<'_> {
             Some(b'1'..=b'9') => {
                 digits(self);
             }
-            _ => return Err("expecting a digit".to_string()),
+            _ => return decode("Expecting value", start),
         }
         let mut is_float = false;
         if self.bytes.get(self.pos) == Some(&b'.')
@@ -213,35 +238,39 @@ impl Reader<'_> {
                 self.pos = mark;
             }
         }
-        let literal = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap_or("0");
+        let literal = &self.text[start..self.pos];
         if is_float {
-            literal
-                .parse::<f64>()
-                .map(PyJson::Float)
-                .map_err(|e| e.to_string())
+            Ok(PyJson::Float(literal.parse::<f64>().unwrap_or(f64::NAN)))
         } else {
+            let count = literal.trim_start_matches('-').len();
+            if count > MAX_INT_DIGITS {
+                return Err(ReadError::IntegerLimit(count));
+            }
             Ok(PyJson::Int(literal.to_string()))
         }
     }
 
-    fn hex4(&mut self) -> std::result::Result<u32, String> {
+    /// Four hex digits starting at `self.pos`; `u_at` is the offset of the `u` for the error.
+    fn hex4(&mut self, u_at: usize) -> Read<u32> {
         let digits = self
             .bytes
             .get(self.pos..self.pos + 4)
             .and_then(|b| std::str::from_utf8(b).ok())
-            .filter(|s| s.bytes().all(|b| b.is_ascii_hexdigit()))
-            .ok_or_else(|| "invalid \\u escape".to_string())?;
+            .filter(|s| s.bytes().all(|b| b.is_ascii_hexdigit()));
+        let Some(digits) = digits else {
+            return decode("Invalid \\uXXXX escape", u_at);
+        };
         self.pos += 4;
-        u32::from_str_radix(digits, 16).map_err(|e| e.to_string())
+        Ok(u32::from_str_radix(digits, 16).unwrap_or(0))
     }
 
-    fn string(&mut self) -> std::result::Result<String, String> {
-        self.pos += 1; // opening quote
+    fn string(&mut self) -> Read<String> {
+        let quote = self.pos;
+        self.pos += 1;
         let mut out = String::new();
         loop {
-            let rest = &self.bytes[self.pos..];
-            let Some(&byte) = rest.first() else {
-                return Err("unterminated string".to_string());
+            let Some(&byte) = self.bytes.get(self.pos) else {
+                return decode("Unterminated string starting at", quote);
             };
             match byte {
                 b'"' => {
@@ -249,9 +278,10 @@ impl Reader<'_> {
                     return Ok(out);
                 }
                 b'\\' => {
+                    let backslash = self.pos;
                     self.pos += 1;
                     let Some(&escape) = self.bytes.get(self.pos) else {
-                        return Err("unterminated string".to_string());
+                        return decode("Unterminated string starting at", quote);
                     };
                     self.pos += 1;
                     match escape {
@@ -264,90 +294,103 @@ impl Reader<'_> {
                         b'r' => out.push('\r'),
                         b't' => out.push('\t'),
                         b'u' => {
-                            let unit = self.hex4()?;
+                            let u_at = self.pos - 1;
+                            let unit = self.hex4(u_at)?;
                             let code =
                                 if (0xD800..0xDC00).contains(&unit) && self.starts_with("\\u") {
+                                    let second_u = self.pos + 1;
                                     self.pos += 2;
-                                    let low = self.hex4()?;
+                                    let low = self.hex4(second_u)?;
                                     if !(0xDC00..0xE000).contains(&low) {
-                                        return Err("lone surrogate".to_string());
+                                        return decode("Invalid \\uXXXX escape", second_u);
                                     }
                                     0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00)
                                 } else {
                                     unit
                                 };
-                            out.push(char::from_u32(code).ok_or("lone surrogate")?);
+                            match char::from_u32(code) {
+                                Some(ch) => out.push(ch),
+                                // A lone surrogate loads in Python; a Rust string cannot hold one.
+                                None => return decode("Invalid \\uXXXX escape", u_at),
+                            }
                         }
-                        _ => return Err("invalid escape".to_string()),
+                        _ => return decode("Invalid \\escape", backslash),
                     }
                 }
-                0..=0x1f => return Err("control character in string".to_string()),
+                0..=0x1f => return decode("Invalid control character at", self.pos),
                 _ => {
-                    let text = std::str::from_utf8(rest).map_err(|e| e.to_string())?;
-                    let ch = text.chars().next().ok_or("unterminated string")?;
-                    out.push(ch);
-                    self.pos += ch.len_utf8();
+                    // Copy the whole run up to the next quote, backslash or control byte; these
+                    // are ASCII, so the run ends on a character boundary.
+                    let end = self.bytes[self.pos..]
+                        .iter()
+                        .position(|b| matches!(b, b'"' | b'\\' | 0..=0x1f))
+                        .map_or(self.bytes.len(), |n| self.pos + n);
+                    out.push_str(&self.text[self.pos..end]);
+                    self.pos = end;
                 }
             }
         }
     }
 
-    fn array(&mut self, depth: usize) -> std::result::Result<PyJson, String> {
+    fn array(&mut self, depth: usize) -> Read<PyJson> {
         self.pos += 1;
         let mut items = Vec::new();
-        self.skip_ws()?;
+        self.skip_ws();
         if self.bytes.get(self.pos) == Some(&b']') {
             self.pos += 1;
             return Ok(PyJson::Array(items));
         }
         loop {
-            self.skip_ws()?;
+            self.skip_ws();
             items.push(self.value(depth + 1)?);
-            self.skip_ws()?;
+            self.skip_ws();
             match self.bytes.get(self.pos) {
                 Some(b',') => self.pos += 1,
                 Some(b']') => {
                     self.pos += 1;
                     return Ok(PyJson::Array(items));
                 }
-                _ => return Err("expecting ',' or ']'".to_string()),
+                _ => return decode("Expecting ',' delimiter", self.pos),
             }
         }
     }
 
-    fn object(&mut self, depth: usize) -> std::result::Result<PyJson, String> {
+    fn object(&mut self, depth: usize) -> Read<PyJson> {
         self.pos += 1;
         let mut entries: Vec<(String, PyJson)> = Vec::new();
-        self.skip_ws()?;
+        self.skip_ws();
         if self.bytes.get(self.pos) == Some(&b'}') {
             self.pos += 1;
             return Ok(PyJson::Object(entries));
         }
         loop {
-            self.skip_ws()?;
+            self.skip_ws();
             if self.bytes.get(self.pos) != Some(&b'"') {
-                return Err("expecting a property name in double quotes".to_string());
+                return decode(
+                    "Expecting property name enclosed in double quotes",
+                    self.pos,
+                );
             }
             let key = self.string()?;
-            self.skip_ws()?;
+            self.skip_ws();
             if self.bytes.get(self.pos) != Some(&b':') {
-                return Err("expecting ':'".to_string());
+                return decode("Expecting ':' delimiter", self.pos);
             }
             self.pos += 1;
-            self.skip_ws()?;
+            self.skip_ws();
             let value = self.value(depth + 1)?;
             match entries.iter_mut().find(|(k, _)| *k == key) {
                 Some(entry) => entry.1 = value,
                 None => entries.push((key, value)),
             }
-            self.skip_ws()?;
+            self.skip_ws();
             match self.bytes.get(self.pos) {
                 Some(b',') => self.pos += 1,
                 Some(b'}') => {
                     self.pos += 1;
                     return Ok(PyJson::Object(entries));
                 }
-                _ => return Err("expecting ',' or '}'".to_string()),
+                _ => return decode("Expecting ',' delimiter", self.pos),
             }
         }
     }
@@ -400,7 +443,7 @@ mod tests {
 
     #[test]
     fn strings_decode_escapes_and_surrogate_pairs() {
-        let value = PyJson::parse(r#"["\u00e9\n\ud835\udc00\/"]"#).unwrap();
+        let value = PyJson::parse(r#"["é\n𝐀\/"]"#).unwrap();
         assert_eq!(
             PyJson::Array(vec![PyJson::Str("\u{e9}\n\u{1d400}/".into())]),
             value

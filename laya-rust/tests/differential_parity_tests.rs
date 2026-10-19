@@ -203,6 +203,39 @@ fn check_email_state(cases: &[Value], out: &mut Vec<Mismatch>) {
     }
 }
 
+/// `str.lower()` against `str::to_lowercase`: final sigma, dotted capital I and the one-to-many cases.
+fn check_lower(cases: &[Value], out: &mut Vec<Mismatch>) {
+    for case in cases {
+        let text = case["text"].as_str().unwrap();
+        let expected = case["lower"].as_str().unwrap();
+        let got = text.to_lowercase();
+        if got != expected {
+            record(out, "lower", show(text), show(expected), show(&got));
+        }
+    }
+}
+
+/// The text of the error `json.loads` raised (or `None`) against what the checkpoint JSON
+/// reader says for the same text.
+fn check_json_errors(cases: &[Value], out: &mut Vec<Mismatch>) {
+    for case in cases {
+        let text = case["text"].as_str().unwrap();
+        let got = laya::laya_config::LayaConfig::parse(text)
+            .err()
+            .map(|e| e.to_string());
+        let expected = case["error"].as_str().map(str::to_string);
+        if got != expected {
+            record(
+                out,
+                "json error",
+                show(text),
+                format!("{expected:?}"),
+                format!("{got:?}"),
+            );
+        }
+    }
+}
+
 #[test]
 fn generated_corpus_matches_python() {
     let Some(root) = routing_golden::load("differential_probe.json") else {
@@ -228,6 +261,17 @@ fn generated_corpus_matches_python() {
     check_email_clean(&budgets, clean, &mut mismatches);
     let after_clean = mismatches.len();
     check_email_state(states, &mut mismatches);
+    let after_state = mismatches.len();
+    check_lower(root["lower"].as_array().unwrap(), &mut mismatches);
+    let after_lower = mismatches.len();
+    check_json_errors(root["json_errors"].as_array().unwrap(), &mut mismatches);
+    eprintln!(
+        "differential: {} lower, {} json_errors; mismatches: lower {}, json_errors {}",
+        root["lower"].as_array().unwrap().len(),
+        root["json_errors"].as_array().unwrap().len(),
+        after_lower - after_state,
+        mismatches.len() - after_lower
+    );
 
     eprintln!(
         "differential: {} lang, {} route, {} email_clean x {} budgets, {} email_state; mismatches: lang {}, route {}, email_clean {}, email_state {}",

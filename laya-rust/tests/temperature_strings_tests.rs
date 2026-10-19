@@ -263,3 +263,83 @@ fn a_warning_through_a_fixed_library_line_is_emitted_once() {
         capture(|| like_the_router(r#"{"temperature":[0.31,1,1]}"#)).len()
     );
 }
+
+// `ONNXAgent.__init__` iterates `cfg.get("temperature", ...)` and calls `.items()` on
+// `cfg.get("temperature_by_options", {})` while the checkpoint loads, whatever JSON type they are.
+// Messages and warnings below come from running those lines in Python 3.12.
+#[test]
+fn wrongly_typed_temperature_containers_follow_python() {
+    let error_of = |config: &str| match LayaConfig::parse(config) {
+        Err(laya::error::LayaError::InvalidConfig(message)) => message,
+        other => panic!("expected InvalidConfig for {config}, got {other:?}"),
+    };
+    for (value, kind) in [
+        ("5", "int"),
+        ("2.5", "float"),
+        ("true", "bool"),
+        ("null", "NoneType"),
+    ] {
+        assert_eq!(
+            format!("TypeError: '{kind}' object is not iterable"),
+            error_of(&format!(r#"{{"temperature": {value}}}"#))
+        );
+    }
+    for (value, kind) in [
+        ("[1]", "list"),
+        (r#""x""#, "str"),
+        ("null", "NoneType"),
+        ("5", "int"),
+        ("1.5", "float"),
+        ("true", "bool"),
+    ] {
+        assert_eq!(
+            format!("AttributeError: '{kind}' object has no attribute 'items'"),
+            error_of(&format!(r#"{{"temperature_by_options": {value}}}"#))
+        );
+    }
+    // The list is walked first, so its error wins.
+    assert_eq!(
+        "TypeError: 'int' object is not iterable",
+        error_of(r#"{"temperature": 5, "temperature_by_options": [1]}"#)
+    );
+
+    // A string iterates its characters and a dict its keys, each a one-entry temperature.
+    assert_eq!(
+        vec![onnx_warning(
+            "temperature[0]='a' -> 1, temperature[1]='b' -> 1, temperature[2]='c' -> 1"
+        )],
+        warnings_for(r#"{"temperature": "abc"}"#)
+    );
+    assert_eq!(
+        vec![onnx_warning(
+            "temperature[0]='a' -> 1, temperature[1]='9' -> 5"
+        )],
+        warnings_for(r#"{"temperature": {"a": 1, "9": 2}}"#)
+    );
+    assert_eq!(
+        vec![onnx_warning(
+            "k='b' -> 1, j=9 -> 5, temperature[0]='a' -> 1"
+        )],
+        warnings_for(r#"{"temperature": "a", "temperature_by_options": {"k": "b", "j": 9}}"#)
+    );
+    assert_eq!(
+        vec![onnx_warning(
+            "temperature[0]='0' -> 0.5, temperature[1]='.' -> 1"
+        )],
+        warnings_for(r#"{"temperature": "0.5"}"#)
+    );
+    // "123" is three valid temperatures and "" and {} are none: no warning.
+    for config in [
+        r#"{"temperature": "123"}"#,
+        r#"{"temperature": ""}"#,
+        r#"{"temperature": {}}"#,
+    ] {
+        assert!(warnings_for(config).is_empty(), "{config}");
+    }
+    assert_eq!(
+        vec![1.0, 2.0, 3.0],
+        LayaConfig::parse(r#"{"temperature": "123"}"#)
+            .unwrap()
+            .temperature
+    );
+}

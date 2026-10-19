@@ -164,7 +164,10 @@ fn read_special_tokens(
         Some(config_path) => {
             // Which string plays each role? A missing file propagates as a plain LayaError::Io.
             let config_text = std::fs::read_to_string(config_path)?;
-            let config: Value = crate::python_json_reader::PyJson::parse(&config_text)?.to_value();
+            let config: Value = crate::python_json_reader::PyJson::parse(
+                &crate::laya_config::python_text_mode(config_text),
+            )?
+            .to_value();
             let cls_str = require_token_string(&config, "cls_token", config_path)?;
             let sep_str = require_token_string(&config, "sep_token", config_path)?;
             let pad_str = require_token_string(&config, "pad_token", config_path)?;
