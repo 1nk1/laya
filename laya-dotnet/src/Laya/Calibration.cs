@@ -151,8 +151,44 @@ public static class Calibration
     }
 
     /// <summary>
-    /// Python's <c>round(x, 4)</c>. Both runtimes round half to even on the binary value, so this
-    /// agrees with the reference implementation.
+    /// Python's <c>round(x, 4)</c> on a float: the exact binary value is rounded to four decimals,
+    /// half to even on exact ties, and the nearest double to that decimal is returned. Scaling by
+    /// 10^4 and rounding in floating point does not do this (the product is itself rounded), so the
+    /// rounding is done on the integer mantissa. NaN, infinities and a zero result's sign are kept.
     /// </summary>
-    public static double Round4(double value) => Math.Round(value, 4, MidpointRounding.ToEven);
+    public static double Round4(double value)
+    {
+        var bits = BitConverter.DoubleToUInt64Bits(value);
+        var biased = (int)((bits >> 52) & 0x7FF);
+        if (biased == 0x7FF) return value; // NaN, +/-infinity
+        // From 2^39 up a double is coarser than 1e-4, so the rounded decimal maps back to the value.
+        if (biased - 1023 >= 39) return value;
+
+        var mantissa = bits & 0x000F_FFFF_FFFF_FFFFUL;
+        int exponent; // value = mantissa * 2^exponent
+        if (biased == 0) exponent = -1074;
+        else
+        {
+            mantissa |= 1UL << 52;
+            exponent = biased - 1075;
+        }
+
+        var negative = (bits >> 63) != 0;
+        var shift = -exponent; // exponent < 0 here: biased - 1075 < 39 - 1023 + 1023 - 52
+        UInt128 quotient;
+        if (shift >= 128) quotient = 0; // |x| * 10^4 < 2^67 / 2^128, far below one half
+        else
+        {
+            var scaled = (UInt128)mantissa * 10_000; // < 2^67, exact
+            quotient = scaled >> shift;
+            var remainder = scaled - (quotient << shift);
+            var half = (UInt128)1 << (shift - 1);
+            if (remainder > half || (remainder == half && (quotient & 1) != 0)) quotient++;
+        }
+
+        // quotient < 2^39 * 10^4 < 2^53, so it converts exactly; one IEEE division then yields the
+        // double nearest the decimal, as Python's string round trip does.
+        var result = (double)(ulong)quotient / 10_000.0;
+        return negative ? -result : result;
+    }
 }

@@ -7,7 +7,7 @@ All notable changes to the `Laya.Onnx` NuGet package are documented here. The fo
 ## [0.1.0] - unreleased
 
 First release: a port of the Laya Python SDK, tested against laya (Python) 0.4.11 (routing
-goldens: 0.4.0).
+goldens: 0.4.12).
 
 ### Added
 
@@ -37,6 +37,9 @@ goldens: 0.4.0).
 - Score legends return the same rendered criterion text shown to the model, including JSON for
   structured levels.
 - Golden fixtures regenerated from current Python for all three checkpoints and routing.
+- `Calibration.Round4` is exactly Python's `round(x, 4)`: it rounds the exact binary value half to even
+  (the old scale-and-round differed on about 2% of values, e.g. `0.00625` and `0.03125`), and keeps
+  the sign of a zero result.
 
 ### Known gaps
 
