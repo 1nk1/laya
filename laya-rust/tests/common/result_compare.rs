@@ -95,41 +95,75 @@ pub fn assert_answers_match(where_case: &str, expected: &Value, result: &LayaRes
 }
 
 pub fn assert_state_usage_matches(where_case: &str, expected: &Value, result: &LayaResult) {
-    let usage = result.state_usage().expect("engine result must report state usage");
+    let usage = result
+        .state_usage()
+        .expect("engine result must report state usage");
     let want = &expected["usage"];
     let options = want.get("options").and_then(Value::as_object);
-    assert_eq!(want.as_object().unwrap().len(), 6 + usize::from(options.is_some()),
-               "{where_case}: new Python usage fields need a Rust port");
-    assert_eq!(options.map_or(0, |o| o.len()), usage.options.len(),
-               "{where_case}: usage.options count");
+    assert_eq!(
+        want.as_object().unwrap().len(),
+        6 + usize::from(options.is_some()),
+        "{where_case}: new Python usage fields need a Rust port"
+    );
+    assert_eq!(
+        options.map_or(0, |o| o.len()),
+        usage.options.len(),
+        "{where_case}: usage.options count"
+    );
     if let Some(options) = options {
         for (id, expected) in options {
-            assert_eq!(expected.as_object().unwrap().len(), 3,
-                       "{where_case}/{id}: new option usage fields need a Rust port");
-            let got = usage.options.get(id).expect("collapsed option diagnostic missing");
-            assert_eq!(expected["total"].as_u64().unwrap() as usize, got.total,
-                       "{where_case}/{id}: usage.options.total");
-            assert_eq!(expected["distinct"].as_u64().unwrap() as usize, got.distinct,
-                       "{where_case}/{id}: usage.options.distinct");
-            assert_eq!(expected["tokens_per_option"].as_u64().map(|v| v as usize), got.tokens_per_option,
-                       "{where_case}/{id}: usage.options.tokens_per_option");
+            assert_eq!(
+                expected.as_object().unwrap().len(),
+                3,
+                "{where_case}/{id}: new option usage fields need a Rust port"
+            );
+            let got = usage
+                .options
+                .get(id)
+                .expect("collapsed option diagnostic missing");
+            assert_eq!(
+                expected["total"].as_u64().unwrap() as usize,
+                got.total,
+                "{where_case}/{id}: usage.options.total"
+            );
+            assert_eq!(
+                expected["distinct"].as_u64().unwrap() as usize,
+                got.distinct,
+                "{where_case}/{id}: usage.options.distinct"
+            );
+            assert_eq!(
+                expected["tokens_per_option"].as_u64().map(|v| v as usize),
+                got.tokens_per_option,
+                "{where_case}/{id}: usage.options.tokens_per_option"
+            );
         }
     }
     assert_eq!(
-        want["state_tokens"].as_u64().unwrap() as usize, usage.state_tokens,
+        want["state_tokens"].as_u64().unwrap() as usize,
+        usage.state_tokens,
         "{where_case}: usage.state_tokens"
     );
     assert_eq!(
-        want["state_tokens_dropped"].as_u64().unwrap() as usize, usage.state_tokens_dropped,
+        want["state_tokens_dropped"].as_u64().unwrap() as usize,
+        usage.state_tokens_dropped,
         "{where_case}: usage.state_tokens_dropped"
     );
     assert_eq!(
-        want["truncated"].as_bool().unwrap(), usage.truncated,
+        want["truncated"].as_bool().unwrap(),
+        usage.truncated,
         "{where_case}: usage.truncated"
     );
-    let ids: Vec<&str> = want["truncated_questions"].as_array().unwrap()
-        .iter().map(|id| id.as_str().unwrap()).collect();
-    let got: Vec<&str> = usage.truncated_questions.iter().map(String::as_str).collect();
+    let ids: Vec<&str> = want["truncated_questions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap())
+        .collect();
+    let got: Vec<&str> = usage
+        .truncated_questions
+        .iter()
+        .map(String::as_str)
+        .collect();
     assert_eq!(ids, got, "{where_case}: usage.truncated_questions");
 }
 
@@ -161,11 +195,7 @@ fn assert_score(want: &Value, got: &ScoreAnswer, where_q: &str) {
     assert_eq!(legend.len(), got.legend.len(), "{where_q}: legend length");
     for i in 0..got.legend.len() {
         let expected_level = &legend[&i.to_string()];
-        assert_eq!(
-            expected_level,
-            &got.legend[i],
-            "{where_q}: legend[{i}]"
-        );
+        assert_eq!(expected_level, &got.legend[i], "{where_q}: legend[{i}]");
     }
     let probabilities = want["probabilities"].as_object().unwrap();
     for i in 0..got.probabilities.len() {

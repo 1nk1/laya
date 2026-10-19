@@ -211,7 +211,7 @@ fn assert_act_probabilities(expected: &[f32], actual: &[f32], classes: usize, wh
 #[test]
 fn saturated_act_logit_drift_preserves_probabilities() {
     assert_act_probabilities(
-        &[4807.720, -3937.599],
+        &[4807.72, -3937.599],
         &[4807.878, -3937.442],
         2,
         "saturated",

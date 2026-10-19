@@ -67,7 +67,10 @@ pub fn locate_split(checkpoint: LayaCheckpoint) -> Option<PathBuf> {
         && !root.trim().is_empty()
     {
         let candidate = PathBuf::from(root).join(subfolder);
-        return candidate.join("rl_agent_config.json").is_file().then_some(candidate);
+        return candidate
+            .join("rl_agent_config.json")
+            .is_file()
+            .then_some(candidate);
     }
     let mut dir = Some(Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
     while let Some(d) = dir {

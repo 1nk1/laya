@@ -207,7 +207,11 @@ fn default_keeps_two_checkpoints_like_python() {
     router.load("multilingual").unwrap();
     router.load("english").unwrap();
     assert_eq!(router.loaded().len(), 2, "both checkpoints stay resident");
-    assert_eq!(log.lock().unwrap().len(), 2, "switching back does not rebuild english");
+    assert_eq!(
+        log.lock().unwrap().len(),
+        2,
+        "switching back does not rebuild english"
+    );
 }
 
 #[test]

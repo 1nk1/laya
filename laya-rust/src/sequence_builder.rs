@@ -139,8 +139,15 @@ impl SequenceBuilder {
         head_max_len: usize,
         truncate_left: bool,
     ) -> Result<(Vec<u32>, Vec<usize>)> {
-        Self::build_with_stats(tokenizer, state, question, max_len, head_max_len, truncate_left)
-            .map(|(ids, markers, _)| (ids, markers))
+        Self::build_with_stats(
+            tokenizer,
+            state,
+            question,
+            max_len,
+            head_max_len,
+            truncate_left,
+        )
+        .map(|(ids, markers, _)| (ids, markers))
     }
 
     /// The question's own part of the sequence: everything up to and including the SEP that
