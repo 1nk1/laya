@@ -434,6 +434,13 @@ JSON_INSERTS = ["{", "}", "[", "]", ",", ":", '"', chr(92), " ", "\n", "\t", "x"
 def build_json_cases(count=1500):
     texts = [
         "", "  ", "{", '{"a"', '{"a":', "[1,]", "[,1]", "1 2", "{} x", "\ufeff{}", "-", "--1", "01", "[01]",
+        # \u escapes at the end of the text: CPython wants one character after the four digits
+        *['"a' + chr(92) + "u" + d + tail for d in ("", "0", "00", "004", "0041", "00411")
+          for tail in ("", '"')],
+        *['"' + chr(92) + "ud835" + chr(92) + "udc00" + tail for tail in ("", "x", '"', 'x"')],
+        '"' + chr(92) + "ud835" + chr(92) + "udc0", '"' + chr(92) + "ud835" + chr(92) + "u00",
+        '"' + chr(92) + "ud835", '"' + chr(92) + "u0041", '"' + chr(92) + "u0041x",
+        '{"temperature": "A' + chr(92) + 'u0041',
         "NaN1", "Infinit", '"abc', '"ab' + chr(92) + 'x"', '"ab' + chr(92) + 'u12"', '"a\nb"', "1" * 4300,
         "-" + "1" * 4300, "[" + "1" * 4301 + "]", "-" + "1" * 4301, "\n\n  x", '{"a":\n  [1,\n  2 3]}',
     ]

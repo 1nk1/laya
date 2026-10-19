@@ -258,7 +258,9 @@ internal static class PythonJsonReader
 
         private char Hex4()
         {
-            if (Pos + 4 > text.Length) throw Error("Invalid \\uXXXX escape", Pos - 1);
+            // CPython needs one more character after the four digits (scanstring_unicode: end + 4 >= len), so an escape
+            // that ends the text is reported at its 'u' even when the digits are fine.
+            if (Pos + 4 >= text.Length) throw Error("Invalid \\uXXXX escape", Pos - 1);
             var value = 0;
             for (var k = 0; k < 4; k++)
             {
