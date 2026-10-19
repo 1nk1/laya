@@ -198,7 +198,6 @@ public sealed class LayaEngine : IDisposable, ILayaLongPredictor
         ArgumentNullException.ThrowIfNull(questions);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
         if (questions.Count == 0) throw new ArgumentException("no questions to answer", nameof(questions));
-        Config.ThrowIfLengthDeferred(withQuestions: true);
         return PredictStates([state], questions, diagnostics: false)[0];
     }
 
@@ -227,7 +226,6 @@ public sealed class LayaEngine : IDisposable, ILayaLongPredictor
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
         if (aggregate != "auto")
             throw new ArgumentException("predict_long: only aggregate='auto' is supported", nameof(aggregate));
-        Config.ThrowIfLengthDeferred(withQuestions: questions.Count > 0);
 
         int budget, step, room;
         int[] stateIds;
@@ -237,7 +235,6 @@ public sealed class LayaEngine : IDisposable, ILayaLongPredictor
                 _tokenizer, questions, Config.MaxLen, Config.HeadMaxLen, window, stride);
             stateIds = _tokenizer.Encode(PythonJson.State(state).Replace(_tokenizer.MaskToken, " ", StringComparison.Ordinal));
         }
-        if (questions.Count == 0) Config.ThrowIfStateExceedsDeferredWindow(stateIds.Length);
         // Predict reads the whole room the questions leave, so the default window must not
         // force a scan there; an explicit window still bounds the single pass (Python 3e9bda30).
         if (stateIds.Length <= (window is > 0 ? budget : room))

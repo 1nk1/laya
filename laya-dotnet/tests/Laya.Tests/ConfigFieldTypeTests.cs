@@ -4,7 +4,7 @@ namespace Laya.Tests;
 
 /// <summary>
 /// <see cref="LayaConfig.Parse"/> against Python's loader (<c>onnx_agent.py:192-262</c>) on configs whose fields have the
-/// wrong JSON type, and against <c>build_sequence</c> / <c>window_budget</c> for a wrong-typed <c>max_len</c> or
+/// wrong JSON type, and against <c>build_sequence</c> for a wrong-typed <c>max_len</c> or
 /// <c>head_max_len</c>. Expectations were produced by running the Python code on the same documents. One corner is
 /// not ported and so not listed: a small float <c>head_max_len</c> that <c>build_head</c> survives (the typical float fails).
 /// </summary>
@@ -72,102 +72,96 @@ public sealed class ConfigFieldTypeTests
         Assert.Equal<IEnumerable<string>>(clamped, config.ClampedTemperatures);
     }
 
-    public static TheoryData<string, string?, string?> Lengths() => new()
+    public static TheoryData<string, string?> Lengths() => new()
     {
-        { "{}", null, null },
-        { "{\"head_max_len\": 512}", null, null },
-        { "{\"head_max_len\": true}", null, null },
-        { "{\"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'int' and 'str'" },
-        { "{\"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'int' and 'NoneType'" },
-        { "{\"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'int' and 'list'" },
-        { "{\"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'int' and 'dict'" },
-        { "{\"max_len\": 512}", null, null },
-        { "{\"max_len\": 512, \"head_max_len\": 512}", null, null },
-        { "{\"max_len\": 512, \"head_max_len\": true}", null, null },
-        { "{\"max_len\": 512, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'int' and 'str'" },
-        { "{\"max_len\": 512, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'int' and 'NoneType'" },
-        { "{\"max_len\": 512, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'int' and 'list'" },
-        { "{\"max_len\": 512, \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'int' and 'dict'" },
-        { "{\"max_len\": true}", null, null },
-        { "{\"max_len\": true, \"head_max_len\": 512}", null, null },
-        { "{\"max_len\": true, \"head_max_len\": true}", null, null },
-        { "{\"max_len\": true, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'bool' and 'str'" },
-        { "{\"max_len\": true, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'bool' and 'NoneType'" },
-        { "{\"max_len\": true, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'bool' and 'list'" },
-        { "{\"max_len\": true, \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'bool' and 'dict'" },
-        { "{\"max_len\": 1.5}", "TypeError: slice indices must be integers or None or have an __index__ method", null },
-        { "{\"max_len\": 1.5, \"head_max_len\": 512}", "TypeError: slice indices must be integers or None or have an __index__ method", null },
-        { "{\"max_len\": 1.5, \"head_max_len\": true}", "TypeError: slice indices must be integers or None or have an __index__ method", null },
-        { "{\"max_len\": 1.5, \"head_max_len\": 1.5}", "TypeError: slice indices must be integers or None or have an __index__ method", null },
-        { "{\"max_len\": 1.5, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'float' and 'str'" },
-        { "{\"max_len\": 1.5, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'float' and 'NoneType'" },
-        { "{\"max_len\": 1.5, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'float' and 'list'" },
-        { "{\"max_len\": 1.5, \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'float' and 'dict'" },
-        { "{\"max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
-        { "{\"max_len\": \"x\", \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
-        { "{\"max_len\": \"x\", \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'str' and 'bool'" },
-        { "{\"max_len\": \"x\", \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'str' and 'float'" },
-        { "{\"max_len\": \"x\", \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'str' and 'str'" },
-        { "{\"max_len\": \"x\", \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'str' and 'NoneType'" },
-        { "{\"max_len\": \"x\", \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'str' and 'list'" },
-        { "{\"max_len\": \"x\", \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'str' and 'dict'" },
-        { "{\"max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
-        { "{\"max_len\": null, \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
-        { "{\"max_len\": null, \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'bool'" },
-        { "{\"max_len\": null, \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'float'" },
-        { "{\"max_len\": null, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'str'" },
-        { "{\"max_len\": null, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'NoneType'" },
-        { "{\"max_len\": null, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'list'" },
-        { "{\"max_len\": null, \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'dict'" },
-        { "{\"max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
-        { "{\"max_len\": [1], \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
-        { "{\"max_len\": [1], \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'list' and 'bool'" },
-        { "{\"max_len\": [1], \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'list' and 'float'" },
-        { "{\"max_len\": [1], \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'list' and 'str'" },
-        { "{\"max_len\": [1], \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'list' and 'NoneType'" },
-        { "{\"max_len\": [1], \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'list' and 'list'" },
-        { "{\"max_len\": [1], \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'list' and 'dict'" },
-        { "{\"max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
-        { "{\"max_len\": {}, \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
-        { "{\"max_len\": {}, \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'dict' and 'bool'" },
-        { "{\"max_len\": {}, \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'dict' and 'float'" },
-        { "{\"max_len\": {}, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'", "TypeError: unsupported operand type(s) for -: 'dict' and 'str'" },
-        { "{\"max_len\": {}, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'", "TypeError: unsupported operand type(s) for -: 'dict' and 'NoneType'" },
-        { "{\"max_len\": {}, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'", "TypeError: unsupported operand type(s) for -: 'dict' and 'list'" },
-        { "{\"max_len\": {}, \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'", "TypeError: unsupported operand type(s) for -: 'dict' and 'dict'" },
+        { "{}", null },
+        { "{\"head_max_len\": 512}", null },
+        { "{\"head_max_len\": true}", null },
+        { "{\"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": 512}", null },
+        { "{\"max_len\": 512, \"head_max_len\": 512}", null },
+        { "{\"max_len\": 512, \"head_max_len\": true}", null },
+        { "{\"max_len\": 512, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": 512, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": 512, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": 512, \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": true}", null },
+        { "{\"max_len\": true, \"head_max_len\": 512}", null },
+        { "{\"max_len\": true, \"head_max_len\": true}", null },
+        { "{\"max_len\": true, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": true, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": true, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": true, \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": 1.5}", "TypeError: slice indices must be integers or None or have an __index__ method" },
+        { "{\"max_len\": 1.5, \"head_max_len\": 512}", "TypeError: slice indices must be integers or None or have an __index__ method" },
+        { "{\"max_len\": 1.5, \"head_max_len\": true}", "TypeError: slice indices must be integers or None or have an __index__ method" },
+        { "{\"max_len\": 1.5, \"head_max_len\": 1.5}", "TypeError: slice indices must be integers or None or have an __index__ method" },
+        { "{\"max_len\": 1.5, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": 1.5, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": 1.5, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": 1.5, \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": \"x\", \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": \"x\", \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": \"x\", \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": \"x\", \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": \"x\", \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": \"x\", \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": \"x\", \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": null, \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": null, \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": null, \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": null, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": null, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": null, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": null, \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": [1], \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": [1], \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": [1], \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": [1], \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": [1], \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": [1], \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": [1], \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": {}, \"head_max_len\": 512}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": {}, \"head_max_len\": true}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": {}, \"head_max_len\": 1.5}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
+        { "{\"max_len\": {}, \"head_max_len\": \"x\"}", "TypeError: unsupported operand type(s) for -: 'str' and 'int'" },
+        { "{\"max_len\": {}, \"head_max_len\": null}", "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'" },
+        { "{\"max_len\": {}, \"head_max_len\": [1]}", "TypeError: unsupported operand type(s) for -: 'list' and 'int'" },
+        { "{\"max_len\": {}, \"head_max_len\": {}}", "TypeError: unsupported operand type(s) for -: 'dict' and 'int'" },
     };
 
     [Theory]
     [MemberData(nameof(Lengths))]
-    public void WrongTypedLengthsFailAtPredictionLikePython(string json, string? withQuestions, string? noQuestions)
+    public void WrongTypedLengthsAreRefusedAtLoadWithPythonsTypeError(string json, string? error)
     {
-        var config = LayaConfig.Parse(json);   // Python loads these; the first prediction fails
-        Check(config, true, withQuestions);
-        Check(config, false, noQuestions);
+        if (error is null) { LayaConfig.Parse(json); return; }
+        Assert.Equal(error, Assert.Throws<InvalidDataException>(() => LayaConfig.Parse(json)).Message);
     }
 
-    private static void Check(LayaConfig config, bool withQuestions, string? expected)
-    {
-        if (expected is null) { config.ThrowIfLengthDeferred(withQuestions); return; }
-        Assert.Equal(expected, Assert.Throws<InvalidOperationException>(() => config.ThrowIfLengthDeferred(withQuestions)).Message);
-    }
-
-    // Python scans a prediction without questions against the float window `max(64, max_len - head_max_len - 8)`:
-    // a state of at most that many tokens reads in one pass, a longer one fails with the slice TypeError.
     [Theory]
-    [InlineData("{\"max_len\": 1.5, \"head_max_len\": 512}", 64.0)]
-    [InlineData("{\"max_len\": 1000.5, \"head_max_len\": 192}", 800.5)]
-    [InlineData("{\"max_len\": 700.25, \"head_max_len\": 100.5}", 591.75)]
-    [InlineData("{\"max_len\": true, \"head_max_len\": 1.5}", 64.0)]
-    [InlineData("{\"max_len\": 512, \"head_max_len\": 300.5}", 203.5)]
-    [InlineData("{\"max_len\": 900.5, \"head_max_len\": true}", 891.5)]
-    [InlineData("{\"max_len\": 64.0, \"head_max_len\": 0}", 64.0)]
-    public void AFloatOnlyWrongLengthLeavesAFloatWindow(string json, double window)
+    [InlineData("{\"max_len\": -1}", "max_len=-1 is negative: Python slices from the end for it, which this port does not support")]
+    [InlineData("{\"head_max_len\": -192}", "head_max_len=-192 is negative: Python slices from the end for it, which this port does not support")]
+    [InlineData("{\"max_len\": -99999999999999999999999}", "max_len=-99999999999999999999999 is negative: Python slices from the end for it, which this port does not support")]
+    public void NegativeLengthsAreRefusedAtLoad(string json, string error) =>
+        Assert.Equal(error, Assert.Throws<InvalidDataException>(() => LayaConfig.Parse(json)).Message);
+
+    [Theory]
+    [InlineData("{\"max_len\": 0, \"head_max_len\": 0}", 0, 0)]
+    [InlineData("{\"max_len\": true, \"head_max_len\": false}", 1, 0)]
+    [InlineData("{\"max_len\": 1024, \"head_max_len\": 256}", 1024, 256)]
+    [InlineData("{}", 512, 192)]
+    [InlineData("{\"max_len\": 99999999999999999999}", int.MaxValue, 192)]
+    public void NonNegativeIntsAndBoolsAreAccepted(string json, int maxLen, int headMaxLen)
     {
         var config = LayaConfig.Parse(json);
-        config.ThrowIfLengthDeferred(withQuestions: false);
-        config.ThrowIfStateExceedsDeferredWindow((int)Math.Floor(window));
-        Assert.Throws<InvalidOperationException>(() => config.ThrowIfStateExceedsDeferredWindow((int)Math.Floor(window) + 1));
+        Assert.Equal((maxLen, headMaxLen), (config.MaxLen, config.HeadMaxLen));
     }
 
     // Python evaluates `temperature[qt]` as the default of the by-options lookup, so a short list fails for that question

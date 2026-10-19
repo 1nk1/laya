@@ -552,11 +552,15 @@ public sealed class WarnOnceTests
         Assert.Single(messages);
     }
 
+    // One un-optimized call site shared by every thread: a jitted-and-re-jitted lambda may report a different IL offset.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining | System.Runtime.CompilerServices.MethodImplOptions.NoOptimization)]
+    private static void LoadFromOneSite() => LayaConfig.Parse(Config);
+
     [Fact]
     public void ConcurrentLoadsWarnOnce()
     {
         WarnOnce.Reset();
-        var messages = Capturing(() => Parallel.For(0, 32, _ => LayaConfig.Parse(Config)), "temperature[0]=0.2 ", anyThread: true);
+        var messages = Capturing(() => Parallel.For(0, 32, _ => LoadFromOneSite()), "temperature[0]=0.2 ", anyThread: true);
         Assert.Single(messages);
     }
 

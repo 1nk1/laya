@@ -60,7 +60,9 @@ goldens: 0.4.12).
   does (a string yields its characters, a dict its keys, a number or null raises `TypeError`), `temperature_by_options`
   must be a mapping (`AttributeError`), `option_layout` other than `sequential` is refused, a `temperature` list shorter
   than three fails at the first prediction that needs the missing entry (`IndexError`), and a wrong-typed `max_len` /
-  `head_max_len` loads and fails at the first prediction with Python's `TypeError`. `str.lower()` is exact (final sigma,
+  `head_max_len` is refused when the config is loaded, with the `TypeError` text Python raises at the first prediction
+  (a float, string, null, list or object; a negative integer is refused with its own message); integers `>= 0` and
+  booleans are accepted. See "Differences from Python" in the README. `str.lower()` is exact (final sigma,
   U+0130), only lists and tuples are walked for text (a set holds none and is not JSON serializable), and any
   `IReadOnlyDictionary` is walked as a mapping.
 - Case-insensitive email matching also treats the long s with `s` and the Kelvin sign with `k`, as `re.I` does.

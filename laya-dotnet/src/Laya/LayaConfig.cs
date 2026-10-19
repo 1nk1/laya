@@ -11,10 +11,8 @@ public sealed class LayaConfig
 {
     private LayaConfig(string? encoder, int maxLen, int headMaxLen,
                        IReadOnlyList<object?> temperatureValues,
-                       IReadOnlyDictionary<string, object?> temperatureByOptionsValues,
-                       DeferredLengthError? deferredLength)
+                       IReadOnlyDictionary<string, object?> temperatureByOptionsValues)
     {
-        DeferredLength = deferredLength;
         TemperatureRawValues = temperatureValues;
         TemperatureByOptionsRawValues = temperatureByOptionsValues;
         var temperatureRaw = temperatureValues.Select(AsDouble).ToList();
@@ -143,14 +141,13 @@ public sealed class LayaConfig
         }
         ThrowIfOverflow(byOptions.Values);
 
+        var lengths = Lengths(root);
         return new LayaConfig(
             root.TryGetValue("encoder", out var enc) && enc is string encoder ? encoder : null,
-            Length(root, "max_len", 512),
-            Length(root, "head_max_len", 192),
+            lengths.MaxLen,
+            lengths.HeadMaxLen,
             temperature,
-            byOptions,
-            DeferredLengthError.For(root.TryGetValue("max_len", out var maxRaw) ? maxRaw : 512L,
-                                    root.TryGetValue("head_max_len", out var headRaw) ? headRaw : 192L));
+            byOptions);
     }
 
     // `for t in raw`: a list's items, a string's characters (code points), a dict's keys.
@@ -184,76 +181,37 @@ public sealed class LayaConfig
             throw new InvalidDataException("OverflowError: int too large to convert to float");
     }
 
-    // `cfg.get(key, fallback)` for max_len / head_max_len. Python keeps whatever the JSON held and only fails when a
-    // prediction does arithmetic or slicing with it, so a wrong type is recorded (kind) and raised then, not here;
-    // `true` / `false` are the ints 1 / 0. A negative integer slices from the end in Python, which this port does not
-    // support, so it is refused at load.
-    private static int Length(IReadOnlyDictionary<string, object?> root, string key, int fallback)
+    // `cfg.get("max_len", 512)` and `cfg.get("head_max_len", 192)`. Python keeps whatever the JSON held and fails at
+    // the first prediction that does arithmetic or slicing with it; this port refuses a value it cannot use when the
+    // config is loaded, with the TypeError Python raises at that prediction (build_sequence meets head_max_len first,
+    // then max_len). An int >= 0 or a bool (true is 1, false is 0, as in Python) is accepted. Anything else is refused:
+    // a float, string, null, list or dict, and a negative int (Python slices from the end for it, which this port
+    // does not support).
+    private static (int MaxLen, int HeadMaxLen) Lengths(IReadOnlyDictionary<string, object?> root)
     {
-        if (!root.TryGetValue(key, out var v)) return fallback;
-        switch (v)
-        {
-            case bool b: return b ? 1 : 0;
-            case long l when l < 0: throw NegativeLength(key, l.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            case long l: return (int)Math.Min(l, int.MaxValue);
-            case System.Numerics.BigInteger big when big.Sign < 0: throw NegativeLength(key, big.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            case System.Numerics.BigInteger: return int.MaxValue;
-            default: return fallback;   // float, str, null, list, dict: DeferredLengthError raises at prediction
-        }
+        var maxLen = root.TryGetValue("max_len", out var maxRaw) ? maxRaw : 512L;
+        var headMaxLen = root.TryGetValue("head_max_len", out var headRaw) ? headRaw : 192L;
+        var left = PythonFloat.TypeName(maxLen);
+        var right = PythonFloat.TypeName(headMaxLen);
+        const string SliceError = "TypeError: slice indices must be integers or None or have an __index__ method";
+        string Operand(string kind) => $"TypeError: unsupported operand type(s) for -: '{kind}' and 'int'";
+        var leftBad = left is not ("int" or "bool");
+        var rightBad = right is not ("int" or "bool");
+        if (rightBad && right != "float") throw new InvalidDataException(Operand(right));
+        if (leftBad) throw new InvalidDataException(left == "float" ? SliceError : Operand(left));
+        if (rightBad) throw new InvalidDataException(SliceError);
+        return (Length("max_len", maxLen), Length("head_max_len", headMaxLen));
     }
+
+    private static int Length(string key, object? v) => v switch
+    {
+        bool b => b ? 1 : 0,
+        long l when l < 0 => throw NegativeLength(key, l.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        long l => (int)Math.Min(l, int.MaxValue),
+        System.Numerics.BigInteger big when big.Sign < 0 => throw NegativeLength(key, big.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        _ => int.MaxValue,   // an integer beyond 64 bits
+    };
 
     private static InvalidDataException NegativeLength(string key, string literal) =>
         new($"{key}={literal} is negative: Python slices from the end for it, which this port does not support");
-
-    /// <summary>
-    /// A <c>max_len</c> / <c>head_max_len</c> of the wrong JSON type: loading succeeds and the first prediction raises
-    /// Python's <c>TypeError</c>.
-    /// </summary>
-    internal sealed record DeferredLengthError(string WithQuestions, string? NoQuestions, double? NoQuestionsWindow)
-    {
-        internal static DeferredLengthError? For(object? maxLen, object? headMaxLen)
-        {
-            var left = PythonFloat.TypeName(maxLen);
-            var right = PythonFloat.TypeName(headMaxLen);
-            var leftBad = left is not ("int" or "bool");
-            var rightBad = right is not ("int" or "bool");
-            if (!leftBad && !rightBad) return null;
-            // build_sequence meets head_max_len first (build_head), then max_len. A non-numeric head fails the subtraction
-            // at once; a float head normally fails the slice of the head tokens (which a very small float survives: not
-            // ported); then a max_len that is not an int fails its own subtraction or, for a float, the final slice.
-            const string SliceError = "TypeError: slice indices must be integers or None or have an __index__ method";
-            string Operand(string kind) => $"TypeError: unsupported operand type(s) for -: '{kind}' and 'int'";
-            var withQuestions = rightBad && right != "float" ? Operand(right)
-                : leftBad ? (left == "float" ? SliceError : Operand(left))
-                : SliceError;
-            // Without questions window_budget starts with `max_len - head_max_len`; a float on its own survives that.
-            static bool Numeric(string k) => k is "int" or "bool" or "float";
-            if (!(Numeric(left) && Numeric(right)))
-                return new DeferredLengthError(withQuestions, $"TypeError: unsupported operand type(s) for -: '{left}' and '{right}'", null);
-            // Only floats are wrong: window_budget runs, with `max(64, max_len - head_max_len - 8)` as a float window,
-            // and a state longer than that window fails later with the slice TypeError.
-            static double Number(object? v) => v switch { bool b => b ? 1 : 0, long l => l, System.Numerics.BigInteger big => (double)big, double d => d, _ => 0 };
-            return new DeferredLengthError(withQuestions, null, Math.Max(64.0, Number(maxLen) - Number(headMaxLen) - 8));
-        }
-    }
-
-    /// <summary>The wrong-typed length setting's <c>TypeError</c>, raised by a prediction as Python does.</summary>
-    internal void ThrowIfLengthDeferred(bool withQuestions)
-    {
-        if (DeferredLength is not { } deferred) return;
-        var message = withQuestions ? deferred.WithQuestions : deferred.NoQuestions;
-        if (message is not null) throw new InvalidOperationException(message);
-    }
-
-    /// <summary>
-    /// For a prediction without questions under float-only wrong lengths: a state of more tokens than the float window
-    /// Python scans with fails the slice <c>TypeError</c>, a shorter one reads in one pass.
-    /// </summary>
-    internal void ThrowIfStateExceedsDeferredWindow(int stateTokens)
-    {
-        if (DeferredLength is { NoQuestionsWindow: { } window } deferred && stateTokens > window)
-            throw new InvalidOperationException(deferred.WithQuestions);
-    }
-
-    internal DeferredLengthError? DeferredLength { get; }
 }

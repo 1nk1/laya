@@ -951,6 +951,23 @@ disclaimer, signature and reply-header rules, including Portuguese, Spanish and 
   `truncated_questions` are exposed for `PredictLong` only; ordinary `Predict` still reports
   just input/output tokens.
 
+## Differences from Python
+
+Where this SDK deliberately does not match the Python reference, so nobody has to find out from a failing load:
+
+- **`max_len` and `head_max_len` are checked when the config is loaded.** An integer `>= 0` or a boolean (`true` is 1,
+  `false` is 0, as in Python) is accepted. Any other value is refused by `LayaConfig.Parse` / `LayaEngine.Create` with
+  an `InvalidDataException`: a float, string, `null`, list or object gets the `TypeError` text Python raises at the first
+  prediction (head first, then `max_len`), and a negative integer gets a message naming the field and value, because
+  Python then slices from the end, which this port does not support. Python loads such a checkpoint and fails later. The
+  related corner: a *fractional* `head_max_len` that Python happens to survive (a very small float) is refused here too.
+- **JSON nesting.** Config and tokenizer JSON is read like `json.loads`, with the nesting cut-off set to 2,997 levels,
+  what CPython 3.12 measured from a shallow call. Python's real limit depends on the call depth at the point of loading.
+- **Config files are decoded as strict UTF-8.** Python opens them with the locale's encoding (cp1252 on a default Windows
+  install), which only differs for non-ASCII bytes; a BOM is rejected, as `json.loads` does.
+- **A `temperature` list shorter than three** loads, and fails with `IndexError: list index out of range` at the first
+  prediction that needs the missing entry, as Python does.
+
 ---
 
 ## License
