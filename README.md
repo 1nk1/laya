@@ -1628,6 +1628,7 @@ failure; it does not establish calibrated confidence.
 
 ```python
 import laya
+from sentence_transformers import SentenceTransformer  # any local bi-encoder; not a Laya dependency
 
 questions = {
     "intent": {
@@ -1640,11 +1641,14 @@ questions = {
         },
     }
 }
+encoder = SentenceTransformer("BAAI/bge-small-en-v1.5")
+embed_fn = laya.cached_embed_fn(lambda texts: encoder.encode(list(texts), normalize_embeddings=True))
+
 result = laya.predict_shortlist(
     agent,
     {"text": "I was charged twice for a transfer"},
     questions,
-    embed_fn=laya.embed_fn_from_agent(agent),  # or any callable: texts -> (n, dim)
+    embed_fn=embed_fn,  # any callable: texts -> (n, dim); see below before using embed_fn_from_agent
     k=20,
 )
 result["shortlist"]["intent"]["labels"]  # the top 20 labels sent to the model
@@ -1654,7 +1658,26 @@ result["shortlist"]["intent"]["labels"]  # the top 20 labels sent to the model
 
 Shortlisting the same option set on every request re-embeds option texts that do not change. Wrap the embedder once with `laya.cached_embed_fn(embed_fn)` and repeat calls embed only the new query text: lookups are exact string matches into an LRU of at most 4,096 entries (about `maxsize * dim * 4` bytes, so ~12 MB at the default with a 768-dim encoder), and texts missing from the cache are still embedded in one batched call. The wrapper's `cache_info()` reports hits and misses; call `cache_clear()` if the model behind `embed_fn` changes.
 
-[Issue #102](https://github.com/NandhaKishorM/laya/issues/102) reports that a top-20 zero-shot shortlist moved a BANKING77 run from 54.3% to 60.8% on the reporter's setup. Those figures are the reporter's; this repository has not remeasured them.
+**The embedder decides whether the shortlist helps, and so does what it embeds.** On #950's 500 test rows per dataset ([`research/benchmarks/tournament`](https://github.com/NandhaKishorM/laya/blob/main/research/benchmarks/tournament/README.md)'s seed-0 sample, its question, `k=20`, the English checkpoint, Apple MPS; Laya 0.4.6 and 0.4.11 gave the same result on every row), accuracy with recall@20 in brackets:
+
+| shortlist, then one `predict` | BANKING77 | CLINC150 | MASSIVE |
+|---|---|---|---|
+| no shortlist, one question | 0.416 | 0.604 | 0.542 |
+| `embed_fn_from_agent`, through `predict_shortlist` | 0.224 (0.296) | 0.188 (0.198) | 0.184 (0.278) |
+| `bge-small-en-v1.5`, through `predict_shortlist` | 0.630 (0.926) | 0.768 (0.816) | 0.578 (0.892) |
+| `bge-small-en-v1.5`, the message alone | 0.630 (0.980) | **0.872** (0.956) | **0.652** (0.944) |
+
+`predict_shortlist` embeds the question's `instructions` plus the JSON state as the query. To embed only the user's text, rank with `shortlist_choice` (a string state is embedded as it is) and ask about the labels it keeps:
+
+```python
+text = "I was charged twice for a transfer"
+criteria = questions["intent"]["criteria"]
+kept = laya.shortlist_choice(text, criteria, embed_fn, k=20)
+question = dict(questions["intent"], criteria={label: criteria[label] for label in kept})
+answer = agent.predict({"text": text}, {"intent": question})["answers"]["intent"]
+```
+
+Embedding the message alone gave the highest or tied-highest recall@20 for both bi-encoders tried (`bge-small-en-v1.5` and `all-MiniLM-L6-v2`) on all three sets. With `bge-small-en-v1.5` it lifted accuracy by 0.104 on CLINC150 and 0.074 on MASSIVE (paired exact McNemar p < 0.001) and left BANKING77 level, where the JSON state without the instructions did 0.032 better (p = 0.011). `embed_fn_from_agent` stays below one question even on the message alone (0.304 / 0.284 / 0.302). Where no second model can be loaded, `predict_tournament` (item 4 above) scored 0.584 / 0.894 / 0.590 on the same rows. Per-row results and the script: [zhlei07/open-system-one@4cb01b1 `out/laya102/`](https://github.com/zhlei07/open-system-one/tree/4cb01b1/out/laya102) ([#102](https://github.com/NandhaKishorM/laya/issues/102)).
 
 * Ordinal `score` questions are the weakest primitive (SST-5 0.372).
 * **`noul` can follow its option labels instead of the state, most strongly on `laya` (English).** `noul` renders its two options as `false:` / `true:` by default, and on the English checkpoint that label pair can dominate the answer, returning a confident "no" for clearly positive input (#156). Until a retrained checkpoint lands, check `noul` answers on your own data. You can override the model-facing pair while keeping the `noul` result as P(true):
