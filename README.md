@@ -94,29 +94,28 @@ The shipped checkpoints work zero-shot, but fine-tuning on decisions from your o
 
 **[nandhakishorm.github.io/laya](https://nandhakishorm.github.io/laya/)**: guides for [prediction hooks](https://nandhakishorm.github.io/laya/hooks/), [schema-driven decisions](https://nandhakishorm.github.io/laya/structured/), [Docker](https://nandhakishorm.github.io/laya/docker/) and [LangChain and LangGraph](https://nandhakishorm.github.io/laya/langchain/), plus a full [API reference](https://nandhakishorm.github.io/laya/reference/).
 
-## What's new in 0.4.11
+## What's new in 0.4.12
 
-* **A Rust SDK.** `laya-rust` is an ONNX Runtime port of the Python SDK: typed questions, the
-  sequence builder and collator, calibration and typed answers, language detection, email
-  cleaning, the embedding shortlist and the checkpoint router, with 210 offline tests checked
-  against goldens generated from the Python implementation (#672, issue #674).
-* **The ONNX exporter proves its graph is batch-dynamic instead of asserting it.** Exporting now
-  runs the written graph at batches 1, 2 and 3 and compares each against PyTorch, so a graph that
-  silently specialised to one row fails the export rather than failing at inference. On this
-  machine the probabilities agree to 1.2e-06 (#688).
-* **Two new MCP tools and a batched TypeScript decide.** `laya_predict_long` scans a state past
-  the context window and reports which window decided, with token offsets (#738); `LayaToolSelector`
-  routes tools and functions for LangChain, CrewAI, LlamaIndex and plain agent loops (#977); and
-  `decideBatch` lands in the TypeScript SDK alongside `answerConfidence` (#750).
-* **`task` and `lang_guess` reach every framework wrapper.** The per-call control rules now live
-  in one module that the LangChain, CrewAI, LlamaIndex and Agno wrappers share, and a routing hint
-  passed to a runner that cannot read it is refused by name instead of dropped silently (#804, and
-  #970 adds the Agno integration behind `pip install laya[agno]`).
-* **An ONNX agent's calibration file can match its own checkpoint again.** `ONNXAgent` never stored
-  the identity `apply_calibration_payload` compares against, so every versioned calibration file
-  warned about a checkpoint mismatch, including for the checkpoint that agent had just loaded
-  (#731). The ONNX batch path also collates straight into NumPy now (#1271), and a `hooks_timeout`
-  of `True` is refused rather than read as 1.0 second (#1203).
+* **An opt-in reliability signal for `choice` answers.** `OptionStabilityHook` re-asks a question
+  with its options reordered and relabelled, scores every variant in the same forward pass, and
+  reports how often the answer survives. A clear request held at `stability=1.0` here; a vague one
+  answered `legal` at confidence 0.33 held at `0.17`, which is the case confidence alone does not
+  catch. `accept` and `escalate` are required arguments, not defaults, because the right cutoffs
+  depend on your option counts and on the calibration defect in #1245 (#908, issue #635). It costs
+  what the extra rows cost: on CPU, 1.98x for `variants="fast"` and 3.69x for `"full"`.
+* **`collate_items` builds its tensors once.** The shared batch collator filled torch tensors row
+  by row; it now fills NumPy arrays and wraps them, which is 4.8x faster on a 128-row batch
+  (1.207 ms to 0.250 ms) and produces identical decisions (#1279). The ONNX agent reuses question
+  tokenizations across states in `predict_batch` the way the PyTorch agent already did (#1278).
+* **`PredictLong` in the .NET SDK**, ported from `ONNXAgent.predict_long`, with golden fixtures
+  re-recorded from the Python package (#1283).
+* **The shortlist docs now say which embedder to use.** Measured on 500 rows per dataset,
+  `embed_fn_from_agent` scores *below* asking one plain question (0.224 against 0.416 on
+  BANKING77), while a dedicated bi-encoder reaches 0.630, and embedding the user's message alone
+  rather than the instructions plus the JSON state is better again on CLINC150 and MASSIVE (#1281,
+  issue #102).
+* **The logo was drawn semi-transparent** and is now solid ink, which is most visible on dark
+  backgrounds where the ring had been desaturating toward grey.
 
 Earlier releases are in the [GitHub releases](https://github.com/NandhaKishorM/laya/releases).
 
