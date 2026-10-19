@@ -114,6 +114,7 @@ SCRIPT_SUITES = [
 ]
 
 PYTEST_SUITES = [
+    "tests/test_lang_diagnostics.py",
     "tests/test_evals_agreement.py",
     "tests/test_evals_tournament.py",
     "tests/test_serve.py",
