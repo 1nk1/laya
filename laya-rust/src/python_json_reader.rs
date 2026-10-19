@@ -251,10 +251,13 @@ impl Reader<'_> {
     }
 
     /// Four hex digits starting at `self.pos`; `u_at` is the offset of the `u` for the error.
+    /// CPython's scanner needs at least one more character after the digits (`next + 4 < len`),
+    /// so a text ending right after `\u0041` has an invalid escape, not an unterminated string.
     fn hex4(&mut self, u_at: usize) -> Read<u32> {
         let digits = self
             .bytes
             .get(self.pos..self.pos + 4)
+            .filter(|_| self.pos + 4 < self.bytes.len())
             .and_then(|b| std::str::from_utf8(b).ok())
             .filter(|s| s.bytes().all(|b| b.is_ascii_hexdigit()));
         let Some(digits) = digits else {
@@ -296,18 +299,29 @@ impl Reader<'_> {
                         b'u' => {
                             let u_at = self.pos - 1;
                             let unit = self.hex4(u_at)?;
-                            let code =
-                                if (0xD800..0xDC00).contains(&unit) && self.starts_with("\\u") {
-                                    let second_u = self.pos + 1;
-                                    self.pos += 2;
-                                    let low = self.hex4(second_u)?;
-                                    if !(0xDC00..0xE000).contains(&low) {
-                                        return decode("Invalid \\uXXXX escape", second_u);
-                                    }
-                                    0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00)
-                                } else {
-                                    unit
-                                };
+                            let is_high = (0xD800..0xDC00).contains(&unit);
+                            // A pair needs room for one character after the second escape
+                            // (`end + 6 < len`); without it the high surrogate stands alone and the
+                            // second `\u` is scanned, and judged, as an escape of its own.
+                            if is_high
+                                && self.starts_with("\\u")
+                                && self.pos + 6 >= self.bytes.len()
+                            {
+                                let second_u = self.pos + 1;
+                                self.pos += 2;
+                                self.hex4(second_u)?;
+                            }
+                            let code = if is_high && self.starts_with("\\u") {
+                                let second_u = self.pos + 1;
+                                self.pos += 2;
+                                let low = self.hex4(second_u)?;
+                                if !(0xDC00..0xE000).contains(&low) {
+                                    return decode("Invalid \\uXXXX escape", second_u);
+                                }
+                                0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00)
+                            } else {
+                                unit
+                            };
                             match char::from_u32(code) {
                                 Some(ch) => out.push(ch),
                                 // A lone surrogate loads in Python; a Rust string cannot hold one.
@@ -448,5 +462,37 @@ mod tests {
             PyJson::Array(vec![PyJson::Str("\u{e9}\n\u{1d400}/".into())]),
             value
         );
+    }
+
+    // CPython wants one character after the four hex digits of a `\u` escape, and room for one
+    // after a surrogate pair's second escape; otherwise the escape is invalid at its `u`.
+    // Messages from Python 3.12's `json.loads`.
+    #[test]
+    fn unicode_escapes_at_the_end_of_the_text_report_like_cpython() {
+        let invalid = |chars: usize| {
+            format!(
+                "Invalid \\uXXXX escape: line 1 column {} (char {chars})",
+                chars + 1
+            )
+        };
+        let unterminated = "Unterminated string starting at: line 1 column 1 (char 0)".to_string();
+        let cases: [(&str, String); 10] = [
+            (r#""a\u"#, invalid(3)),
+            (r#""a\u004"#, invalid(3)),
+            (r#""a\u0041"#, invalid(3)),
+            (r#""a\u00411"#, unterminated.clone()),
+            (r#""\ud835\udc00"#, invalid(8)),
+            (r#""\ud835\udc00x"#, unterminated),
+            (r#""\ud835\udc0"#, invalid(8)),
+            (r#""\ud835\u00"#, invalid(8)),
+            (r#""\ud835"#, invalid(2)),
+            (r#"{"temperature": "A\u0041"#, invalid(19)),
+        ];
+        for (text, expected) in cases {
+            let error = PyJson::parse(text).unwrap_err();
+            assert_eq!(expected, error.to_string(), "{text}");
+        }
+        assert!(PyJson::parse(r#""\ud835\udc00x""#).is_ok());
+        assert!(PyJson::parse(r#""a\u0041""#).is_ok());
     }
 }
