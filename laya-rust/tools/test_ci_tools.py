@@ -115,8 +115,11 @@ class ExportCacheTests(unittest.TestCase):
             regen, "run"
         ) as run, patch.object(regen.shutil, "rmtree"):
             self.assertEqual(0, regen.main())
-        self.assertIn("dump_routing_golden.py", run.call_args.args[0][1])
-        self.assertIn("--force", run.call_args.args[0])
+        calls = [c.args[0] for c in run.call_args_list]
+        self.assertEqual(2, len(calls))
+        self.assertIn("dump_routing_golden.py", calls[0][1])
+        self.assertIn("--force", calls[0])
+        self.assertIn("dump_differential_golden.py", calls[1][1])
 
     def test_repr_regeneration_needs_no_models(self):
         with patch("sys.argv", ["regen", "--checkpoint", "repr"]), patch.object(
