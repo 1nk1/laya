@@ -124,11 +124,11 @@ public static class PythonJson
 
     /// <summary>
     /// Whether <paramref name="value"/> is the .NET analogue of Python's <c>isinstance(state,
-    /// list)</c>: any non-string, non-dict-like enumerable. There is no exact "list vs. tuple"
-    /// distinction on this side, so anything <see cref="Dumps"/> would render as a JSON array
-    /// counts, matching how <c>serialize_state</c> already treats the value.
+    /// list)</c>, which decides left truncation: an array or an <see cref="IList"/> that is not
+    /// dictionary-like. A tuple (<c>ITuple</c>) is still rendered as a JSON array but is not a list,
+    /// so it is truncated from the right, as Python truncates a tuple.
     /// </summary>
-    public static bool IsListState(object? value) => IsListLike(value);
+    public static bool IsListState(object? value) => value is IList && !IsDictLike(value);
 
     private static void WriteValue(
         StringBuilder sb, object? value,

@@ -1475,6 +1475,48 @@
       "body": "Please help me.\nSent from my iPhone using KIT",
       "max_chars": 3000,
       "result": "Please help me."
+    },
+    {
+      "label": "pyre/astral_digit_quote_header",
+      "body": "Please help me.\nEm 𝟚𝟘𝟚𝟜 João escreveu:\n> old request\nStill mine.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/astral_digit_french_header",
+      "body": "Please help me.\nLe 𝟚 janvier a écrit :\n> old request",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/astral_digit_header_pair",
+      "body": "Please help me.\nFrom: Maria Souza\nDate: 𝟚𝟘𝟚𝟜\nOld request.",
+      "max_chars": 3000,
+      "result": "Please help me."
+    },
+    {
+      "label": "pyre/astral_digit_in_year_needs_four",
+      "body": "Please help me.\nFrom: Maria Souza\nDate: 𝟚𝟘𝟚\nOld request.",
+      "max_chars": 3000,
+      "result": "Please help me.\nFrom: Maria Souza\nDate: 𝟚𝟘𝟚\nOld request."
+    },
+    {
+      "label": "pyre/astral_number_not_digit_header",
+      "body": "Please help me.\nEm 𐄇 João escreveu:\n> old request\nStill mine.",
+      "max_chars": 3000,
+      "result": "Please help me.\nEm 𐄇 João escreveu:\nStill mine."
+    },
+    {
+      "label": "pyre/astral_letter_not_digit_header",
+      "body": "Please help me.\nEm 𝐀 João escreveu:\n> old request\nStill mine.",
+      "max_chars": 3000,
+      "result": "Please help me.\nEm 𝐀 João escreveu:\nStill mine."
+    },
+    {
+      "label": "pyre/astral_digit_device_footer",
+      "body": "Please help me.\nSent from my iPhone 𝟚",
+      "max_chars": 3000,
+      "result": "Please help me."
     }
   ],
   "state": [

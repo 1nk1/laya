@@ -65,6 +65,17 @@ goldens: 0.4.12).
   booleans are accepted. See "Differences from Python" in the README. `str.lower()` is exact (final sigma,
   U+0130), only lists and tuples are walked for text (a set holds none and is not JSON serializable), and any
   `IReadOnlyDictionary` is walked as a mapping.
+- **Behaviour change for callers passing lazy sequences as a state:** only an `IList` (arrays, `List<T>`) or a tuple is
+  serialized as a JSON array and walked for language detection; a set, `Queue<T>`, LINQ iterator or any other
+  non-list enumerable now throws `JsonException` when serialized (and holds no text for detection), as Python's
+  `json.dumps` rejects a set or generator. Pass `ToList()` / `ToArray()`. A tuple is no longer left-truncated when
+  over budget (Python truncates from the left only for a `list`).
+- `Calibration.ClampTemperature(object?)` and `TemperatureRejected` accept every boxed numeric type (`int`, `short`,
+  `byte`, `sbyte`, `ushort`, `uint`, `ulong`, `float`, `decimal`, `Half`, `nint`, `BigInteger`, `Int128`), converted as
+  Python's `float()` rounds.
+- Email patterns see astral decimal digits (Unicode Nd, such as the mathematical double-struck digits) as digits, so a
+  reply header whose date is written with them is recognised as in Python, while astral numbers that are not decimal
+  digits stay word characters only.
 - Case-insensitive email matching also treats the long s with `s` and the Kelvin sign with `k`, as `re.I` does.
 - Email patterns count and bound code points, not UTF-16 units, so characters outside the BMP next to a
   keyword or inside a `.{0,300}` window behave as in Python.

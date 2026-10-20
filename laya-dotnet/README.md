@@ -255,7 +255,8 @@ its position. `Add` throws instead.
 |---|---|
 | `string` | used as written |
 | `IDictionary`, `IEnumerable<KeyValuePair<string, object?>>` | a JSON object, in the dictionary's enumeration order |
-| any other `IEnumerable` (arrays, lists, conversation turns) | a JSON array |
+| `IList` (arrays, `List<T>`, conversation turns) and tuples (`ValueTuple`, `Tuple`) | a JSON array; only an `IList` is left-truncated when over budget, as Python truncates a `list` (a tuple keeps its start) |
+| a set, a `Queue<T>`, a LINQ iterator or any other non-list enumerable | **not accepted**: serializing it throws `JsonException`, as Python's `json.dumps` rejects a set or a generator. Pass `ToList()` / `ToArray()` |
 | `null`, `bool`, integer types, `BigInteger`, `double`, `float`, `decimal` | the JSON scalar |
 
 Serialization matches Python's `json.dumps` byte for byte (`", "` / `": "` separators, float

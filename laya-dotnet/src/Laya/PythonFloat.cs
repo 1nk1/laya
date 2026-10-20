@@ -64,9 +64,19 @@ internal static partial class PythonFloat
         {
             case bool b: value = b ? 1.0 : 0.0; return true;
             case double d: value = d; return true;
-            case long l: value = l; return true;
-            case BigInteger big: value = (double)big; return true;
             case string s: return TryParse(s, out value);
+            // Any number float() accepts. An integer rounds to nearest, ties to even, as Python's int -> float does;
+            // double.Parse reads the exact decimal text and rounds the same way, which a cast from decimal or from
+            // the 64-bit unsigned types does not promise.
+            case nint n: value = n; return true;
+            case long or int or short or sbyte or byte or ushort or uint:
+                value = Convert.ToInt64(raw, CultureInfo.InvariantCulture);
+                return true;
+            case ulong or nuint or BigInteger or decimal or Int128 or UInt128:
+                value = double.Parse(Convert.ToString(raw, CultureInfo.InvariantCulture)!, NumberStyles.Float, CultureInfo.InvariantCulture);
+                return true;
+            case float f: value = f; return true;
+            case Half h: value = (double)h; return true;
             default: value = 0; return false;
         }
     }

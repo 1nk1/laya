@@ -928,6 +928,21 @@ EMAIL_CLEAN_CASES = [
     ("pyre/ignorecase_long_s_pt_signoff", "Preciso de ajuda.\nſaludoſ cordiales,\nMaria", 3000),
     ("pyre/ignorecase_kelvin_sign_signoff", "Please help me.\nThanK you,\nJohn", 3000),
     ("pyre/ignorecase_kelvin_sign_device_footer", "Please help me.\nSent from my iPhone using KIT", 3000),
+    # astral decimal digits: Python's Unicode `\d` (Nd) matches them; a number that is not a decimal digit (No) is `\w` only
+    ("pyre/astral_digit_quote_header",
+     "Please help me.\nEm \U0001d7da\U0001d7d8\U0001d7da\U0001d7dc João escreveu:\n> old request\nStill mine.", 3000),
+    ("pyre/astral_digit_french_header",
+     "Please help me.\nLe \U0001d7da janvier a écrit :\n> old request", 3000),
+    ("pyre/astral_digit_header_pair",
+     "Please help me.\nFrom: Maria Souza\nDate: \U0001d7da\U0001d7d8\U0001d7da\U0001d7dc\nOld request.", 3000),
+    ("pyre/astral_digit_in_year_needs_four",
+     "Please help me.\nFrom: Maria Souza\nDate: \U0001d7da\U0001d7d8\U0001d7da\nOld request.", 3000),
+    ("pyre/astral_number_not_digit_header",
+     "Please help me.\nEm \U00010107 João escreveu:\n> old request\nStill mine.", 3000),
+    ("pyre/astral_letter_not_digit_header",
+     "Please help me.\nEm \U0001d400 João escreveu:\n> old request\nStill mine.", 3000),
+    ("pyre/astral_digit_device_footer",
+     "Please help me.\nSent from my iPhone \U0001d7da", 3000),
 ]
 
 EMAIL_STATE_CASES = [

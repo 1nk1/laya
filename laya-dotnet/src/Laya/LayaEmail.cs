@@ -97,14 +97,17 @@ public static partial class LayaEmail
     // Python's `re` works on code points; .NET's on UTF-16 units, where a character outside the BMP is
     // two units that `.`, `{0,n}` counts and `\b` would treat as two non-word characters. Every
     // pattern here is only asked "does it match", so each such character is first replaced by one BMP
-    // stand-in of the same word class (a letter or number by U+4E00, anything else by U+2603), which
-    // no pattern mentions.
+    // stand-in of the same classes: a decimal digit (Nd) by U+0663, which `\d` and `\w` accept and the explicit
+    // `[0-9]` classes do not, as for Python's Unicode `\d`; any other letter or number (`\w` but not `\d`) by U+4E00;
+    // anything else by U+2603. No pattern mentions any of them.
     private static string CodePoints(string s)
     {
         if (!s.Any(char.IsSurrogate)) return s;
         var sb = new StringBuilder(s.Length);
         foreach (var rune in s.EnumerateRunes())
-            sb.Append(rune.IsBmp ? rune.ToString() : Rune.IsLetter(rune) || Rune.IsNumber(rune) ? "一" : "☃");
+            sb.Append(rune.IsBmp ? rune.ToString()
+                : Rune.GetUnicodeCategory(rune) == System.Globalization.UnicodeCategory.DecimalDigitNumber ? "\u0663"
+                : Rune.IsLetter(rune) || Rune.IsNumber(rune) ? "\u4e00" : "\u2603");
         return sb.ToString();
     }
 
