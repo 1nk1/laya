@@ -181,11 +181,14 @@ impl SequenceBuilder {
         let option_len_sum =
             |opts: &[Vec<u32>]| -> i64 { opts.iter().map(|o| o.len() as i64).sum() };
 
-        let mut opt_budget = head_max_len as i64 - option_len_sum(&option_ids);
+        // A bound beyond i64 (Python accepts any int) is as good as i64::MAX here: nothing the
+        // head can hold comes near it, and a plain `as i64` would wrap it negative.
+        let head_bound = i64::try_from(head_max_len).unwrap_or(i64::MAX);
+        let mut opt_budget = head_bound - option_len_sum(&option_ids);
         let mut tokens_per_option = None;
         if opt_budget < 16 {
             let per = 4i64.max(Self::floor_div(
-                head_max_len as i64 - 16,
+                head_bound - 16,
                 1i64.max(option_ids.len() as i64),
             )) as usize;
             tokens_per_option = Some(per);
@@ -194,7 +197,7 @@ impl SequenceBuilder {
                     fragment.truncate(per);
                 }
             }
-            opt_budget = head_max_len as i64 - option_len_sum(&option_ids);
+            opt_budget = head_bound - option_len_sum(&option_ids);
         }
 
         let head_take = (Self::MIN_HEAD_TOKENS as i64).max(opt_budget) as usize;
@@ -202,7 +205,10 @@ impl SequenceBuilder {
             header_ids.truncate(head_take);
         }
 
-        let mut ids: Vec<u32> = Vec::with_capacity(head_max_len + 2);
+        // Sized from what is appended (CLS, header, SEP, the option fragments, SEP), never from
+        // the configured bound, which can be any size.
+        let appended = header_ids.len() + option_ids.iter().map(Vec::len).sum::<usize>() + 3;
+        let mut ids: Vec<u32> = Vec::with_capacity(appended);
         ids.push(special.cls_id);
         ids.extend_from_slice(&header_ids);
         ids.push(special.sep_id);
@@ -240,7 +246,7 @@ impl SequenceBuilder {
     ) -> Result<usize> {
         let head = Self::build_head(tokenizer, question, head_max_len)?;
         // -1 reserves the SEP that closes the state.
-        Ok((max_len as i64 - head.ids.len() as i64 - 1).max(0) as usize)
+        Ok(max_len.saturating_sub(head.ids.len() + 1))
     }
 
     /// The state's token ids exactly as `build_with_stats` slices them: serialized, mask token
@@ -267,7 +273,7 @@ impl SequenceBuilder {
         } = Self::build_head(tokenizer, question, head_max_len)?;
 
         // -1 reserves the final SEP that closes the whole sequence, appended below.
-        let room = (max_len as i64 - ids.len() as i64 - 1).max(0) as usize;
+        let room = max_len.saturating_sub(ids.len() + 1);
         let state_text = Self::scrub(&PythonJson::state(state), mask_token);
         let state_ids = tokenizer.encode(&state_text)?;
         let sliced: &[u32] = if truncate_left {

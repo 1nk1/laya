@@ -143,7 +143,7 @@ pub(crate) fn plan_budget_warned(
                     these questions leave inside max_len={max_len}, so every window would be \
                     truncated to {room} on the way to the model; scanning with window={room} instead"
             ));
-        } else if requested >= room * WINDOW_CLAMP_WARN_RATIO {
+        } else if requested >= room.saturating_mul(WINDOW_CLAMP_WARN_RATIO) {
             warnings.push(format!(
                 "laya: predict_long: these questions leave only {room} of max_len={max_len} for \
                     the state (their heads take the rest), so the scan window is capped {requested} \

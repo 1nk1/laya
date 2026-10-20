@@ -298,3 +298,23 @@ fn passes_string_instructions_through_untouched() {
         SequenceBuilder::render_instructions(&q)
     );
 }
+
+// Python accepts any int for `max_len` / `head_max_len` (slicing by a huge int is fine) and builds
+// the same sequence as with the usual bounds when nothing is truncated (checked with
+// `common.build_sequence` for 2**61, 2**63 - 1, 2**64 - 1 and 10**30). The buffer must not be
+// sized from the bound: 2**61 + 2 elements of u32 is a capacity overflow, and `usize::MAX + 2`
+// overflows outright.
+#[test]
+fn a_huge_head_or_sequence_bound_builds_the_same_sequence_without_panicking() {
+    let tok = StubTokenizer::new();
+    let q = Question::choice("pick one", [("a", Value::Null), ("b", Value::Null)]).unwrap();
+    let state = json!("state text");
+    let base = SequenceBuilder::build(&tok, &state, &q, 512, 192, false).unwrap();
+    for huge in [1usize << 61, i64::MAX as usize, 1usize << 63, usize::MAX] {
+        for (max_len, head_max_len) in [(512, huge), (huge, 192), (huge, huge)] {
+            let built =
+                SequenceBuilder::build(&tok, &state, &q, max_len, head_max_len, false).unwrap();
+            assert_eq!(base, built, "max_len={max_len} head_max_len={head_max_len}");
+        }
+    }
+}
