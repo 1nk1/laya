@@ -484,10 +484,15 @@ def _answer_confidence(answer: Dict[str, Any]) -> Optional[float]:
     and the gap between them; `docs/evals.md` says so where an operator reads the metrics.
     """
     confidence = answer.get("answer_confidence")
-    if isinstance(confidence, (int, float)):
+    # `bool` is a subclass of `int`, so `isinstance(True, (int, float))` is true: a JSON
+    # `"answer_confidence": true` would be read as a confidence of 1.0 and mask the numeric
+    # `confidence` fallback below. A yes/no flag is not a probability, so it is skipped exactly
+    # like an absent or non-numeric field -- the same exclusion `confidence.py` and the schema
+    # guards apply to every other caller-supplied probability.
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
         return float(confidence)
     confidence = answer.get("confidence")
-    if isinstance(confidence, (int, float)):
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
         return float(confidence)
     if answer.get("type") == "noul":
         p = float(answer.get("noul", 0.0))
