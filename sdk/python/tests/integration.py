@@ -13,12 +13,77 @@ import time
 from laya_client import LayaAPIError, LayaClient, LayaConnectionError
 
 
+def check_batch(result, expected, strict=False):
+    assert len(result["results"]) == len(expected)
+    for item, direct in zip(result["results"], expected):
+        if strict:
+            fields = {"choice": ("type", "choice", "probabilities", "confidence"),
+                      "score": ("type", "score", "probabilities", "confidence", "legend"),
+                      "noul": ("type", "noul")}
+            projected = {
+                "model": direct["model"],
+                "answers": {qid: {k: answer[k] for k in fields[answer["type"]]}
+                            for qid, answer in direct["answers"].items()},
+                "usage": {k: direct["usage"][k] for k in ("input_tokens", "output_tokens")},
+            }
+            assert item == projected, (item, projected)
+        else:
+            assert item["model"] == direct["model"]
+            for qid, answer in direct["answers"].items():
+                for key, value in answer.items():
+                    assert item["answers"][qid][key] == value, (qid, key)
+            for key, value in direct["usage"].items():
+                assert item["usage"][key] == value, key
+            assert item["routing"] == direct["routing"]
+    for key in ("input_tokens", "output_tokens"):
+        assert result["total_usage"][key] == sum(item["usage"][key] for item in expected), key
+
+
+def check_batch_http(client, anonymous, fixture, strict, legacy):
+    questions = fixture["questions"]
+    if legacy:
+        # v0.4.7 has a batch endpoint. One-state passes give its unchanged fixture a parity oracle.
+        states = ["hello", fixture["state"], ["hello"]]
+        expected = [client.predict(state, questions, model="english") for state in states]
+        check_batch(client.predict_batch(states, questions, model="english", batch_size=1), expected)
+        check_batch(client.predict_batch(states[:1], questions, model="english"), expected[:1])
+    else:
+        for case in fixture["batch_cases"]:
+            result = client.predict_batch(case["states"], questions, model="english", **case["controls"])
+            check_batch(result, case["expected"], strict)
+        labels = {str(i): "Option %d" % i for i in range(5)}
+        large = {"large": {"type": "choice", "instructions": "Pick one", "criteria": labels}}
+        states = fixture["batch_cases"][0]["states"]
+        # Tournament execution is per state on the server, even when batch shape controls are set.
+        expected = [client.predict(state, large, model="english") for state in states]
+        check_batch(client.predict_batch(states, large, model="english",
+                                         batch_size=2, sort_by_length=True), expected, strict)
+
+    small = {"refund": questions["refund"]}
+    result = client.predict_batch(["hello"] * 64, small, model="english", batch_size=8)
+    assert len(result["results"]) == 64
+    for key in ("input_tokens", "output_tokens"):
+        assert result["total_usage"][key] == sum(item["usage"][key] for item in result["results"])
+    for caller, states, controls, status in (
+        (client, ["hello"] * 65, {}, 413),
+        (client, ["hello", "x" * 50_001], {}, 413),
+        (client, ["hello"], {"model": "unpublished/checkpoint"}, 422),
+        (anonymous, ["hello"], {}, 401),
+    ):
+        try:
+            caller.predict_batch(states, small, **controls)
+        except LayaAPIError as error:
+            assert error.status_code == status, (error.status_code, status, error.detail)
+        else:
+            raise AssertionError("Batch request should have failed with HTTP %d" % status)
+
+
 def run(server_python, fixture_path, strict=False, legacy=False):
     with tempfile.TemporaryDirectory(prefix="laya-sdk-live-") as directory:
         root = Path(directory)
         command = [str(server_python), "-u", str(fixture_path)]
         if not legacy:
-            command.append("--tournament")
+            command.extend(["--tournament", "--batch"])
             if strict:
                 command.append("--strict")
         env = dict(os.environ)
@@ -111,7 +176,8 @@ def run(server_python, fixture_path, strict=False, legacy=False):
                     assert error.status_code == 413
                 else:
                     raise AssertionError("Server request limit was bypassed")
-                print("PASS real HTTP inference, controls, auth and limits: "
+                check_batch_http(client, anonymous, fixture, strict, legacy)
+                print("PASS real HTTP single and batch inference, order, controls, auth and limits: "
                       + ("legacy fixture" if legacy else "strict" if strict else "extended/tournament"), flush=True)
             except BaseException:
                 stderr.flush()

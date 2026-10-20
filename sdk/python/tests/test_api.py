@@ -27,7 +27,19 @@ class APITests(unittest.TestCase):
             self.assertEqual(parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
             self.assertIsNone(parameters[name].default)
         self.assertEqual(list(inspect.signature(LayaClient.health).parameters), ["self", "timeout"])
-        self.assertFalse(hasattr(LayaClient, "predict_batch"))
+
+    def test_predict_batch_parameters(self):
+        from laya_client.types import BatchPrediction
+        signature = inspect.signature(LayaClient.predict_batch)
+        parameters = signature.parameters
+        self.assertEqual(list(parameters), ["self", "states", "questions", "model", "task", "lang",
+                                           "lang_guess", "max_len", "head_max_len", "min_confidence",
+                                           "batch_size", "sort_by_length", "timeout"])
+        for name in list(parameters)[3:]:
+            self.assertEqual(parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
+            self.assertIsNone(parameters[name].default)
+        self.assertIs(signature.return_annotation, BatchPrediction)
+        self.assertEqual(BatchPrediction.__required_keys__, {"results", "total_usage"})
 
     def test_constructor_defaults(self):
         parameters = inspect.signature(LayaClient).parameters
