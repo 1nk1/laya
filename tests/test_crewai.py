@@ -327,6 +327,54 @@ with patch("urllib.request.build_opener") as mock_build_opener:
     check("remote/auth", req.headers.get("Authorization"), "Bearer sk-crew-key")
 
 
+# --------------------------------------------------------------- 4b. Non-Object Remote Response
+#
+# A remote laya-serve body is arbitrary JSON: a gateway, a mis-pointed `base_url`, or a proxy error
+# page can answer with a top-level array, string, number or `true`/`null`. `json.loads` accepts each
+# of those and both consumers read the result with `res.get("answers", …)`, so before the guard a
+# non-object leaked `AttributeError: 'list' object has no attribute 'get'` past the fail-closed path
+# instead of the `RuntimeError` every other remote failure raises here. `_call_remote` and the public
+# `route()` are both driven so a regression at either layer is caught.
+from laya.integrations.crewai import _call_remote as _crewai_call_remote
+
+_CREWAI_NON_OBJECT_BODIES = [
+    ([], "list"),
+    ([{"answers": {"delegation": {"choice": "agent_1"}}}], "list-of-objects"),
+    ("unauthorized", "str"),
+    (None, "null"),
+    (123, "int"),
+    (True, "bool"),
+]
+for _body, _label in _CREWAI_NON_OBJECT_BODIES:
+    with patch("urllib.request.build_opener") as _m:
+        _m.return_value.open.return_value = DummyHTTPResponse(_body)
+        try:
+            _crewai_call_remote("http://localhost:8000", "s", {"q": {}})
+            check_true("nonobj/%s/_call_remote raises" % _label, False, "no error raised")
+        except RuntimeError as exc:
+            check_true("nonobj/%s/malformed" % _label, "Malformed decision response" in str(exc))
+            check_true("nonobj/%s/names object" % _label, "expected a JSON object" in str(exc))
+        except Exception as exc:
+            check_true("nonobj/%s/_call_remote raises" % _label, False, type(exc).__name__)
+
+        try:
+            LayaCrewRouter(base_url="http://localhost:8000", api_key="k").route(
+                "Analyze codebase", agents)
+            check_true("nonobj/%s/route raises" % _label, False, "no error raised")
+        except RuntimeError as exc:
+            check_true("nonobj/%s/route malformed" % _label,
+                       "Malformed decision response" in str(exc))
+        except Exception as exc:
+            check_true("nonobj/%s/route surfaces RuntimeError" % _label, False, type(exc).__name__)
+
+# Positive control: a well-formed object body still routes -- the guard does not over-reject.
+with patch("urllib.request.build_opener") as _m:
+    _m.return_value.open.return_value = DummyHTTPResponse(remote_response)
+    check("nonobj/object still routes",
+          LayaCrewRouter(base_url="http://localhost:8000").route(
+              "Analyze codebase", agents).agent_index, 1)
+
+
 # --------------------------------------------------------------- 5. Per-call decision controls
 #
 # `laya.integrations.langchain` has forwarded `max_len` / `head_max_len` and the five hook
