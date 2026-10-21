@@ -353,6 +353,73 @@ finally:
     laya.integrations.tools.urllib.request.build_opener = original_build_opener
 
 
+# --------------------------------------------------------------- 8b. Non-Object Remote Response
+# A remote body is arbitrary JSON: a gateway or a mis-pointed URL can answer with a top-level
+# array/string/number/null. select() must fail closed (RuntimeError, or the fallback tool) like a
+# malformed object does, not leak AttributeError from `result.get`.
+NON_OBJECT_BODIES = ['[]', '[{"answers": {"tool_select": {"choice": "tool_0"}}}]',
+                     '"unauthorized"', 'null', '123', 'true']
+
+
+class _BodyResponse:
+    def __init__(self, raw):
+        self._raw = raw.encode("utf-8")
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
+class _BodyHandler:
+    def __init__(self, raw):
+        self._raw = raw
+
+    def open(self, req, timeout=10.0):
+        return _BodyResponse(self._raw)
+
+
+_original_build_opener_8b = laya.integrations.tools.urllib.request.build_opener
+nonobj_fallback = lambda *a, **k: "general_llm_fallback"
+try:
+    for _raw in NON_OBJECT_BODIES:
+        laya.integrations.tools.urllib.request.build_opener = (
+            lambda *a, _r=_raw: _BodyHandler(_r))
+        # no fallback: must raise RuntimeError, never AttributeError
+        _sel = LayaToolSelector(tools=tools_list, base_url="http://localhost:8000")
+        try:
+            _sel.select("Query")
+            FAIL.append(f"nonobj/raises_{_raw}: expected RuntimeError")
+        except RuntimeError as _e:
+            check_true(f"nonobj/runtimeerror_{_raw}",
+                       "Malformed or missing decision response" in str(_e))
+        except AttributeError as _e:
+            FAIL.append(f"nonobj/attriberror_{_raw}: leaked AttributeError ({_e})")
+        # with fallback: must route to the fallback tool, never raise
+        _sel_fb = LayaToolSelector(tools=tools_list, base_url="http://localhost:8000",
+                                   fallback_tool=nonobj_fallback)
+        try:
+            _dec = _sel_fb.select("Query")
+            check(f"nonobj/fallback_{_raw}", _dec.is_fallback, True)
+        except AttributeError as _e:
+            FAIL.append(f"nonobj/fallback_{_raw}: leaked AttributeError ({_e})")
+finally:
+    laya.integrations.tools.urllib.request.build_opener = _original_build_opener_8b
+
+# A well-formed object response must still route normally through the same harness.
+laya.integrations.tools.urllib.request.build_opener = lambda *a: _BodyHandler(
+    json.dumps(make_mock_response("tool_0", confidence=0.93)))
+try:
+    _ok = LayaToolSelector(tools=tools_list, base_url="http://localhost:8000").select("Query")
+    check("nonobj/object_still_routes", _ok.tool_name, "web_search")
+finally:
+    laya.integrations.tools.urllib.request.build_opener = _original_build_opener_8b
+
+
 # --------------------------------------------------------------- 9. Controls Signatures Check
 params = inspect.signature(LayaToolSelector.__init__).parameters
 for ctrl in PREDICT_CONTROLS:

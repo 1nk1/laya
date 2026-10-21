@@ -347,7 +347,12 @@ class LayaToolSelector:
             hooks_timeout=self.hooks_timeout,
         )
 
-        answers_dict = result.get("answers")
+        # A remote laya-serve body is arbitrary JSON: a gateway or mis-pointed URL can answer
+        # with a top-level array, string or number, where `.get` would raise AttributeError and
+        # defeat the fail-closed branch below -- including the fallback_tool path meant to absorb
+        # exactly this malformed response. Read `answers` only from an object; anything else is
+        # the same "missing or malformed decision response" the guard already handles.
+        answers_dict = result.get("answers") if isinstance(result, dict) else None
         if not isinstance(answers_dict, dict) or "tool_select" not in answers_dict:
             if self.fallback_tool is not None:
                 fb_name, _ = _extract_tool_metadata(self.fallback_tool, -1)
