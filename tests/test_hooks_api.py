@@ -243,6 +243,19 @@ check("predict_tournament/positional prefix",
 check_param("predict_tournament", laya.predict_tournament, "predict_kwargs", inspect.Parameter.empty,
             inspect.Parameter.VAR_KEYWORD)
 
+# Detection diagnostics are opt-in and do not replace existing analysis fields.
+from laya.lang import analyse, latin_profile  # noqa: E402
+
+for label, fn in (("analyse", analyse), ("Router.route", Router.route),
+                  ("Router.route_batch", Router.route_batch)):
+    check_param(label, fn, "explain", False, inspect.Parameter.KEYWORD_ONLY)
+check("latin_profile keeps its signature", list(sig(latin_profile)), ["text"])
+_plain_analysis = analyse("Turn lights off")
+_explained_analysis = analyse("Turn lights off", explain=True)
+check("analyse opts into one extra key", set(_explained_analysis) - set(_plain_analysis), {"diagnostic"})
+check("analyse diagnostic fields", set(_explained_analysis.pop("diagnostic")), {"stage", "reason", "source"})
+check("analyse retains original fields", _explained_analysis, _plain_analysis)
+
 # route() and route_batch() take per-call hooks so a hook can pin a checkpoint for one call
 for label, fn in (("Router.route", Router.route),
                   ("Router.route_batch", Router.route_batch)):
