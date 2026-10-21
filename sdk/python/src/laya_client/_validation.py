@@ -67,6 +67,22 @@ def expect(condition: bool, field: str) -> None:
         raise LayaResponseError("Invalid Laya response: " + field)
 
 
+def batch_prediction(value: Any, questions: dict, count: int) -> None:
+    expect(isinstance(value, dict), "batch prediction object")
+    results = value.get("results")
+    expect(isinstance(results, list), "results")
+    expect(len(results) == count, "results count does not match states")
+    usage = value.get("total_usage")
+    expect(isinstance(usage, dict), "total_usage")
+    for key in ("input_tokens", "output_tokens"):
+        expect(type(usage.get(key)) is int and usage[key] >= 0, "total_usage." + key)
+    for i, result in enumerate(results):
+        try:
+            prediction(result, questions)
+        except LayaResponseError as exc:
+            raise LayaResponseError("Invalid Laya response: results[%d]: %s" % (i, exc)) from exc
+
+
 def prediction(value: Any, questions: dict) -> None:
     expect(isinstance(value, dict), "prediction object")
     expect(isinstance(value.get("model"), str), "model")

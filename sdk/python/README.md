@@ -103,8 +103,49 @@ HTTP error details can be strings, objects or arrays. Error bodies are read up t
 64 KiB; bodies that cannot be decoded as JSON are returned as text. The SDK does not log requests or credentials;
 applications should handle server diagnostics according to their own logging policy.
 
-The first version exposes `predict` and `health`. It does not implement async,
-batch, local routing, model loading or Python prediction hooks.
+The client exposes `predict`, `predict_batch` and `health`. It does not implement
+async, local routing, model loading or Python prediction hooks.
+
+## Batch predictions
+
+`predict_batch` sends one `POST /v1/systemone/batch` request with a nonempty list
+of states and one shared question set:
+
+```python
+states = ["Please refund my order", {"message": "Where is my order?"}]
+questions = {
+    "refund": {"type": "noul", "instructions": "Is the customer requesting a refund?"},
+}
+batch = client.predict_batch(states, questions)
+for state, result in zip(states, batch["results"]):
+    print(state, result["answers"]["refund"]["noul"])
+print(batch["total_usage"])
+```
+
+The return type is `laya_client.types.BatchPrediction`, an ordinary dictionary
+with `results: list[Prediction]` and `total_usage: Usage`. Result at index `i`
+belongs to state at index `i`; the client preserves server order and unknown
+fields. It requires exactly one valid prediction per state and nonnegative
+integer `input_tokens` and `output_tokens` in `total_usage`. An invalid envelope,
+count or individual result raises `LayaResponseError`; no partial list is returned.
+
+All `predict` controls apply to the whole batch. The additional optional
+`batch_size` (positive integer) and `sort_by_length` (boolean) control server-side
+inference batching, not HTTP request splitting. Length sorting still returns
+results in input order. Changing inference batch shapes can change floating-point
+results; the client does not recalculate predictions or confidence.
+
+Omitted controls inherit server settings. Empty lists and invalid JSON inputs
+raise `LayaValidationError` before sending. Server limits remain authoritative:
+the current server accepts at most 64 states, with its existing per-state,
+question, token-budget and request-body limits. A larger list is sent once and
+the server's refusal (normally HTTP 413) is exposed as `LayaAPIError`.
+
+The batch endpoint fails the whole request; there is no per-item error contract.
+On a server without this endpoint, HTTP 404/405 raises `LayaAPIError` with the
+original status and detail. The SDK never falls back to individual requests,
+splits a request, or retries it, including after a timeout. Existing `predict`
+and `health` behavior is unchanged.
 
 ## Development and verification
 

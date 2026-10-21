@@ -71,6 +71,7 @@ HOOK_KEYS = {
 
 # --------------------------------------------------------------- constructors
 check("HTTP SDK stays outside core exports", "LayaClient" in laya.__all__, False)
+check("HTTP batch response stays outside core exports", "BatchPrediction" in laya.__all__, False)
 check("core does not import the HTTP SDK", "laya_client" in sys.modules, False)
 
 for label, fn in (("Agent.__init__", Agent.__init__), ("load", load),

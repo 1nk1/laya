@@ -61,5 +61,10 @@ class Prediction(_PredictionExtensions):
     usage: Usage
 
 
+class BatchPrediction(TypedDict):
+    results: List[Prediction]
+    total_usage: Usage
+
+
 class Health(TypedDict):
     status: Literal["ok"]

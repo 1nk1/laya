@@ -6,9 +6,9 @@ import urllib.parse
 import urllib.request
 from typing import Any, Optional, cast
 
-from ._validation import expect, json_value, prediction, probability, questions_value, timeout_value
+from ._validation import batch_prediction, expect, json_value, prediction, probability, questions_value, timeout_value
 from .errors import LayaAPIError, LayaConnectionError, LayaResponseError, LayaTimeoutError, LayaValidationError
-from .types import Health, MinConfidence, Prediction, Questions, State
+from .types import BatchPrediction, Health, MinConfidence, Prediction, Questions, State
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -57,8 +57,45 @@ class LayaClient:
         """Predict choice, score and noul answers; omitted controls inherit server settings."""
         if not isinstance(state, (str, dict, list)):
             raise LayaValidationError("state must be text, a JSON object or an array")
+        body = self._prediction_body(questions, model, task, lang, lang_guess, max_len, head_max_len, min_confidence)
+        body["state"] = state
+        result = self._request("/v1/systemone", body, timeout)
+        prediction(result, questions)
+        return cast(Prediction, result)
+
+    def predict_batch(self, states: list[State], questions: Questions, *, model: Optional[str] = None,
+                      task: Optional[str] = None, lang: Optional[str] = None, lang_guess: Optional[str] = None,
+                      max_len: Optional[int] = None, head_max_len: Optional[int] = None,
+                      min_confidence: Optional[MinConfidence] = None, batch_size: Optional[int] = None,
+                      sort_by_length: Optional[bool] = None, timeout: Optional[float] = None) -> BatchPrediction:
+        """Predict a nonempty list of states with shared questions, preserving input order.
+
+        Sends one batch request. Server limits and unsupported endpoints raise LayaAPIError;
+        there is no automatic splitting or fallback to single predictions.
+        """
+        if not isinstance(states, list) or not states:
+            raise LayaValidationError("states must be a nonempty list")
+        for i, state in enumerate(states):
+            if not isinstance(state, (str, dict, list)):
+                raise LayaValidationError("states[%d] must be text, a JSON object or an array" % i)
+        body = self._prediction_body(questions, model, task, lang, lang_guess, max_len, head_max_len, min_confidence)
+        body["states"] = states
+        if batch_size is not None:
+            if type(batch_size) is not int or batch_size <= 0:
+                raise LayaValidationError("batch_size must be a positive integer")
+            body["batch_size"] = batch_size
+        if sort_by_length is not None:
+            if type(sort_by_length) is not bool:
+                raise LayaValidationError("sort_by_length must be a boolean")
+            body["sort_by_length"] = sort_by_length
+        result = self._request("/v1/systemone/batch", body, timeout)
+        batch_prediction(result, questions, len(states))
+        return cast(BatchPrediction, result)
+
+    @staticmethod
+    def _prediction_body(questions, model, task, lang, lang_guess, max_len, head_max_len, min_confidence):
         questions_value(questions)
-        body: dict[str, Any] = {"state": state, "questions": questions}
+        body: dict[str, Any] = {"questions": questions}
         for key, value in (("model", model), ("task", task), ("lang", lang), ("lang_guess", lang_guess)):
             if value is not None:
                 if not isinstance(value, str) or not value.strip():
@@ -76,9 +113,7 @@ class LayaClient:
             if not probability(min_confidence) and not valid_map:
                 raise LayaValidationError("min_confidence must be a threshold in [0, 1] or a nonempty threshold map")
             body["min_confidence"] = min_confidence
-        result = self._request("/v1/systemone", body, timeout)
-        prediction(result, questions)
-        return cast(Prediction, result)
+        return body
 
     def health(self, *, timeout: Optional[float] = None) -> Health:
         """Read liveness; a minimal response does not prove authentication or model readiness."""
