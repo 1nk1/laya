@@ -11,7 +11,6 @@ import (
 	"github.com/NandhaKishorM/laya/laya-go/internal/decode"
 	"github.com/NandhaKishorM/laya/laya-go/internal/pyjson"
 	"github.com/NandhaKishorM/laya/laya-go/internal/pyvalue"
-	"github.com/NandhaKishorM/laya/laya-go/internal/unicodedata"
 )
 
 // configFile is the checkpoint file the configuration is read from.
@@ -188,22 +187,15 @@ func loadConfig(checkpoint fs.FS, langs map[string]any) (Config, *decode.Tempera
 }
 
 // sameNumber is float(raw) == applied: false for anything float() refuses. A string is read as
-// the string rule of decode's toFloat (internal/decode/temperature.go), which this mirrors: stripped,
-// and without the x and p spellings of a Go hex float, which Python's float() rejects.
+// by decode.PyFloat. A bool is never the applied number.
 func sameNumber(raw any, applied float64) bool {
 	switch x := raw.(type) {
 	case string:
-		s := unicodedata.Strip(x)
-		if strings.ContainsAny(s, "xXpP_") {
-			return false
-		}
-		f, err := strconv.ParseFloat(s, 64)
-		return err == nil && f == applied
+		f, ok := decode.PyFloat(x)
+		return ok && f == applied
 	case json.Number:
 		f, err := strconv.ParseFloat(string(x), 64)
 		return err == nil && f == applied
-	case bool:
-		return (x && applied == 1) || (!x && applied == 0)
 	}
-	return false
+	return false // a bool is no number to clamp_temperature
 }

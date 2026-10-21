@@ -961,7 +961,10 @@ def _calib_cases():
                     ("str_double_underscore", '"2__0"'), ("str_trailing_underscore", '"2_"'),
                     ("str_plus", '"+2"'), ("str_word", '"abc"'), ("str_empty", '""'),
                     ("str_float", '"2.0"'), ("float_two", "2.0"), ("float_high", "2.9"),
-                    ("float_low", "1.9"), ("exp", "2e0"), ("nan", "NaN"), ("inf", "Infinity"),
+                    ("float_low", "1.9"), ("float_half", "1.5"), ("float_above", "2.5"),
+                    ("str_fullwidth", '"\uff12"'), ("str_arabic_indic", '"\u0662"'),
+                    ("str_fullwidth_underscore", '"\uff10_\uff12"'), ("str_tab_newline", '"\\t2\\n"'),
+                    ("str_nbsp", '"\u00a02\u00a0"'), ("str_superscript", '"\u00b2"'), ("exp", "2e0"), ("nan", "NaN"), ("inf", "Infinity"),
                     ("huge_float", "1e999"), ("bool", "true"), ("false", "false"), ("list", "[2]"),
                     ("object", "{}"), ("negative", "-1"), ("big", "1" + "0" * 30)]:
         kw = {"temperature": OK_T}
@@ -995,7 +998,15 @@ def _calib_cases():
                     ("bools", "[true, false, 1]"), ("zero", "[0, -0.0, 0.5]"),
                     ("nested", '[[1], {}, "1 0"]'), ("edges", "[0.5, 5, 5.0000001]"),
                     ("ints", "[1, 5, 100000000000000000000000]"),
-                    ("plain_strings", '["+2", "1e1", "1.5"]')]:
+                    ("plain_strings", '["+2", "1e1", "1.5"]'),
+                    ("str_underscores", '["1_5", "1_0.5", "2e1_0"]'),
+                    ("str_bad_underscores", '["1_.5", "1._5", "_1"]'),
+                    ("str_unicode_digits", '["\uff11.\uff15", "\u0663", "\u00b2"]'),
+                    ("str_signed_nan", '["+nan", "-NaN", "-Infinity"]'),
+                    ("str_inf_words", '["inf", "INFINITY", "infinit"]'),
+                    ("str_nbsp", '["\u00a02\u00a0", "\u20032", "2\\u200b"]'),
+                    ("str_overflow", '["1e400", "-1e400", "1e-400"]'),
+                    ("bool_true_only", "[true, 1.0, 1]")]:
         add("temperature_" + name, body(version=1, **({} if t is None else {"temperature": t})))
     # temperature_by_options
     for name, b in [("absent", None), ("null", "null"), ("empty", "{}"), ("list", "[]"),

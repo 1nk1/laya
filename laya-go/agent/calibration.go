@@ -70,7 +70,8 @@ type BinningEntry struct {
 }
 
 // MarshalJSON writes the payload with version CalibrationVersion. A NaN or infinite temperature
-// or binning value is an error, as encoding/json has no spelling for it.
+// or binning value is an error, as encoding/json has no spelling for it, and so is a bucket whose
+// Bins is not its number of values.
 func (p CalibrationPayload) MarshalJSON() ([]byte, error) {
 	cfg := map[string]any(nil)
 	if p.Config != nil {
@@ -84,6 +85,11 @@ func (p CalibrationPayload) MarshalJSON() ([]byte, error) {
 	byOptions := p.TemperatureByOptions
 	if byOptions == nil {
 		byOptions = map[string]float64{}
+	}
+	for name, e := range p.BinningMap {
+		if e.Bins < 1 || e.Bins != len(e.Values) {
+			return nil, fmt.Errorf("binning_map[%q]: bins %d does not match %d values", name, e.Bins, len(e.Values))
+		}
 	}
 	body := struct {
 		Version     int                      `json:"version"`
@@ -175,7 +181,7 @@ func objGet(o pyjson.Object, key string) any {
 
 // versionChecksIdentity reports whether the payload's version is CalibrationVersion or later.
 // None and an absent key are version 1; a bool, a list or an object are refused, and int() of a
-// float truncates, of a string reads an integer literal.
+// float must be whole, of a string reads an integer literal.
 func versionChecksIdentity(v any) (bool, error) {
 	bad := func() (bool, error) {
 		return false, fmt.Errorf("calibration JSON version must be an integer, got %s", pyvalue.Repr(v))
@@ -192,7 +198,7 @@ func versionChecksIdentity(v any) (bool, error) {
 			return n.Cmp(big.NewInt(CalibrationVersion)) >= 0, nil
 		}
 		f, _ := strconv.ParseFloat(string(x), 64)
-		if math.IsInf(f, 0) {
+		if math.IsInf(f, 0) || f != math.Trunc(f) {
 			return bad()
 		}
 		return f >= CalibrationVersion, nil
@@ -208,10 +214,10 @@ func versionChecksIdentity(v any) (bool, error) {
 	return bad()
 }
 
-// pyInt is int(s) for an ASCII integer literal: surrounding space, a sign, and digits with single
-// underscores between them.
+// pyInt is int(s) for an integer literal: surrounding space, a sign, and Unicode decimal digits
+// with single underscores between them.
 func pyInt(s string) (*big.Int, bool) {
-	s = unicodedata.Strip(s)
+	s = unicodedata.DecimalASCII(unicodedata.Strip(s))
 	neg := false
 	if s != "" && (s[0] == '+' || s[0] == '-') {
 		neg = s[0] == '-'
