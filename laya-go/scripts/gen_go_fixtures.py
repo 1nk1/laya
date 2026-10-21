@@ -928,6 +928,286 @@ def predict_plan_family(rng):
 
 
 
+# ---------------------------------------------------------------- router
+# laya/router.py's routing half, run through the real Router. The probe corpus is the one the .NET
+# port records (laya-dotnet/tools/routing_cases.py); only its inputs are used, every answer here is
+# recorded from Python now.
+ROUTER_TD = {
+    "agent_trace_observability": ["action", "needs_review", "outcome", "risk", "urgency"],
+    "customer_service": ["action", "category", "churn_risk", "needs_human", "urgency"],
+    "invoice_processing": ["discrepancy_severity", "disposition", "duplicate", "matches_order", "urgency"],
+    "security_incidents": ["credential_compromise", "disposition", "severity", "true_positive", "urgency"],
+}
+
+NAME_CASES = [
+    "english", "multilingual", "typed-decisions", "en", "laya", "default", "multi", "ml", "laya-multilingual",
+    "typed", "typed_decisions", "laya-typed-decisions", "decisions", "EN", "  English ", "\tML\n", "Typed_Decisions",
+    "TYPED-DECISIONS", "typed decisions", "", " ", "auto", "papers", "english/", "../english", "x" * 300,
+    "\u00a0en\u00a0", "\u2003en\u2003", "\u3000english\u3000", "\u200ben", "en\u200b", "\u212a", "K", "\u0130N",
+    "ENGLİSH", "\uff25\uff2e", "\uff45\uff4e", "ΣΑΣ", "ΑΣ", "Σ", "english\u0307", "ﬁ", "ǅ", "ß", "ẞ",
+    "it's", 'say "hi"', "it's \"x\"", "x\u200by", "\x07", "\U0001f600", "\ud7ff", "\ue000", "\n", "a\nb",
+    "multilingual\x00", "ml ", " ml", "MULTI", "Laya", "LAYA-TYPED-DECISIONS", "typed_decisions ", "decision",
+]
+
+CODE_CASES = [
+    "en", "EN", "En", "en-US", "en_US", "en_US.UTF-8", "en.UTF-8", "eng", "ENG", "english", "English", " EN ",
+    "de", "de-DE", "de_DE.UTF-8", "fr", "zh_CN", "zh-Hans-CN", "pt-BR", "hi", "ar", "qq", "it's", "x\u200by",
+    "", " ", "   ", "\t", ".", ".UTF-8", "-", "_", "-en", "_en", "C", "c", "C.UTF-8", "c.utf-8", "POSIX", "posix",
+    "POSIX.UTF-8", "und", "UND", "und-Latn", "zxx", "mul", "mul-x", "en-", "en_", "en-.x", "e", "n", "english-us",
+    "English_US", "eng-US", "ENGLISH.UTF-8", "en\u00a0", "\u00a0en", "\u200ben", "\uff45\uff4e", "\u212a",
+    "\u0130", "i\u0307", "ΣΑΣ", "x" * 500, "en" + "-x" * 100, "e\u0301n", "\U0001f600", "C\u200b", "c-utf8",
+    "c_utf8", "posix_x", "Mul", "none", "None", "null", "0", "1", "True",
+]
+
+ROUTER_FRAGMENTS = [
+    "I was charged twice, please refund the duplicate payment on my invoice.",
+    "Please review the error and send me the details of this and what you would like to do.",
+    "Der Kunde wurde zweimal belastet und moechte eine Rueckerstattung fuer die Rechnung die nicht korrekt ist",
+    "Eu nao consigo entrar na minha conta e depois eu nao sei mais o que fazer com isso tudo.",
+    "Le client a ete facture deux fois et demande un remboursement",
+    "Müşteriden iki kez ücret alındı ve para iadesi istiyor lütfen yardım",
+    "Klient został obciążony dwukrotnie i chce zwrot pieniędzy za fakturę",
+    "Gătește-mi o rețetă de sarmale de post pentru mâine.",
+    "žluťoučký kůň úpěl ďábelské ódy", "hej min vän", "Hello", "refund me", "12345", "12345 6789", "", "   ", "\n",
+    "मुझसे दो बार शुल्क लिया गया", "二重に請求されました", "客户被重复扣款要求退款", "두 번 청구되었습니다",
+    "تم خصم المبلغ مرتين", "Հայերեն", "ՀԱՅԵՐԵՆ", "ลูกค้าถูกเรียกเก็บเงินสองครั้ง", "С клиента дважды сняли деньги",
+    "Ο πελάτης χρεώθηκε δύο φορές", "MON DES EST LA", "os.path = nao consigo entrar na minha conta",
+    "Please send the receipt to Владимир Иванов today", "ok ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎ", "Please " + "ありがとう" * 4,
+    "\U0001f600 \U0001f600", "ＡＢＣＤ hello", "x\u200by z", "it's don't \"quoted\"", "a\u0007b nao consigo entrar",
+    "Quiero cancelar mi pedido por favor ahora", "Ich kann mich nicht in mein Konto einloggen",
+    "Care este ora in Tokyo?", "Cât e ora acum la Tokyo",
+]
+
+
+def _router_decision(decision):
+    det = decision["detection"]
+    return {
+        "model": decision["model"], "repo": decision["repo"], "reason": decision["reason"],
+        "workflow": decision["workflow"],
+        "detection": None if det is None else {
+            "script": det["script"], "language": det["language"], "is_english": det["is_english"],
+            "language_undecided": det["language_undecided"], "non_latin_fraction": det["non_latin_fraction"],
+            "diacritic_rate": det["diacritic_rate"], "mixed_segment": det["mixed_segment"]},
+    }
+
+
+def _router_build(kwargs):
+    """The Router for these kwargs, or the text of what Router() refused."""
+    from laya.router import Router
+    try:
+        return Router(**kwargs), None
+    except ValueError as refused:
+        return None, str(refused)
+
+
+def _router_route(router, route_kwargs):
+    try:
+        return {"decision": _router_decision(router.route(**route_kwargs))}
+    except ValueError as refused:
+        return {"error": str(refused)}
+
+
+def _router_questions(rng):
+    ids = [i for ids in ROUTER_TD.values() for i in ids] + ["x", "y", "urgency", "Urgency", "", "id with space"]
+    ids = sorted(set(ids))
+    pools = [list(v) for v in ROUTER_TD.values()]
+    for _ in range(40):
+        pool = rng.choice(pools)
+        pick = rng.sample(pool, rng.randint(max(0, len(pool) - 2), len(pool)))
+        if rng.random() < 0.4:
+            pick.append(rng.choice(ids))
+        pick = list(dict.fromkeys(i for i in pick if i.strip()))
+        pools.append(pick)
+    return pools
+
+
+def _noul_questions(ids):
+    return {i: {"type": "noul", "instructions": "x"} for i in ids}
+
+
+def _mutate_text(rng, text):
+    ops = [lambda t: t.upper(), lambda t: t.lower(), lambda t: " " + t + "\t", lambda t: t[::-1],
+           lambda t: t + "\u200b", lambda t: t + "\n" + t, lambda t: t * 3, lambda t: t.title(),
+           lambda t: t.replace(" ", "_"), lambda t: t.replace("-", "_"), lambda t: "\u00a0" + t]
+    return rng.choice(ops)(text)
+
+
+def _router_state(rng):
+    frag = lambda: rng.choice(ROUTER_FRAGMENTS)  # noqa: E731
+    shape = rng.randrange(7)
+    if shape == 0:
+        return frag()
+    if shape == 1:
+        return {"body": frag()}
+    if shape == 2:
+        return {"subject": frag(), "body": frag()}
+    if shape == 3:
+        return [frag(), frag()]
+    if shape == 4:
+        return "\n".join([frag() for _ in range(rng.randint(2, 5))])
+    if shape == 5:
+        return {"note": frag() * rng.randint(1, 40), "body": frag()}
+    return _mutate_text(rng, frag())
+
+
+def router_family(rng):
+    """Router naming, workflow match, question signature, route and route_batch, all from Python."""
+    import copy
+
+    sys.path.insert(0, os.path.join(HERE, "..", "..", "laya-dotnet", "tools"))
+    try:
+        import routing_cases
+    finally:
+        sys.path.pop(0)
+    from laya import router as pyrouter
+    from laya.agent import Agent
+    from laya.router import Router
+
+    names = []
+    for name in NAME_CASES + [_mutate_text(rng, rng.choice(NAME_CASES[:16])) for _ in range(200)]:
+        record = {"name": name, "canonical": pyrouter.canonical_name(name)}
+        try:
+            record["normalised"] = pyrouter.normalise_name(name)
+        except ValueError as refused:
+            record["error"] = str(refused)
+        spec = pyrouter.resolve_model_spec(name)
+        record["spec"] = None if spec is None else list(spec)
+        names.append(record)
+
+    codes = [{"code": c, "english": pyrouter._english_from_code(c)}
+             for c in CODE_CASES + [_mutate_text(rng, rng.choice(CODE_CASES[:30])) for _ in range(200)]]
+
+    workflows = []
+    for ids in list(ROUTER_TD.values()) + _router_questions(rng) + [[], ["urgency"]]:
+        shuffled = list(ids)
+        rng.shuffle(shuffled)
+        workflows.append({"ids": shuffled, "workflow": pyrouter.match_typed_decisions_workflow(_noul_questions(shuffled))})
+
+    signatures = []
+    for cid, qid, definition in QUESTION_CASES:
+        try:
+            Agent._check_question(qid, copy.deepcopy(definition))
+        except ValueError:
+            continue
+        signatures.append({"case": cid, "questions": {qid: definition},
+                           "signature": pyrouter._question_schema({qid: definition})})
+    for _ in range(30):
+        picks = rng.sample([d for _, _, d in QUESTION_CASES if _accepted(d)], 3)
+        questions = {"q%d" % i: copy.deepcopy(d) for i, d in enumerate(picks)}
+        signatures.append({"case": "multi", "questions": questions,
+                           "signature": pyrouter._question_schema(questions)})
+        reordered = dict(reversed(list(questions.items())))
+        signatures.append({"case": "multi-reversed", "questions": reordered,
+                           "signature": pyrouter._question_schema(reordered)})
+
+    routes = []
+    for label, router_kwargs, route_kwargs in routing_cases.ROUTE_CASES:
+        router, refused = _router_build(router_kwargs)
+        record = {"case": label, "router": router_kwargs, "route": route_kwargs}
+        record.update({"router_error": refused} if refused else _router_route(router, route_kwargs))
+        routes.append(record)
+
+    # Router() arguments Python refuses, and a state a Router sees in every position.
+    for bad in ("bogus", "", "Papers", " english/ "):
+        routes.append({"case": "default-%r" % (bad,), "router": {"default": bad}, "route": {"state": "x"},
+                       "router_error": _router_build({"default": bad})[1]})
+    for key in ("en", " ML ", "Laya", "typed_decisions"):
+        kwargs = {"models": {key: "/srv/laya-models/a"}, "standalone_repos": key == "en"}
+        router, _ = _router_build(kwargs)
+        route = {"state": "x", "model": key}
+        routes.append(dict({"case": "models-alias-%r" % key, "router": kwargs, "route": route},
+                           **_router_route(router, route)))
+    # "~" expands to a home directory that differs per machine; the Go tests pin it against $HOME.
+    for source in ("/abs/~/x", "x~", "a~b", ""):
+        kwargs = {"models": {"english": source}}
+        router, _ = _router_build(kwargs)
+        route = {"state": "x", "model": "english"}
+        routes.append(dict({"case": "path-%r" % source, "router": kwargs, "route": route},
+                           **_router_route(router, route)))
+    for sub in ("", None, "sub", "a/b"):
+        kwargs = {"models": {"multilingual": ["org/repo", sub]}}
+        router, _ = _router_build(kwargs)
+        route = {"state": "x", "model": "ml"}
+        routes.append(dict({"case": "pair-%r" % (sub,), "router": kwargs, "route": route},
+                           **_router_route(router, route)))
+
+    questions_pool = _router_questions(rng)
+    for _ in range(900):
+        kwargs = {}
+        if rng.random() < 0.3:
+            kwargs["default"] = rng.choice(["english", "en", "ML", "typed", "multilingual", "Laya"])
+        if rng.random() < 0.3:
+            kwargs["auto_task_detection"] = True
+        if rng.random() < 0.2:
+            kwargs["standalone_repos"] = True
+        if rng.random() < 0.25:
+            kwargs["lang_guess"] = rng.choice(CODE_CASES)
+        route = {"state": _router_state(rng)}
+        if rng.random() < 0.4:
+            route["questions"] = _noul_questions(rng.choice(questions_pool))
+        if rng.random() < 0.15:
+            route["model"] = rng.choice(NAME_CASES)
+        if rng.random() < 0.12:
+            route["task"] = rng.choice(NAME_CASES + ["typed_decisions", "Typed-Decisions", "TYPED_DECISIONS"])
+        if rng.random() < 0.3:
+            route["lang"] = rng.choice(CODE_CASES)
+        if rng.random() < 0.25:
+            route["lang_guess"] = rng.choice(CODE_CASES)
+        router, refused = _router_build(kwargs)
+        record = {"case": "fuzz", "router": kwargs, "route": route}
+        record.update({"router_error": refused} if refused else _router_route(router, route))
+        routes.append(record)
+
+    batches = []
+    for _ in range(60):
+        router_kwargs = {"auto_task_detection": rng.random() < 0.5}
+        router = Router(**router_kwargs)
+        requests = []
+        for _ in range(rng.randint(0, 6)):
+            request = {"state": _router_state(rng), "questions": _noul_questions(rng.choice(questions_pool))}
+            if rng.random() < 0.3:
+                request["model"] = rng.choice(NAME_CASES[:14])
+            if rng.random() < 0.3:
+                request["lang"] = rng.choice(CODE_CASES)
+            if rng.random() < 0.2:
+                request["lang_guess"] = rng.choice(CODE_CASES)
+            if rng.random() < 0.1:
+                request["task"] = rng.choice(["typed-decisions", "TYPED_decisions", "english", "nope"])
+            requests.append(request)
+        record = {"router": router_kwargs, "requests": requests}
+        try:
+            record["decisions"] = [_router_decision(d) for d in router.route_batch(requests)]
+        except ValueError as refused:
+            record["error"] = str(refused)
+        batches.append(record)
+    for index, state in ((0, None), (2, None)):
+        requests = [{"state": "hello there my friend", "questions": {}} for _ in range(index)] + \
+                   [{"state": state, "questions": {}}]
+        try:
+            Router().route_batch(requests)
+        except TypeError as refused:
+            batches.append({"router": {}, "requests": requests, "error": str(refused)})
+    batches.append({"router": {}, "requests": [], "decisions": []})
+
+    refused = sum(1 for r in routes if "error" in r or "router_error" in r)
+    if len(routes) < 1000 or refused < 40 or len(names) < 250:
+        raise AssertionError("the router cases stopped covering enough (%d routes, %d refused)"
+                             % (len(routes), refused))
+    return {"names": names, "codes": codes, "workflows": workflows, "signatures": signatures,
+            "routes": routes, "batches": batches}
+
+
+def _accepted(definition):
+    import copy
+
+    from laya.agent import Agent
+    try:
+        Agent._check_question("q", copy.deepcopy(definition))
+    except ValueError:
+        return False
+    return True
+
+
 def build():
     import tokenizers
 
@@ -952,6 +1232,7 @@ def build():
         "answers_fuzz": decode_fuzz_family(rng),
         "marker_refusals": marker_refusals_family(rng),
         "predict_plan": predict_plan_family(rng),
+        "router": router_family(rng),
     }
 
 
