@@ -655,11 +655,13 @@ def calibrate_reliability(
     escalate = highest cutoff below `accept` where answers below it are at most
                `max_escalate_accuracy` accurate.
     If no cutoff reaches `target_accuracy`, accept is returned as 1.01 (accept nothing).
+    Cutoffs use the supplied scores without rounding, matching the hook's reported
+    `soft_stability` and runtime comparison. Equal scores are evaluated together.
     """
     pairs = sorted(zip(soft_scores, correct))
     if not pairs:
         raise ValueError("cannot calibrate reliability on empty scores/correct pairs")
-    cuts = sorted({round(s, 4) for s, _ in pairs})
+    cuts = sorted({s for s, _ in pairs})
 
     accept = 1.01
     for t in cuts:
@@ -1019,7 +1021,7 @@ class OptionStabilityHook(BaseHook):
                     "probes": list(probes_ran),
                     "option_layout": layout,
                     "decision": decide_reliability(soft, self.accept, self.escalate) if soft is not None else None,
-                    "soft_stability": round(soft, 4) if soft is not None else None,
+                    "soft_stability": soft,
                     "stability": round(stability, 4) if stability is not None else None,
                     "rename_stability": round(rename_stab, 4) if rename_stab is not None else None,
                     "reorder_stability": round(reorder_stab, 4) if reorder_stab is not None else None,

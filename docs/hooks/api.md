@@ -164,13 +164,36 @@ Thresholds `accept` and `escalate` are required keyword arguments: categorical g
 It attaches a `reliability` diagnostic block to each choice question's answer:
 - `probes`: List of probe kinds that executed (e.g. `["rename"]`, `["reorder", "rename"]`, or `[]`).
 - `option_layout`: Checkpoint layout (`"parallel"` or `"sequential"`).
-- `soft_stability`: Mean probability assigned to the chosen option across all evaluated variants (`None` if unprobed).
+- `soft_stability`: Mean probability assigned to the chosen option across all evaluated variants, without additional rounding (`None` if unprobed). This is the exact value used for `decision`.
 - `stability`: Fraction of variants whose argmax choice agrees with the original decision (`None` if unprobed).
 - `rename_stability`: Stability across rename variants (`None` if no rename probe ran).
 - `reorder_stability`: Stability across reorder variants (`None` if no reorder probe ran).
 - `decision`: Categorical classification (`ACCEPT`, `VERIFY`, or `ESCALATE`, or `None` if unprobed).
 - `variant_choices`: Mapping of variant name to decoded choice.
 - `variant_support`: Mapping of variant name to probability mass on the primary choice.
+
+### Calibrating and replaying decisions
+
+Collect `soft_stability` with `accept=None, escalate=None` on labelled evaluation examples,
+then pass those numeric values and correctness labels to `laya.hooks.calibrate_reliability`.
+Only fit or replay probed, numeric scores; exclude unprobed reports with `soft_stability=None`
+and keep their `decision=None`.
+It chooses cutoffs from the distinct input scores at their supplied precision; equal scores
+stay in the same group. `ACCEPT` includes scores equal to `accept`, while `ESCALATE` requires
+a score strictly below `escalate`. If no cutoff meets the requested accuracy, `accept=1.01`
+accepts nothing. These are fits to the supplied examples, not a guarantee on unseen data.
+
+Keep the numeric scores and thresholds unchanged when saving them (for example, in JSON).
+Replaying `decide_reliability(report["soft_stability"], accept, escalate)` then agrees with
+the hook for the same evaluated variants and decoded probabilities. Format a separate display
+string if fewer decimal places are wanted; do not fit or gate on that string. The other stability
+diagnostics and `variant_support` retain their four-decimal formatting and are not substitutes
+for `soft_stability` when replaying the gate.
+
+Earlier reports rounded `soft_stability` to four decimals even though the gate used the
+unrounded mean. Previously saved reports cannot recover that lost precision: recollect them
+before refitting thresholds. Fixed thresholds still use the same runtime comparison; the
+reported score and newly fitted cutoffs may now contain more decimal places.
 
 ### What it costs
 

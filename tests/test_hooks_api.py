@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import laya  # noqa: E402
 from laya import Agent, AsyncHook, BaseHook, OptionStabilityHook, PredictContext, PredictHook, Router, load  # noqa: E402
-from laya.hooks import HOOK_EVENTS, Hook  # noqa: E402
+from laya.hooks import HOOK_EVENTS, Hook, calibrate_reliability, decide_reliability  # noqa: E402
 from laya.onnx_agent import ONNXAgent  # noqa: E402
 from laya.router import _question_schema  # noqa: E402
 
@@ -171,6 +171,16 @@ check_param("AsyncHook.__init__", AsyncHook.__init__, "loop", None)
 
 # OptionStabilityHook (issue #635)
 check_true("OptionStabilityHook is a BaseHook", issubclass(OptionStabilityHook, BaseHook))
+
+# Public calibration cuts retain input precision through JSON serialization. Replaying
+# the cuts must not merge distinct scores that happen to share a four-place display.
+_precise_scores = json.loads(json.dumps([0.80001, 0.80002]))
+_precise_cuts = calibrate_reliability(_precise_scores, [False, True], target_accuracy=1.0)
+_precise_cuts = json.loads(json.dumps(_precise_cuts))
+check("calibrate_reliability returns an observed full-precision cut", _precise_cuts[0], 0.80002)
+check("serialized calibration cuts preserve accepted membership",
+      [decide_reliability(score, *_precise_cuts) for score in _precise_scores],
+      ["VERIFY", "ACCEPT"])
 
 # --------------------------------------------------------------- predict surfaces
 from laya.mcp.remote import RemoteRouter  # noqa: E402
