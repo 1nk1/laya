@@ -11,6 +11,7 @@ import (
 
 	"github.com/NandhaKishorM/laya/laya-go/agent"
 	"github.com/NandhaKishorM/laya/laya-go/internal/fixtures"
+	"github.com/NandhaKishorM/laya/laya-go/internal/hookrun"
 	"github.com/NandhaKishorM/laya/laya-go/lang"
 	"github.com/NandhaKishorM/laya/laya-go/router"
 )
@@ -146,7 +147,7 @@ func buildHooked(t *testing.T, rec fixtures.Object) (hc *hookCase, newErr error)
 		}
 	}
 	opts := []router.Option{router.WithInstalledHooks(installed...), router.WithHookWarnings(hc.rec.warn)}
-	concurrent := true // Python's default
+	serial := false // Python's default is concurrent
 	for _, m := range fixtures.Obj(t, rec.Must("router")) {
 		switch m.Key {
 		case "hooks_raise":
@@ -154,15 +155,15 @@ func buildHooked(t *testing.T, rec fixtures.Object) (hc *hookCase, newErr error)
 		case "hooks_timeout":
 			opts = append(opts, router.WithHookTimeout(seconds(t, m.Value)))
 		case "hooks_concurrent":
-			concurrent = fixtures.Bool(t, m.Value)
+			serial = !fixtures.Bool(t, m.Value)
 		case "auto_task_detection":
 			opts = append(opts, router.WithAutoTaskDetection(fixtures.Bool(t, m.Value)))
 		default:
 			t.Fatalf("unhandled router kwarg %q", m.Key)
 		}
 	}
-	if concurrent {
-		opts = append(opts, router.WithConcurrentHooks())
+	if serial {
+		opts = append(opts, router.WithSerialHooks())
 	}
 	var err error
 	hc.r, err = router.New(opts...)
@@ -229,7 +230,7 @@ func checkWarnings(t *testing.T, got []string, want []any) {
 
 func TestRouteHooksGolden(t *testing.T) {
 	cases := family(t, "hooks")
-	if len(cases) != 337 {
+	if len(cases) != 339 {
 		t.Fatalf("%d cases", len(cases))
 	}
 	var decided, failed, refusedRouters, warned, replaced, timedOut int
@@ -330,5 +331,19 @@ func TestRouteBatchHooksGolden(t *testing.T) {
 	}
 	if failed < 3 || hooked < 15 {
 		t.Fatalf("the golden stopped covering both outcomes: %d failed, %d hooked", failed, hooked)
+	}
+}
+
+func TestTimeoutTextGolden(t *testing.T) {
+	cases := family(t, "timeout_text")
+	if len(cases) < 20 {
+		t.Fatalf("%d cases", len(cases))
+	}
+	for _, cv := range cases {
+		c := fixtures.Obj(t, cv)
+		x := fixtures.Float(t, c.Must("seconds"))
+		if got, want := hookrun.PyG(x), str(t, c, "text"); got != want {
+			t.Errorf("PyG(%v) = %q, want %q", x, got, want)
+		}
 	}
 }

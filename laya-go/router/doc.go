@@ -26,6 +26,7 @@
 // the custom checkpoints are not ported, so the Router knows the three built-in names. A hint
 // callable is a LangHint returning "" to abstain. explain=True is not ported: lang.Analysis has no
 // diagnostic field. The model lifecycle (on_load,
-// on_evict) belongs to a later change. Hooks run one at a time unless WithConcurrentHooks is given
-// (Python's Router defaults to concurrent), and a hook failure names the hook's Go type.
+// on_evict) belongs to a later change. Hooks run concurrently as in Python; WithSerialHooks
+// runs one at a time (and then a hook must not call Route on its own Router). A hook failure
+// names the hook's Go type.
 package router

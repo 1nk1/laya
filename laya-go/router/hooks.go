@@ -7,11 +7,12 @@ package router
 // hook that is both embeds agent.BaseHook), the Router's installed hooks, then the
 // call's ForHooks, and a hook without OnRoute is skipped.
 //
-// The dispatch is agent.HookRun, the one the agent uses, so ordering, WithHookErrors,
-// WithHookTimeout and panic recovery behave as there. Unlike Python's Router, whose hooks run
-// concurrently unless hooks_concurrent=False, hooks run one at a time across all goroutines
-// unless WithConcurrentHooks is given, as on the agent. A hook must not call Route on the
-// Router that is running it while hooks are serial: Python's lock is re-entrant, this one is not.
+// The dispatch is internal/hookrun, the one the agent uses, so ordering, WithHookErrors,
+// WithHookTimeout and panic recovery behave as there. As in Python's Router, hooks run
+// concurrently unless WithSerialHooks is given; with it, one hook runs at a time across all
+// goroutines, and a hook must not call Route on the Router that is running it (Python's lock is
+// re-entrant, this one is not, so the call would wait for itself until a timeout). A hook is
+// compared by identity, so pass a pointer: a value whose type cannot be compared is refused.
 //
 // A hook may replace ctx.Decision; the replacement is what Route returns. Route does not check
 // it: a Model that names no checkpoint is the hook's business, and the caller that loads it
@@ -23,12 +24,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"reflect"
 	"sync"
 	"time"
 
 	"github.com/NandhaKishorM/laya/laya-go/agent"
+	"github.com/NandhaKishorM/laya/laya-go/internal/hookrun"
 	"github.com/NandhaKishorM/laya/laya-go/schema"
 )
 
@@ -75,28 +76,36 @@ func (f *HookFuncs) OnRoute(c *RouteContext) {
 // hookState is the Router's hook registry and dispatch settings.
 type hookState struct {
 	mu        sync.RWMutex
-	installed []any
+	installed []installedHook
+	nextID    uint64
 	timeout   time.Duration
 	raise     bool
-	lock      *agent.HookLock
+	lock      *hookrun.Lock
 	warn      func(string)
 }
 
+// installedHook is one registry entry; id tells an InstallHooks undo which entries are its own.
+type installedHook struct {
+	hook any
+	id   uint64
+}
+
 type hookConfig struct {
-	installed  []any
-	timeout    time.Duration
-	raise      bool
-	concurrent bool
-	warn       func(string)
+	installed []any
+	timeout   time.Duration
+	raise     bool
+	serial    bool
+	warn      func(string)
 }
 
 func newHookState(c hookConfig) *hookState {
-	h := &hookState{installed: append([]any(nil), c.installed...), timeout: c.timeout, raise: c.raise, warn: c.warn}
-	if h.warn == nil {
-		h.warn = func(msg string) { log.Print(msg) }
+	h := &hookState{timeout: c.timeout, raise: c.raise, warn: c.warn}
+	for _, hook := range c.installed {
+		h.nextID++
+		h.installed = append(h.installed, installedHook{hook, h.nextID})
 	}
-	if !c.concurrent {
-		h.lock = agent.NewHookLock()
+	if c.serial {
+		h.lock = new(hookrun.Lock)
 	}
 	return h
 }
@@ -107,6 +116,9 @@ func checkHooks(hooks []any) error {
 	for i, h := range hooks {
 		if isNil(h) {
 			return fmt.Errorf("router: hook %d is nil", i)
+		}
+		if !hookrun.Comparable(h) {
+			return fmt.Errorf("router: hook %d (%T) cannot be compared, so it could never be removed; pass a pointer", i, h)
 		}
 		_, route := h.(RouteHook)
 		_, predict := h.(agent.Hook)
@@ -143,7 +155,7 @@ func WithInstalledHooks(hooks ...any) Option {
 // limit.
 func WithHookTimeout(d time.Duration) Option {
 	return func(c *config) error {
-		if err := agent.ValidateHookTimeout(d); err != nil {
+		if err := hookrun.ValidateTimeout(d.Seconds()); err != nil {
 			return err
 		}
 		c.hooks.timeout = d
@@ -157,10 +169,12 @@ func WithHookErrors(raise bool) Option {
 	return func(c *config) error { c.hooks.raise = raise; return nil }
 }
 
-// WithConcurrentHooks lets hooks of concurrent calls run at the same time; the default runs one
-// at a time.
-func WithConcurrentHooks() Option {
-	return func(c *config) error { c.hooks.concurrent = true; return nil }
+// WithSerialHooks runs one hook at a time across all calls, for hooks that are not safe to run
+// concurrently; the default, as in Python, lets hooks of concurrent calls overlap. A serial hook
+// must not call Route on its own Router: the lock is not re-entrant and the call would wait for
+// itself.
+func WithSerialHooks() Option {
+	return func(c *config) error { c.hooks.serial = true; return nil }
 }
 
 // WithHookWarnings sets where a hook failure that does not fail the call is reported; the
@@ -171,24 +185,35 @@ func WithHookWarnings(sink func(msg string)) Option {
 
 // AddHook installs hooks after those already there. A hook added twice runs twice.
 func (r *Router) AddHook(hooks ...any) error {
+	_, err := r.add(hooks)
+	return err
+}
+
+// add installs hooks and returns the ids of the new entries.
+func (r *Router) add(hooks []any) ([]uint64, error) {
 	if err := checkHooks(hooks); err != nil {
-		return err
+		return nil, err
 	}
 	r.hk.mu.Lock()
-	r.hk.installed = append(r.hk.installed, hooks...)
-	r.hk.mu.Unlock()
-	return nil
+	defer r.hk.mu.Unlock()
+	ids := make([]uint64, len(hooks))
+	for i, h := range hooks {
+		r.hk.nextID++
+		ids[i] = r.hk.nextID
+		r.hk.installed = append(r.hk.installed, installedHook{h, r.hk.nextID})
+	}
+	return ids, nil
 }
 
 // RemoveHook removes every installed copy of hook, compared by identity, and reports whether
-// there was one. A hook whose dynamic type cannot be compared is never found; pass a pointer.
+// there was one.
 func (r *Router) RemoveHook(hook any) bool {
 	r.hk.mu.Lock()
 	defer r.hk.mu.Unlock()
 	kept := r.hk.installed[:0:0]
-	for _, h := range r.hk.installed {
-		if !agent.SameHook(h, hook) {
-			kept = append(kept, h)
+	for _, e := range r.hk.installed {
+		if !hookrun.Same(e.hook, hook) {
+			kept = append(kept, e)
 		}
 	}
 	removed := len(kept) != len(r.hk.installed)
@@ -196,26 +221,30 @@ func (r *Router) RemoveHook(hook any) bool {
 	return removed
 }
 
-// InstallHooks installs hooks until the returned function is called, which removes one copy of
-// each (the most recent) and leaves everything else, including what was added meanwhile.
-// Overlapping installs may be undone in either order.
+// InstallHooks installs hooks until the returned function is called, which removes exactly the
+// entries this call added and leaves everything else, including equal hooks added meanwhile or
+// before. Overlapping installs may be undone in either order.
 func (r *Router) InstallHooks(hooks ...any) (undo func(), err error) {
-	if err := r.AddHook(hooks...); err != nil {
+	ids, err := r.add(hooks)
+	if err != nil {
 		return nil, err
 	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			own := make(map[uint64]bool, len(ids))
+			for _, id := range ids {
+				own[id] = true
+			}
 			r.hk.mu.Lock()
 			defer r.hk.mu.Unlock()
-			for _, h := range hooks {
-				for i := len(r.hk.installed) - 1; i >= 0; i-- {
-					if agent.SameHook(r.hk.installed[i], h) {
-						r.hk.installed = append(r.hk.installed[:i:i], r.hk.installed[i+1:]...)
-						break
-					}
+			kept := r.hk.installed[:0:0]
+			for _, e := range r.hk.installed {
+				if !own[e.id] {
+					kept = append(kept, e)
 				}
 			}
+			r.hk.installed = kept
 		})
 	}, nil
 }
@@ -224,7 +253,11 @@ func (r *Router) InstallHooks(hooks ...any) (undo func(), err error) {
 func (r *Router) Hooks() []any {
 	r.hk.mu.RLock()
 	defer r.hk.mu.RUnlock()
-	return append([]any(nil), r.hk.installed...)
+	out := make([]any, len(r.hk.installed))
+	for i, e := range r.hk.installed {
+		out[i] = e.hook
+	}
+	return out
 }
 
 // composeHooks is the hooks of one call, in order: defaults, installed, the call's.
@@ -234,7 +267,9 @@ func (r *Router) composeHooks(c call) []any {
 		hooks = append(hooks, h)
 	}
 	r.hk.mu.RLock()
-	hooks = append(hooks, r.hk.installed...)
+	for _, e := range r.hk.installed {
+		hooks = append(hooks, e.hook)
+	}
 	r.hk.mu.RUnlock()
 	return append(hooks, c.hooks...)
 }
@@ -267,12 +302,12 @@ func newRunID() string {
 
 // dispatchRoute runs OnRoute over the hooks of c and returns the decision they leave.
 func (r *Router) dispatchRoute(state any, qs schema.Questions, d Decision, c call) (Decision, error) {
-	policy := agent.HookPolicy{Timeout: r.hk.timeout, Raise: r.hk.raise, Warn: r.hk.warn}
+	policy := hookrun.Policy{Timeout: r.hk.timeout, Raise: r.hk.raise, Warn: r.hk.warn}
 	if c.raise != nil {
 		policy.Raise = *c.raise
 	}
 	if c.timeout != nil {
-		if err := agent.ValidateHookTimeout(*c.timeout); err != nil {
+		if err := hookrun.ValidateTimeout(c.timeout.Seconds()); err != nil {
 			return d, err
 		}
 		policy.Timeout = *c.timeout
@@ -288,9 +323,9 @@ func (r *Router) dispatchRoute(state any, qs schema.Questions, d Decision, c cal
 		return d, nil
 	}
 	rc := &RouteContext{States: []any{state}, Questions: qs, RunID: newRunID(), Decision: d, Router: r}
-	run := agent.HookRun{Lock: r.hk.lock, Policy: policy}
+	run := hookrun.Run{Lock: r.hk.lock, Policy: policy}
 	err := run.Dispatch(context.Background(), "on_route", len(hooks),
-		func(i int) string { return agent.HookName(all[i]) }, func(i int) { hooks[i].OnRoute(rc) })
+		func(i int) string { return hookrun.Name(all[i]) }, func(i int) { hooks[i].OnRoute(rc) })
 	if err != nil {
 		return d, err
 	}

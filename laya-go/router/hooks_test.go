@@ -189,7 +189,7 @@ func TestTimeoutAbandonsTheHookButNotTheRouter(t *testing.T) {
 	}
 }
 
-// Serial hooks never overlap across goroutines; WithConcurrentHooks lets them.
+// Serial hooks never overlap across goroutines; by default they can.
 func TestSerialHooksDoNotOverlapAndConcurrentOnesCan(t *testing.T) {
 	overlap := func(opts ...router.Option) int32 {
 		var inside, worst int32
@@ -218,10 +218,10 @@ func TestSerialHooksDoNotOverlapAndConcurrentOnesCan(t *testing.T) {
 		wg.Wait()
 		return worst
 	}
-	if w := overlap(); w != 1 {
+	if w := overlap(router.WithSerialHooks()); w != 1 {
 		t.Errorf("serial hooks overlapped %d deep", w)
 	}
-	if w := overlap(router.WithConcurrentHooks()); w < 2 {
+	if w := overlap(); w < 2 {
 		t.Errorf("concurrent hooks never overlapped (%d)", w)
 	}
 }
@@ -229,7 +229,7 @@ func TestSerialHooksDoNotOverlapAndConcurrentOnesCan(t *testing.T) {
 // Hooks added, removed and run from many goroutines: the race detector is the assertion, plus
 // every call returning one of the two decisions a hook can leave.
 func TestConcurrentRegistryAndRoutes(t *testing.T) {
-	r := mustNew(t, router.WithConcurrentHooks())
+	r := mustNew(t)
 	pin := hook(func(c *router.RouteContext) {
 		c.Decision = router.Decision{Model: router.Multilingual, Reason: "pin"}
 	})
@@ -316,5 +316,89 @@ func TestBaseHookIsANoOp(t *testing.T) {
 	r := mustNew(t, router.WithInstalledHooks(&embed{}))
 	if d, err := r.Route(englishText, none); err != nil || d.Model != router.English {
 		t.Fatal(d, err)
+	}
+}
+
+// A hook that calls Route on its own Router: fine by default (as in Python, where hooks are
+// concurrent), a wait-for-itself under WithSerialHooks that only a timeout ends.
+func TestHookMayCallRouteOnItsOwnRouterUnlessSerial(t *testing.T) {
+	reenter := func(opts ...router.Option) (string, error) {
+		r := mustNew(t, opts...)
+		var inner atomic.Value
+		var entered atomic.Bool
+		_ = r.AddHook(hook(func(c *router.RouteContext) {
+			if entered.CompareAndSwap(false, true) {
+				d, err := r.Route("x", none, router.ForModel("english"))
+				if err == nil {
+					inner.Store(string(d.Model))
+				}
+			}
+		}))
+		_, err := r.Route("x", none)
+		got, _ := inner.Load().(string)
+		return got, err
+	}
+	if inner, err := reenter(); err != nil || inner != "english" {
+		t.Fatalf("default: inner=%q err=%v", inner, err)
+	}
+	_, err := reenter(router.WithSerialHooks(), router.WithHookTimeout(100*time.Millisecond))
+	if err == nil || !strings.Contains(err.Error(), "exceeded 0.1s") {
+		t.Fatalf("serial: %v, want the timeout that ends the self-wait", err)
+	}
+}
+
+type valueHook struct{ f func() }
+
+func (valueHook) OnRoute(*router.RouteContext) {}
+
+type anyHook struct{ v any }
+
+func (anyHook) OnRoute(*router.RouteContext) {}
+
+func TestNonComparableHooksAreRefused(t *testing.T) {
+	r := mustNew(t)
+	for name, bad := range map[string]any{
+		"struct holding a func":           valueHook{},
+		"comparable struct, slice inside": anyHook{v: []int{1}},
+	} {
+		err := r.AddHook(bad)
+		if err == nil || !strings.Contains(err.Error(), "pass a pointer") {
+			t.Errorf("%s: %v", name, err)
+		}
+		if _, err := router.New(router.WithInstalledHooks(bad)); err == nil {
+			t.Errorf("%s accepted by New", name)
+		}
+		if undo, err := r.InstallHooks(bad); err == nil {
+			undo()
+			t.Errorf("%s accepted by InstallHooks", name)
+		}
+	}
+	// A comparable value is fine, and can be removed.
+	ok := anyHook{v: 1}
+	if err := r.AddHook(ok); err != nil || !r.RemoveHook(ok) {
+		t.Fatalf("comparable value hook: %v", err)
+	}
+	// A pointer to the same non-comparable struct is fine.
+	if err := r.AddHook(&valueHook{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInstallUndoRemovesExactlyItsOwnEntries(t *testing.T) {
+	var order []string
+	mk := func(n string) *router.HookFuncs { return hook(func(*router.RouteContext) { order = append(order, n) }) }
+	a, b := mk("a"), mk("b")
+	r := mustNew(t)
+	undo, err := r.InstallHooks(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.AddHook(b, a) // an equal hook added after the install
+	undo()
+	if _, err := r.Route("x", none); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(order, ""); got != "ba" {
+		t.Fatalf("after undo %q: the install's own a goes, the later a stays", got)
 	}
 }

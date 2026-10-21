@@ -112,7 +112,8 @@ func WithSourceIn(name, repo, subfolder string) Option {
 	}
 }
 
-// New builds a Router. A default or source name that is neither a checkpoint nor an alias is an
+// New builds a Router. Hooks run concurrently unless WithSerialHooks is given, and a serial hook
+// must not call Route on its own Router. A default or source name that is neither a checkpoint nor an alias is an
 // *UnknownModelError. Sources are applied in the order given, the last one for a name winning.
 func New(opts ...Option) (*Router, error) {
 	c := config{def: string(Multilingual), hooks: hookConfig{raise: true}}
@@ -220,7 +221,8 @@ func ForLangGuess(h LangHint) CallOption { return func(c *call) { c.hint = h } }
 // looked at for its ids, to recognise a typed-decisions workflow; the zero value is fine.
 //
 // Hooks with an OnRoute method then see the decision and may replace it; the replacement is
-// returned (see hooks.go).
+// returned (see hooks.go). Under WithSerialHooks a hook must not call Route on the Router that is
+// running it: the call would wait for itself.
 //
 // The error is an *UnknownModelError for a model or task that names no checkpoint, or a hook's
 // failure under WithHookErrors(true).

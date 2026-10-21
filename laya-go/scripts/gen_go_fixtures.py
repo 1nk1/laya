@@ -1203,8 +1203,14 @@ def router_family(rng):
                              % (len(routes), refused))
     hooks, hook_batches = router_hooks_family(rng)
     return {"names": names, "codes": codes, "workflows": workflows, "signatures": signatures,
-            "routes": routes, "batches": batches, "hooks": hooks, "hook_batches": hook_batches}
+            "routes": routes, "batches": batches, "hooks": hooks, "hook_batches": hook_batches,
+            "timeout_text": [{"seconds": x, "text": "%g" % x} for x in TIMEOUT_TEXT_VALUES]}
 
+
+# Python's %g on a timeout: six significant digits, exponent form below 1e-4 and from 1e6.
+TIMEOUT_TEXT_VALUES = [0.1234567, 1234.567, 123456.7, 1234567.0, 12345678.9, 0.0001, 0.00012345678, 0.00001234567, 1e-07,
+                       0.5, 1.0, 30.0, 100000.0, 999999.5, 999999.4, 1000000.0, 0.1, 0.05, 2.5, 3600.0, 1e9,
+                       0.30000000000000004, 1.0000005, 1.0000004, 0.99999949, 7.0000001]
 
 ROUTER_HOOK_MODELS = ["english", "multilingual", "typed-decisions"]
 
@@ -1323,6 +1329,9 @@ def router_hooks_family(rng):
         ("timeout-raises", {"hooks_timeout": 0.1}, [hook("Slow", behaviour="sleep:0.6")], {}, en),
         ("timeout-stops-the-chain", {"hooks_timeout": 0.1},
          [hook("A"), hook("Slow", behaviour="sleep:0.6"), hook("C")], {}, en),
+        ("timeout-text-keeps-six-significant-digits", {"hooks_timeout": 0.1234567}, [hook("Slow", behaviour="sleep:0.6")],
+         {}, en),
+        ("timeout-text-per-call-shorter", {}, [hook("Slow", behaviour="sleep:0.6")], {"hooks_timeout": 0.1049999}, en),
         ("timeout-warns-and-continues", {"hooks_timeout": 0.1, "hooks_raise": False},
          [hook("A"), hook("Slow", behaviour="sleep:0.6"), hook("C")], {}, en),
         ("timeout-does-not-trip-a-fast-hook", {"hooks_timeout": 5.0}, [hook("A", behaviour="replace:multilingual")], {}, en),
