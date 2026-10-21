@@ -1,7 +1,8 @@
 package agent
 
 // Hooks are laya/hooks.py for the three events a single agent raises: OnPredictStart, OnPredictEnd
-// and OnError. on_route, on_load and on_evict belong to the router and are not ported. Python's
+// and OnError. on_route lives in package router, which runs it through HookRun; on_load and
+// on_evict are not ported yet. Python's
 // AsyncHook has no counterpart: a hook here is a plain method, and one that needs to wait runs
 // its own goroutines (the agent itself waits for the method to return, bounded by
 // WithHookTimeout).
@@ -282,9 +283,8 @@ type hookState struct {
 	installed []Hook
 	timeout   time.Duration
 	raise     bool
-	serial    bool
+	lock      *HookLock // nil when hooks run concurrently
 	warn      func(string)
-	sem       chan struct{} // the serial lock, a channel so a waiter can give up
 	done      chan struct{} // closed by Close
 	closeOnce sync.Once
 
@@ -294,7 +294,10 @@ type hookState struct {
 
 func newHookState(o options) *hookState {
 	h := &hookState{installed: append([]Hook(nil), o.installed...), timeout: o.timeout, raise: o.raise,
-		serial: !o.concurrent, warn: o.warn, sem: make(chan struct{}, 1), done: make(chan struct{})}
+		warn: o.warn, done: make(chan struct{})}
+	if !o.concurrent {
+		h.lock = NewHookLock()
+	}
 	if h.warn == nil {
 		h.warn = func(msg string) { log.Print(msg) }
 	}
@@ -376,9 +379,12 @@ func (a *Agent) Hooks() []Hook {
 	return append([]Hook(nil), a.hk.installed...)
 }
 
-func sameHook(a, b Hook) bool {
+func sameHook(a, b Hook) bool { return SameHook(a, b) }
+
+// SameHook compares hooks by identity: equal dynamic types that are comparable and equal.
+func SameHook(a, b any) bool {
 	ta, tb := reflect.TypeOf(a), reflect.TypeOf(b)
-	return ta == tb && ta.Comparable() && a == b
+	return ta == tb && ta != nil && ta.Comparable() && a == b
 }
 
 // composeHooks is the hooks of one call, in order.
@@ -408,7 +414,8 @@ var (
 	evError = hookEvent{"on_error", Hook.OnError}
 )
 
-func hookName(h Hook) string {
+// HookName is the type name a hook failure message carries.
+func HookName(h any) string {
 	t := reflect.TypeOf(h)
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
@@ -416,39 +423,64 @@ func hookName(h Hook) string {
 	return t.Name()
 }
 
-// dispatch runs one event over the hooks in order, as hooks.dispatch.
-func (a *Agent) dispatch(ctx context.Context, ev hookEvent, hooks []Hook, pc *PredictContext) error {
-	for _, h := range hooks {
-		err := a.callHook(ctx, ev, h, pc)
+// HookLock serialises hook calls: one hook runs at a time across every dispatch that shares it.
+// It is a channel, so a waiter can give up. A nil *HookLock means hooks run concurrently.
+type HookLock struct{ sem chan struct{} }
+
+// NewHookLock returns a free lock.
+func NewHookLock() *HookLock { return &HookLock{sem: make(chan struct{}, 1)} }
+
+// HookPolicy is how a failing or slow hook is treated: Raise ends the chain with the error, else
+// Warn gets the message and the chain goes on; Timeout above 0 bounds the wait for each hook.
+type HookPolicy struct {
+	Timeout time.Duration
+	Raise   bool
+	Warn    func(msg string)
+}
+
+// HookRun is the dispatcher the agent and the router share (hooks.dispatch).
+type HookRun struct {
+	Lock *HookLock
+	// Quit ends the wait for Lock with ErrQuit; nil never does.
+	Quit    <-chan struct{}
+	ErrQuit error
+	// Detached makes the wait for Lock ignore ctx, for events that report on finished work.
+	Detached bool
+	Policy   HookPolicy
+}
+
+// ValidateHookTimeout is hooks.validate_timeout for a Go duration: positive.
+func ValidateHookTimeout(d time.Duration) error { return validateTimeout(d.Seconds()) }
+
+// Dispatch calls call(i) for i in 0..n-1 in order, each under Lock, Policy.Timeout and the panic
+// recovery, as hooks.dispatch. name(i) names hook i in messages. event is Python's event name.
+func (r HookRun) Dispatch(ctx context.Context, event string, n int, name func(int) string, call func(int)) error {
+	for i := 0; i < n; i++ {
+		err := r.callHook(ctx, name(i), func() { call(i) })
 		if err == nil {
 			continue
 		}
-		if a.hk.raise {
+		if r.Policy.Raise {
 			return err
 		}
-		a.hk.warn(fmt.Sprintf("laya: hook %s.%s failed: %s", hookName(h), ev.name, err))
+		r.Policy.Warn(fmt.Sprintf("laya: hook %s.%s failed: %s", name(i), event, err))
 	}
 	return nil
 }
 
 // callHook runs one hook in its own goroutine, so a timeout can stop the wait for a started
-// hook; Close and the caller's context only end a wait for the serial lock before OnPredictStart. Under the serial lock the lock covers the wait, not the goroutine, as in Python.
-func (a *Agent) callHook(ctx context.Context, ev hookEvent, h Hook, pc *PredictContext) error {
-	hk := a.hk
-	if hk.serial {
-		// OnError and OnPredictEnd report on work already done: they wait for the lock however
-		// the call ends, as Python's always run.
-		var closed <-chan struct{}
-		if ev.name == evStart.name {
-			closed = hk.done
-		} else {
+// hook; Quit and the caller's context only end a wait for the serial lock. Under the lock the
+// lock covers the wait, not the goroutine, as in Python.
+func (r HookRun) callHook(ctx context.Context, name string, fn func()) error {
+	if r.Lock != nil {
+		if r.Detached {
 			ctx = context.WithoutCancel(ctx)
 		}
 		select {
-		case hk.sem <- struct{}{}:
-			defer func() { <-hk.sem }()
-		case <-closed:
-			return ErrClosed
+		case r.Lock.sem <- struct{}{}:
+			defer func() { <-r.Lock.sem }()
+		case <-r.Quit:
+			return r.ErrQuit
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -457,37 +489,49 @@ func (a *Agent) callHook(ctx context.Context, ev hookEvent, h Hook, pc *PredictC
 	go func() {
 		returned := false
 		defer func() {
-			r := recover()
+			rec := recover()
 			switch {
 			case returned:
-			case r == nil: // runtime.Goexit, e.g. t.FailNow: no return and no panic
-				res <- fmt.Errorf("laya: hook %s exited without returning", hookName(h))
+			case rec == nil: // runtime.Goexit, e.g. t.FailNow: no return and no panic
+				res <- fmt.Errorf("laya: hook %s exited without returning", name)
 			default:
-				if err, ok := r.(error); ok {
+				if err, ok := rec.(error); ok {
 					res <- err
 				} else {
-					res <- fmt.Errorf("%v", r)
+					res <- fmt.Errorf("%v", rec)
 				}
 			}
 		}()
-		ev.call(h, pc)
+		fn()
 		returned = true
 		res <- nil
 	}()
 	var expired <-chan time.Time
-	if hk.timeout > 0 {
-		t := time.NewTimer(hk.timeout)
+	if r.Policy.Timeout > 0 {
+		t := time.NewTimer(r.Policy.Timeout)
 		defer t.Stop()
 		expired = t.C
 	}
-	// Once started, a hook is waited for until it returns or times out: abandoning it on Close
+	// Once started, a hook is waited for until it returns or times out: abandoning it on Quit
 	// or on the caller's context would leave it racing the next hook and the call's results.
 	select {
 	case err := <-res:
 		return err
 	case <-expired:
-		return fmt.Errorf("laya: hook %s exceeded %gs", hookName(h), hk.timeout.Seconds())
+		return fmt.Errorf("laya: hook %s exceeded %gs", name, r.Policy.Timeout.Seconds())
 	}
+}
+
+// dispatch runs one event over the hooks in order.
+func (a *Agent) dispatch(ctx context.Context, ev hookEvent, hooks []Hook, pc *PredictContext) error {
+	hk := a.hk
+	run := HookRun{Lock: hk.lock, ErrQuit: ErrClosed, Detached: ev.name != evStart.name,
+		Policy: HookPolicy{Timeout: hk.timeout, Raise: hk.raise, Warn: hk.warn}}
+	if ev.name == evStart.name {
+		run.Quit = hk.done // OnError and OnPredictEnd report on work already done: they wait for the lock however the call ends
+	}
+	return run.Dispatch(ctx, ev.name, len(hooks), func(i int) string { return HookName(hooks[i]) },
+		func(i int) { ev.call(hooks[i], pc) })
 }
 
 // attached is an error that keeps the message and identity of the first failure and carries a
