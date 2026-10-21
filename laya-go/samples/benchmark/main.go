@@ -39,10 +39,18 @@ func run(args []string) error {
 	long := strings.Repeat(short, 90) // about 3.8 KB
 
 	fmt.Println("model-free (no checkpoint, no graph)")
-	cold := once(func() error { lang.Analyze(short); return nil })
+	cold, err := once(func() error { lang.Analyze(short); return nil })
+	if err != nil {
+		return err
+	}
 	fmt.Printf("  %-34s %8.3f ms   <- cold\n", "detect, first ever call", ms(cold))
-	report("detect, 42-char state", must(best(warmup, rounds, func() error { lang.Analyze(short); return nil })))
-	report("detect, 3.8 KB state", must(best(warmup, rounds, func() error { lang.Analyze(long); return nil })))
+	for _, c := range []struct{ label, text string }{{"detect, 42-char state", short}, {"detect, 3.8 KB state", long}} {
+		d, err := best(warmup, rounds, func() error { lang.Analyze(c.text); return nil })
+		if err != nil {
+			return err
+		}
+		report(c.label, d)
+	}
 
 	if len(args) < 2 {
 		fmt.Println("\npass <checkpoint-dir> <graph> to also measure the forward pass")
@@ -81,7 +89,10 @@ func run(args []string) error {
 	longState := demo.State("Charged twice", strings.Repeat("I was billed two times this morning. ", 60))
 
 	fmt.Printf("\nforward pass (%d questions per state)\n", len(qs.IDs()))
-	c := once(func() error { _, err := a.Predict(ctx, state, qs); return err })
+	c, err := once(func() error { _, err := a.Predict(ctx, state, qs); return err })
+	if err != nil {
+		return err
+	}
 	fmt.Printf("  %-34s %8.3f ms   <- cold, includes the first run of the session\n", "Predict, first ever call", ms(c))
 	one, err := best(modelWarmup, modelRounds, func() error { _, err := a.Predict(ctx, state, qs); return err })
 	if err != nil {
@@ -113,20 +124,13 @@ func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond)
 
 func report(label string, d time.Duration) { fmt.Printf("  %-34s %8.3f ms\n", label, ms(d)) }
 
-func must(d time.Duration, err error) time.Duration {
-	if err != nil {
-		panic(err)
-	}
-	return d
-}
-
 // once times a single call.
-func once(f func() error) time.Duration {
+func once(f func() error) (time.Duration, error) {
 	start := time.Now()
 	if err := f(); err != nil {
-		panic(err)
+		return 0, err
 	}
-	return time.Since(start)
+	return time.Since(start), nil
 }
 
 // best is the fastest of n timed calls after warm untimed ones.

@@ -1,31 +1,58 @@
 package demo
 
 import (
+	"encoding/json"
+	"os"
 	"reflect"
 	"testing"
 
 	"github.com/NandhaKishorM/laya/laya-go/sequence"
 )
 
-// The expected text is json.dumps(state, ensure_ascii=False) from Python.
+// Expected texts are json.dumps(state, ensure_ascii=False) from Python.
 func TestStateSerializesInPythonDictOrder(t *testing.T) {
-	got, err := sequence.SerializeState(State("Charged twice for order 8812", "I was billed two times this morning."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	const want = `{"subject": "Charged twice for order 8812", "body": "I was billed two times this morning."}`
-	if got != want {
-		t.Fatalf("state = %s, want %s", got, want)
+	for _, c := range []struct{ subject, body, want string }{
+		{"Charged twice for order 8812", "I was billed two times this morning.",
+			`{"subject": "Charged twice for order 8812", "body": "I was billed two times this morning."}`},
+		{"ऑर्डर 8812 का दो बार बिल", "कृपया रिफंड करें।",
+			`{"subject": "ऑर्डर 8812 का दो बार बिल", "body": "कृपया रिफंड करें।"}`},
+	} {
+		got, err := sequence.SerializeState(State(c.subject, c.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != c.want {
+			t.Errorf("state = %s, want %s", got, c.want)
+		}
 	}
 }
 
+// The golden is laya.presets.email_questions() minus is_phishing, recorded by
+// scripts/gen_email_golden.py. Every field of every question is compared, in order.
 func TestQuestionsAreTheEmailPreset(t *testing.T) {
+	golden, err := os.ReadFile("testdata/email_questions.json")
+	if err != nil {
+		t.Fatal(err)
+	}
 	qs, err := Questions()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"category", "is_spam", "urgency", "needs_reply"}
-	if got := qs.IDs(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("ids = %v, want %v", got, want)
+	got, err := json.Marshal(qs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g, w any
+	if err := json.Unmarshal(got, &g); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(golden, &w); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(g, w) {
+		t.Fatalf("questions differ from the Python preset:\n got %s\nwant %s", got, golden)
+	}
+	if ids := qs.IDs(); !reflect.DeepEqual(ids, []string{"category", "is_spam", "urgency", "needs_reply"}) {
+		t.Fatalf("ids = %v", ids)
 	}
 }
