@@ -94,28 +94,33 @@ The shipped checkpoints work zero-shot, but fine-tuning on decisions from your o
 
 **[nandhakishorm.github.io/laya](https://nandhakishorm.github.io/laya/)**: guides for [prediction hooks](https://nandhakishorm.github.io/laya/hooks/), [schema-driven decisions](https://nandhakishorm.github.io/laya/structured/), [Docker](https://nandhakishorm.github.io/laya/docker/) and [LangChain and LangGraph](https://nandhakishorm.github.io/laya/langchain/), plus a full [API reference](https://nandhakishorm.github.io/laya/reference/).
 
-## What's new in 0.4.12
+## What's new in 0.4.13
 
-* **An opt-in reliability signal for `choice` answers.** `OptionStabilityHook` re-asks a question
-  with its options reordered and relabelled, scores every variant in the same forward pass, and
-  reports how often the answer survives. A clear request held at `stability=1.0` here; a vague one
-  answered `legal` at confidence 0.33 held at `0.17`, which is the case confidence alone does not
-  catch. `accept` and `escalate` are required arguments, not defaults, because the right cutoffs
-  depend on your option counts and on the calibration defect in #1245 (#908, issue #635). It costs
-  what the extra rows cost: on CPU, 1.98x for `variants="fast"` and 3.69x for `"full"`.
-* **`collate_items` builds its tensors once.** The shared batch collator filled torch tensors row
-  by row; it now fills NumPy arrays and wraps them, which is 4.8x faster on a 128-row batch
-  (1.207 ms to 0.250 ms) and produces identical decisions (#1279). The ONNX agent reuses question
-  tokenizations across states in `predict_batch` the way the PyTorch agent already did (#1278).
-* **`PredictLong` in the .NET SDK**, ported from `ONNXAgent.predict_long`, with golden fixtures
-  re-recorded from the Python package (#1283).
-* **The shortlist docs now say which embedder to use.** Measured on 500 rows per dataset,
-  `embed_fn_from_agent` scores *below* asking one plain question (0.224 against 0.416 on
-  BANKING77), while a dedicated bi-encoder reaches 0.630, and embedding the user's message alone
-  rather than the instructions plus the JSON state is better again on CLINC150 and MASSIVE (#1281,
-  issue #102).
-* **The logo was drawn semi-transparent** and is now solid ink, which is most visible on dark
-  backgrounds where the ring had been desaturating toward grey.
+* **`OptionStabilityHook`'s rename probe kept the option's meaning.** Renaming
+  `{"approve": None, "reject": None}` to letters sent the model bare `A` and `B`, so a probe
+  described as meaning-preserving was measuring a question the model could not read; the list form
+  `["approve", "reject"]` had always kept the text. The label is now carried into the description,
+  as the list form does (#1286, issue #1285). Separately, `soft_stability` is reported unrounded
+  and `calibrate_reliability` no longer quantizes its candidate cutoffs, so replaying a reported
+  score reproduces the decision the hook made (#1289, issue #1288). The hook is also ported to
+  TypeScript, with a 128-case fixture recorded from the Python reference (#1290).
+* **Language detection can say why.** `analyse(state, explain=True)` adds a `diagnostic` naming the
+  branch that decided and, for an override, which nested value triggered it: a German message under
+  `payload.customer` now reports that path rather than only the verdict. `laya --explain` exposes it
+  on the routing path. Opt-in, and the default result is byte-identical (#1284, issue #1276).
+* **Four fail-closed type guards.** A remote decision body that is valid JSON but not an object
+  leaked `AttributeError` past the fail-closed branch in the tool selector and in agno, taking the
+  `fallback_tool` down with it (#1293, #1296). `bool` subclasses `int`, so a JSON `"minimum": true`
+  became a score bound of 1 and `"answer_confidence": true` a confidence of 1.0; both are now
+  refused (#1294, #1295).
+* **`predict_batch` in the Python HTTP SDK**, one `POST /v1/systemone/batch` for a list of states,
+  results in input order, no splitting and no fallback to single requests (#1297).
+* **The Rust and .NET SDKs match the Python package exactly** in routing, language detection,
+  email, float rounding and config parsing, and Rust gains `predict_long` (#1292, #1291). Every
+  routing golden in both regenerates byte-identically from this Python tree.
+* **Decoding is a little cheaper.** The softmax normalises in place and `answer_confidence` uses a
+  native clamp rather than NumPy's scalar dispatcher, which is 3.8x on that helper (#1299). All 30
+  real-weight decision rows are unchanged.
 
 Earlier releases are in the [GitHub releases](https://github.com/NandhaKishorM/laya/releases).
 
