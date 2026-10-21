@@ -327,9 +327,16 @@ public sealed class HfTokenizer : ILayaTokenizer, IDisposable
             // 2a. Fused layout: tokenizer_config.json says "cls_token": "[CLS]" (for ModernBERT)
             //     or "cls_token": "<bos>" (for mmBERT). HuggingFace sometimes stores these as
             //     plain strings and sometimes as {"content": "...", ...} dicts.
-            using var f = File.OpenRead(configPath);
-            using var cfg = JsonDocument.Parse(f);
+            // Python reads this file with json.load, which accepts NaN / Infinity / -Infinity tokens.
+            using var cfg = PythonJsonReader.ParseDocument(PythonJsonReader.ReadAllText(configPath), out var tree);
             var r = cfg.RootElement;
+            // The document is a re-emission of what Python would hold; NaN / Infinity and a lone surrogate cannot
+            // survive it, so a token field that holds one fails here instead of being read as something else.
+            if (tree is IReadOnlyDictionary<string, object?> fields)
+                foreach (var key in new[] { "cls_token", "sep_token", "pad_token", "unk_token", "mask_token" })
+                    if (fields.TryGetValue(key, out var held) && PythonJsonReader.IsAlteredByReEmission(held))
+                        throw new InvalidDataException(
+                            $"'{key}' in '{configPath}' holds a value JSON text cannot carry (NaN, Infinity or a lone surrogate).");
             clsStr  = RequireTokenString(r, "cls_token",  configPath);
             sepStr  = RequireTokenString(r, "sep_token",  configPath);
             padStr  = RequireTokenString(r, "pad_token",  configPath);

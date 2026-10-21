@@ -255,7 +255,8 @@ its position. `Add` throws instead.
 |---|---|
 | `string` | used as written |
 | `IDictionary`, `IEnumerable<KeyValuePair<string, object?>>` | a JSON object, in the dictionary's enumeration order |
-| any other `IEnumerable` (arrays, lists, conversation turns) | a JSON array |
+| `IList` (arrays, `List<T>`, conversation turns) and tuples (`ValueTuple`, `Tuple`) | a JSON array; only an `IList` is left-truncated when over budget, as Python truncates a `list` (a tuple keeps its start) |
+| a set, a `Queue<T>`, a LINQ iterator or any other non-list enumerable | **not accepted**: serializing it throws `JsonException`, as Python's `json.dumps` rejects a set or a generator. Pass `ToList()` / `ToArray()` |
 | `null`, `bool`, integer types, `BigInteger`, `double`, `float`, `decimal` | the JSON scalar |
 
 Serialization matches Python's `json.dumps` byte for byte (`", "` / `": "` separators, float
@@ -543,6 +544,15 @@ Console.WriteLine(result.Routing!.Reason);   // "English Latin text"
 or testing the routing logic in isolation. `Preload()` builds every checkpoint up front for a
 server or demo, so no request pays a cold load.
 
+**Language hints.** Precedence is explicit `model` > `task` > detected typed-decisions workflow (opt-in) >
+explicit `lang` > `LangGuess` > detection > default. An explicit `lang` decides only when its code names a
+language (`en`, `EN`, `en-US`, `en_US`, `en_US.UTF-8`, `pt-BR`); blank, `C`, `C.UTF-8`, `POSIX`, `und`, `zxx`
+and `mul` fall through to detection. A `LangGuess` is Python's `lang_guess`, a code or a callback of the state
+(a callback returning `null` abstains, so a language-identification model can decline); pass one per call
+to the `Route`/`Predict`/`PredictLong` overloads that end in `LangGuess? langGuess`, or install one for every
+request with `new LayaRouterOptions { LangGuess = LangGuess.FromCallback(state => Identify(state)) }`.
+Route reasons quote caller text with Python's `repr`, escaping non-printable characters.
+
 **Email cleaning** strips quoted history, signatures and disclaimers before you ask any questions:
 
 ```csharp
@@ -550,6 +560,11 @@ var cleaned = LayaEmail.CleanBody(rawBody);
 var state = LayaEmail.State(subject, rawBody, sender: "user@acme.com");
 var answers = router.Predict(state, LayaPresets.Email());
 ```
+
+`LayaEmail.State(subject, body, sender, clean, extra, maxChars)` takes Python's `max_chars` budget (default 3000).
+It is a slice budget, applied as Python slices: `0` gives an empty body and a negative value cuts from the end
+(`5 * |maxChars|` characters in all), so pass a number larger than the body to mean "no limit". It is ignored
+when `clean` is `false` and is never added to the state as a field.
 
 **Embedding shortlist** narrows a high-cardinality choice question before the model sees it, using
 a caller-supplied embedding function (bring your own bi-encoder — this SDK does not include one):
@@ -654,10 +669,11 @@ The contents of `rl_agent_config.json`. Missing keys fall back to the same defau
 | `string? Encoder` | The encoder the checkpoint was trained on. For information only. |
 | `int MaxLen` | Total sequence budget, in tokens (1024 on multilingual). |
 | `int HeadMaxLen` | Budget for instructions plus all option fragments (256 on multilingual). |
-| `IReadOnlyList<double> Temperature` | Per-question-type temperature `[choice, score, noul]`, clamped. Always 3 entries. |
+| `IReadOnlyList<double> Temperature` | Per-question-type temperature `[choice, score, noul]`, clamped; the entries of the config as written (a list shorter than three fails at the prediction that needs the missing one, as Python does). |
 | `IReadOnlyDictionary<string, double> TemperatureByOptions` | Per-bucket temperature, clamped. Keys look like `choice:3-5` (buckets `2`, `3-5`, `6-10`, `11+`). |
-| `IReadOnlyList<double> TemperatureRaw` / `TemperatureByOptionsRaw` | What the checkpoint shipped, before clamping. |
-| `IReadOnlyList<string> ClampedTemperatures` | Every temperature that was clamped into `[0.5, 5.0]`. A non-empty list means confidence from those buckets is uncalibrated. Each entry is also logged at load time via `Trace.TraceWarning`. |
+| `IReadOnlyList<double> TemperatureRaw` / `TemperatureByOptionsRaw` | What the checkpoint shipped, before clamping, as numbers (a value that is not a number reads `NaN`). |
+| `IReadOnlyList<object?> TemperatureRawValues` / `IReadOnlyDictionary<string, object?> TemperatureByOptionsRawValues` | The same entries as the JSON held them (`long`, `double`, `string`, `bool`, `null`, list). |
+| `IReadOnlyList<string> ClampedTemperatures` | Every temperature that was clamped into `[0.5, 5.0]`. A non-empty list means confidence from those buckets is uncalibrated. Entries read `name=<Python repr of the value> -> <applied>`, as Python's warning lists them. One `Trace.TraceWarning` listing every entry is raised at load time. |
 
 ```csharp
 foreach (var warning in engine.Config.ClampedTemperatures)
@@ -922,7 +938,7 @@ with `--solution` rather than as a positional argument.
 ## Known gaps
 
 Default and long predictions are verified against goldens regenerated from Python
-**0.4.11**, and routing against goldens from Python **0.4.0**. Language detection uses current script and mixed-language rules; `MixedSegment`
+**0.4.11**, and routing against goldens from Python **0.4.12**. Language detection uses current script and mixed-language rules; `MixedSegment`
 identifies the foreign line or field that overrides a mostly-English state. Undetermined
 Latin text uses the router's configured default. Email cleaning follows current request,
 disclaimer, signature and reply-header rules, including Portuguese, Spanish and French markers.
@@ -932,11 +948,25 @@ disclaimer, signature and reply-header rules, including Portuguese, Spanish and 
   Python, so default predictions are unaffected. They are planned as follow-ups.
 - **Other Python-only APIs are not ported:** hooks, batching APIs, question option ordering and
   digest controls.
-- **Custom email-state body budgets:** `LayaEmail.State` does not expose Python's `max_chars`
-  keyword. Call `LayaEmail.CleanBody(body, maxChars)` and pass its result with `clean: false`.
 - **Usage diagnostics:** Python's `state_tokens`, `truncated`, `state_tokens_dropped` and
   `truncated_questions` are exposed for `PredictLong` only; ordinary `Predict` still reports
   just input/output tokens.
+
+## Differences from Python
+
+Where this SDK deliberately does not match the Python reference, so nobody has to find out from a failing load:
+
+- **`max_len` and `head_max_len` are checked when the config is loaded.** An integer `>= 0` or a boolean (`true` is 1,
+  `false` is 0, as in Python) is accepted. Any other value is refused by `LayaConfig.Parse` / `LayaEngine.Create` with
+  an `InvalidDataException`: a float, string, `null`, list or object gets the `TypeError` text Python raises at the first
+  prediction (head first, then `max_len`), and a negative integer gets a message naming the field and value, because
+  Python then slices from the end, which this port does not support. Python loads such a checkpoint and fails later. The
+  related corner: a small *fractional* `head_max_len` that Python happens to survive (roughly up to 8 plus 4 per option)
+  is refused here too.
+- **JSON nesting.** Config and tokenizer JSON is read like `json.loads`, with the nesting cut-off set to 2,997 levels,
+  what CPython 3.12 measured from a shallow call. Python's real limit depends on the call depth at the point of loading.
+- **Config files are decoded as strict UTF-8.** Python opens them with the locale's encoding (cp1252 on a default Windows
+  install), which only differs for non-ASCII bytes; a BOM is rejected, as `json.loads` does.
 
 ---
 

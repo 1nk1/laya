@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Laya.Tokenization;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
@@ -76,6 +77,7 @@ public sealed class LayaEngine : IDisposable, ILayaLongPredictor
     /// When the loaded config's encoder contradicts the expected encoder for the requested
     /// <see cref="LayaOptions.Checkpoint"/> — indicates the wrong artifact was loaded.
     /// </exception>
+    [WarnSite, MethodImpl(MethodImplOptions.NoInlining)]
     public static LayaEngine Create(LayaOptions? options = null)
     {
         options ??= new LayaOptions();
@@ -126,6 +128,7 @@ public sealed class LayaEngine : IDisposable, ILayaLongPredictor
     }
 
     /// <summary>Load an engine from an artifact directory containing either ONNX layout.</summary>
+    [WarnSite, MethodImpl(MethodImplOptions.NoInlining)]
     public static LayaEngine FromDirectory(string directory) =>
         Create(new LayaOptions { ModelDirectory = directory });
 
@@ -214,6 +217,7 @@ public sealed class LayaEngine : IDisposable, ILayaLongPredictor
     /// <param name="batchSize">Maximum windows per forward pass; nonpositive or null uses Python's automatic cap.</param>
     /// <returns>The deciding window's answers and summed usage, including the number of windows.</returns>
     /// <exception cref="ArgumentException">Unsupported aggregation, a gap-causing stride, or no state room.</exception>
+    [WarnSite, MethodImpl(MethodImplOptions.NoInlining)]
     public LayaResult PredictLong(object state, QuestionSet questions, int? window = null, int? stride = null,
                                   string aggregate = "auto", int? batchSize = null)
     {

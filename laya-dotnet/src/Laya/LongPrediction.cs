@@ -12,23 +12,44 @@ internal static class LongPrediction
         var requested = window is > 0 ? window.Value : Math.Max(64, maxLen - headMaxLen - 8);
         var room = questions.Count == 0 ? requested : questions.Ids.Min(
             id => SequenceBuilder.StateRoom(tokenizer, questions[id], maxLen, headMaxLen));
+        return BudgetForRoom(requested, room, maxLen, headMaxLen, window, stride);
+    }
+
+    // window_budget once the smallest room is known (common.py:404 onward).
+    internal static (int Window, int Stride, int Room) BudgetForRoom(
+        int requested, int room, int maxLen, int headMaxLen, int? window, int? stride)
+    {
         if (room <= 0)
             throw new ArgumentException(
                 $"predict_long: the questions' options fill the whole sequence (max_len={maxLen},"
                 + $" head_max_len={headMaxLen}), leaving no room for the state; no window can carry any of it."
-                + " A label set this large is what laya.shortlist.predict_shortlist is for", nameof(questions));
+                + " A label set this large is what laya.shortlist.predict_shortlist is for", "questions");
         var size = Math.Min(requested, room);
-        if (size < requested && (window is > 0 || requested >= room * 2L))
-            Trace.TraceWarning(
-                $"laya: predict_long: scan window capped {requested} -> {size} to fit these questions"
-                + $" inside max_len={maxLen}; fewer or shorter options or shortlisting reduce scan cost");
+        // common.py:410-440: the two texts Python warns with when the window is cut to the room.
+        if (size < requested && window is > 0)
+            WarnOnce.Warn(
+                $"laya: predict_long: window={requested} is wider than the {room} state tokens these questions"
+                + $" leave inside max_len={maxLen}, so every window would be truncated to {room} on the way to"
+                + $" the model; scanning with window={room} instead");
+        else if (size < requested && requested >= room * 2L)
+            WarnOnce.Warn(
+                $"laya: predict_long: these questions leave only {room} of max_len={maxLen} for the state"
+                + $" (their heads take the rest), so the scan window is capped {requested} -> {room} and roughly"
+                + $" {PythonFormat1((double)requested / room)}x as many windows -- each a full forward pass -- are needed to read the"
+                + " document. Fewer or shorter options, a larger max_len, or"
+                + " laya.shortlist.predict_shortlist for a large label set will all cost less than"
+                + " scanning at this width");
         var step = stride is > 0 ? stride.Value : Math.Max(1, size / 2);
         if (step > size)
         {
             if (size < requested && stride <= requested)
             {
-                step = Math.Max(1, size / 2);
-                Trace.TraceWarning($"laya: predict_long: stride={stride} reduced to {step} after window clamp");
+                var reduced = Math.Max(1, size / 2);
+                WarnOnce.Warn(
+                    $"laya: predict_long: stride={step} was a 50% step for the window={requested} you asked for, but"
+                    + $" the window was reduced to {size} to fit the room these questions leave; scanning with"
+                    + $" stride={reduced} instead");
+                step = reduced;
             }
             else
                 throw new ArgumentException(
@@ -38,6 +59,18 @@ internal static class LongPrediction
                     + $" pass stride <= {size}", nameof(stride));
         }
         return (size, step, room);
+    }
+
+    // Python's "%.1f": the exact binary value rounded to one decimal, a tie going to the even digit
+    // (.NET's "F1" breaks ties away from zero, which differs for x.25 and x.75).
+    internal static string PythonFormat1(double value)
+    {
+        var scaled = value * 10;
+        var floor = Math.Floor(scaled);
+        // an exact tie needs a multiple of 0.25, whose product with 10 is exact
+        if (scaled - floor == 0.5 && value * 4 == Math.Floor(value * 4))
+            return ((floor % 2 == 0 ? floor : floor + 1) / 10).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        return value.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     internal static IReadOnlyList<WindowInfo> Spans(int tokens, int window, int stride)
