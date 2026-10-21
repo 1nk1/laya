@@ -928,6 +928,63 @@ def predict_plan_family(rng):
 
 
 
+class _OrderAgent:
+    """Records the questions predict_shortlist hands to predict, option_order included."""
+
+    def __init__(self):
+        self.seen = None
+
+    def predict(self, state, questions, **kwargs):
+        self.seen = {qid: dict(qdef) for qid, qdef in questions.items()}
+        return {"answers": {}, "model": "stub"}
+
+
+def _order_embed(texts):
+    """Rank option i by a fixed score, so which labels survive the cut is known by reading it."""
+    import numpy as np
+
+    return np.asarray([[1.0, 0.0] if i == 0 else [1.0 / (i + 1), float(i % 3)]
+                       for i in range(len(texts))], dtype=np.float64)
+
+
+def shortlist_order_family(rng):
+    """predict_shortlist's option_order rule: a narrowed choice loses it, with one warning each."""
+    import copy
+    import warnings
+
+    from laya import shortlist as mod
+
+    six = {name: "the %s option" % name for name in ("a", "b", "c", "d", "e", "f")}
+    three = {"x": "first", "y": "second", "z": "third"}
+    cases = []
+    for name, questions, k in [
+        ("narrowed-loses-order", {"q": {"type": "choice", "instructions": "Which?", "criteria": six,
+                                        "option_order": [5, 4, 3, 2, 1, 0]}}, 3),
+        ("passthrough-keeps-order", {"q": {"type": "choice", "instructions": "Which?", "criteria": three,
+                                           "option_order": [2, 0, 1]}}, 3),
+        ("non-choice-keeps-order", {
+            "s": {"type": "score", "instructions": "How bad?", "criteria": ["low", "mid", "high"],
+                  "option_order": [2, 1, 0]},
+            "n": {"type": "noul", "instructions": "Is it?", "option_order": [1, 0]}}, 2),
+        ("two-narrowed-two-warnings", {
+            "p": {"type": "choice", "instructions": "P?", "criteria": six, "option_order": [1, 0, 2, 3, 4, 5]},
+            "q": {"type": "choice", "instructions": "Q?", "criteria": six, "option_order": [5, 4, 3, 2, 1, 0]},
+            "r": {"type": "choice", "instructions": "R?", "criteria": three, "option_order": [1, 2, 0]}}, 4),
+        ("narrowed-without-order", {"q": {"type": "choice", "instructions": "Which?", "criteria": six}}, 2),
+    ]:
+        agent = _OrderAgent()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = mod.predict_shortlist(agent, "state", copy.deepcopy(questions), _order_embed, k)
+        cases.append({
+            "name": name, "k": k, "questions": questions,
+            "asked": agent.seen,
+            "warnings": [str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)],
+            "labels": {qid: entry["labels"] for qid, entry in result["shortlist"].items()},
+        })
+    return {"cases": cases}
+
+
 def build():
     import tokenizers
 
@@ -952,6 +1009,7 @@ def build():
         "answers_fuzz": decode_fuzz_family(rng),
         "marker_refusals": marker_refusals_family(rng),
         "predict_plan": predict_plan_family(rng),
+        "shortlist_order": shortlist_order_family(rng),
     }
 
 
