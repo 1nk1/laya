@@ -45,6 +45,14 @@ func translate(pattern string) string {
 	return b.String()
 }
 
+// Non-ASCII spaces and digits get their own bytes: a literal ' ' in a pattern is U+0020 alone
+// in Python, and `[0-9]` in the device footer's `using [a-z][a-z0-9_.+-]*` is ASCII alone,
+// while Python's \s and \d take the others.
+const (
+	nonASCIISpace = 0x0e
+	nonASCIIDigit = 0x0f
+)
+
 // wordStandIn is the view's character for a word character that is not a digit and that no
 // pattern spells; 'Z' because folded text never holds an uppercase ASCII letter.
 const wordStandIn = 'Z'
@@ -53,16 +61,21 @@ const wordStandIn = 'Z'
 func viewByte(r rune) byte {
 	f := fold(r)
 	if f < 0x80 {
-		return byte(f)
+		switch c := byte(f); {
+		case c <= 8, c >= 0x0e && c <= 0x1b, c == 0x7f:
+			return 1 // not a space, digit or word character; keeps 0x0e and 0x0f free
+		default:
+			return c
+		}
 	}
 	if p, ok := placeholders[f]; ok {
 		return p
 	}
 	switch {
 	case unicodedata.IsSpace(r):
-		return ' '
+		return nonASCIISpace
 	case unicodedata.IsDigit(r):
-		return '0'
+		return nonASCIIDigit
 	case unicodedata.IsPythonWord(r):
 		return wordStandIn
 	}
@@ -79,6 +92,22 @@ func viewOf(runes []rune) string {
 	return string(out)
 }
 
+// disclaimerViewOf is the view for the disclaimer pattern, which has no \s or \d of its own but
+// does use \b: a non-ASCII digit has to read as a word character there, and a non-ASCII space
+// as a non-word one that no literal matches.
+func disclaimerViewOf(runes []rune) string {
+	out := []byte(viewOf(runes))
+	for i, c := range out {
+		switch c {
+		case nonASCIIDigit:
+			out[i] = '0'
+		case nonASCIISpace:
+			out[i] = 1
+		}
+	}
+	return string(out)
+}
+
 func hasDigit(view string) bool {
-	return strings.ContainsAny(view, "0123456789")
+	return strings.ContainsAny(view, "0123456789\x0f")
 }

@@ -85,3 +85,24 @@ func TestCutRunes(t *testing.T) {
 		}
 	}
 }
+
+// A literal space in a marker is U+0020 alone in Python, and the footer's `using [a-z]...` is
+// ASCII alone; the other spaces and digits are \s and \d only. Each input below is kept whole.
+func TestLiteralSpacesAndDigitsStayASCII(t *testing.T) {
+	for _, body := range []string{
+		"Hi\nI need help.\nEm seg, 1 de jan de 2024 escreveu:\nold",
+		"Hi\nI need help.\nOn　Monday 5 Jan 2026 Ana wrote:\nold",
+		"Hi\nI need help.\n-----Original Message-----\nold",
+		"a\nb\nc\nd\ne\nThank you John\nsig",
+		"a\nb\nc\nd\ne\nSent　from my iPhone\nsig",
+		"Hi\nI need help.\nEm\x0eseg, 1 de jan de 2024 escreveu:\nold",
+		"a\nb\nc\nd\ne\nThank\x0eyou John\nsig",
+		"a\nb\nc\nd\ne\nSent from my iPhone using x\x0f\nsig",
+		"a\nb\nc\nd\ne\nSent from my iPhone using x٣\nsig",
+		"a\nb\nc\nd\ne\nSent from my iPhone using x１\nsig",
+	} {
+		if got := CleanBody(body, DefaultMaxChars); got != body {
+			t.Errorf("CleanBody(%q) = %q, Python keeps it whole", body, got)
+		}
+	}
+}

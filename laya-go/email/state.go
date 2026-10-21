@@ -31,7 +31,8 @@ func WithoutCleaning() Option { return func(c *stateConfig) { c.clean = false } 
 func WithMaxChars(n int) Option { return func(c *stateConfig) { c.maxChars = n } }
 
 // WithField adds a field the model reads, after the subject, body and sender. A nil value is
-// dropped rather than stored, so a state with a nil thread id is the state without one: a stored
+// dropped rather than stored (untyped nil only; a typed nil pointer is kept, as a value), so a
+// state with a nil thread id is the state without one: a stored
 // nil would put "thread_id": null in the prompt. A key already present is replaced in place.
 func WithField(key string, value any) Option {
 	return func(c *stateConfig) { c.extra = append(c.extra, lang.Member{Key: key, Value: value}) }

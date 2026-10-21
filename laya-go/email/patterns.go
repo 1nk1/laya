@@ -5,11 +5,11 @@ import "regexp"
 // In the view a space is one of Python's 29 space characters (the non-ASCII ones are rewritten
 // to a plain space) and a digit is [0-9].
 const (
-	sp = `[\t-\r\x1c-\x20]`
-	ns = `[^\t-\r\x1c-\x20]`
-	dg = `[0-9]`
+	sp = `[\t-\r\x1c-\x20\x0e]`
+	ns = `[^\t-\r\x1c-\x20\x0e]`
+	dg = `[0-9\x0f]`
 	// spIn is the space class without brackets, for adding members.
-	spIn = `\t-\r\x1c-\x20`
+	spIn = `\t-\r\x1c-\x20\x0e`
 )
 
 func compile(pattern string) *regexp.Regexp { return regexp.MustCompile(translate(pattern)) }

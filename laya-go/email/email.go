@@ -129,12 +129,12 @@ func matchesQuoteHeader(view string) bool {
 // endsWithColon is a necessary condition for attributionTail, which ends in `:` and spaces. It
 // keeps a very long line from being scanned by the pattern's `.{0,120}` for nothing.
 func endsWithColon(view string) bool {
-	return strings.HasSuffix(strings.TrimRight(view, " \t\n\v\f\r\x1c\x1d\x1e\x1f"), ":")
+	return strings.HasSuffix(strings.TrimRight(view, " \t\n\v\f\r\x1c\x1d\x1e\x1f\x0e"), ":")
 }
 
 func firstNonSpace(view string) int {
 	for i := 0; i < len(view); i++ {
-		if view[i] != ' ' && !(view[i] >= '\t' && view[i] <= '\r') && !(view[i] >= 0x1c && view[i] <= 0x1f) {
+		if view[i] != ' ' && view[i] != nonASCIISpace && !(view[i] >= '\t' && view[i] <= '\r') && !(view[i] >= 0x1c && view[i] <= 0x1f) {
 			return i
 		}
 	}
@@ -202,7 +202,7 @@ func collapseSpaces(s []rune) []rune {
 }
 
 // isDisclaimer is _DISCLAIMER.search.
-func isDisclaimer(text []rune) bool { return disclaimer.MatchString(viewOf(text)) }
+func isDisclaimer(text []rune) bool { return disclaimer.MatchString(disclaimerViewOf(text)) }
 
 // startsNewSentence is true when the first letter is uppercase. Uncased scripts never start a
 // new piece, so wrapped boilerplate in them still drops whole.
