@@ -92,6 +92,21 @@ def test_calibration_uses_answer_confidence():
     assert report.overall["mean_confidence"] == pytest.approx(0.9)
 
 
+def test_a_boolean_confidence_is_not_a_probability():
+    # `bool` is a subclass of `int`, so a bare `isinstance(x, (int, float))` reads a JSON
+    # `"answer_confidence": true` as a confidence of 1.0 and hides the numeric `confidence`
+    # fallback below it. A yes/no flag is not a probability, so it is skipped exactly like an
+    # absent field -- the same exclusion the schema guards apply to every other probability.
+    assert evals._answer_confidence({"answer_confidence": True, "confidence": 0.3}) == pytest.approx(0.3)
+    assert evals._answer_confidence({"answer_confidence": False, "confidence": 0.3}) == pytest.approx(0.3)
+    assert evals._answer_confidence({"confidence": True}) is None
+    assert evals._answer_confidence({"confidence": False}) is None
+    # The numeric paths are unchanged: a real `answer_confidence` still wins, and a bound of 0.0
+    # is a genuine confidence, not a missing one.
+    assert evals._answer_confidence({"answer_confidence": 0.9, "confidence": 0.2}) == pytest.approx(0.9)
+    assert evals._answer_confidence({"answer_confidence": 0, "confidence": 0.5}) == pytest.approx(0.0)
+
+
 # ---------------------------------------------------------------- which confidence a metric reads
 # `_answer_confidence` prefers `answer_confidence`, and an answer that carries none gets the entropy
 # `confidence` -- a different quantity on a different scale (#394), which the docstring used to call
