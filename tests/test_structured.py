@@ -151,6 +151,22 @@ check_raises("reject/unbounded number", SchemaError,
              _bad({"type": "object", "properties": {"a": {"type": "integer", "minimum": 0}}}))
 check_raises("reject/score too wide", SchemaError,
              _bad({"type": "object", "properties": {"a": {"type": "integer", "minimum": 0, "maximum": 100}}}))
+# A JSON boolean is not an integer scale bound. `bool` subclasses `int`, so `isinstance(True, int)` is
+# true and a `minimum`/`maximum` of `true`/`false` used to slip through and silently become 1/0 -- even
+# though the same guard rejects `"0"` (str) and `1.5` (float). Refuse them on the same message.
+for bool_bound in ({"minimum": True, "maximum": 3}, {"minimum": 1, "maximum": False},
+                   {"minimum": False, "maximum": True}, {"minimum": True, "maximum": True}):
+    check_raises("reject/boolean score bound %r" % bool_bound, SchemaError,
+                 _bad({"type": "object", "properties": {"a": {"type": "integer", **bool_bound}}}))
+try:
+    questions_from_json_schema({"type": "object", "properties": {"x": {"type": "integer", "minimum": True, "maximum": 3}}})
+except SchemaError as exc:
+    check("reject/boolean bound names the field and the integer rule", str(exc),
+          "properties.x: a numeric field needs integer 'minimum' and 'maximum' to become a score")
+# Positive control: a real integer bound still maps to a score scale (the guard is not over-strict).
+check("accept/integer score bounds unchanged",
+      questions_from_json_schema({"type": "object", "properties": {"x": {"type": "integer", "minimum": 1, "maximum": 3}}})
+      ["x"]["criteria"], ["1", "2", "3"])
 check_raises("reject/too many properties", SchemaError,
              _bad({"type": "object", "properties": {("p%d" % i): {"type": "boolean"} for i in range(33)}}))
 check_raises("reject/too many options", SchemaError,
