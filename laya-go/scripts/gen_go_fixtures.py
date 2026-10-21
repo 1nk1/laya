@@ -928,6 +928,96 @@ def predict_plan_family(rng):
 
 
 
+def email_fold_family(rng):
+    """Which code points `re.I` treats as each literal letter laya/email.py's patterns spell.
+
+    The Go port matches those patterns on text folded to one rune per rune (Go's `(?i)` is a
+    different relation: it has no dotless i), so the fold is held to Python over all of Unicode
+    for every letter the patterns use. `orbit[L]` lists every other code point that matches L.
+    """
+    import re
+    from laya import email as email_mod
+
+    sources = [p.pattern for p in email_mod._QUOTE_HEADERS]
+    sources += [email_mod._ATTRIBUTION_TAIL.pattern, email_mod._ATTRIBUTION_HEAD.pattern,
+                email_mod._HEADER_FROM_NAME.pattern, email_mod._HEADER_NEXT.pattern,
+                email_mod._SIGNOFF_HEAD.pattern, email_mod._DEVICE_FOOTER.pattern,
+                email_mod._DISCLAIMER.pattern, email_mod._DEVICE]
+    sources += [m.pattern for m in email_mod._SIGNATURE_MARKERS if hasattr(m, "pattern")]
+    accented = sorted({c for src in sources for c in src if ord(c) > 127})
+    alphabet = [chr(c) for c in range(ord("a"), ord("z") + 1)] + accented
+    pattern = re.compile("|".join("(%s)" % re.escape(c) for c in alphabet), re.I)
+    orbit = {c: [] for c in alphabet}
+    for cp in range(MAX):
+        if cp in SURROGATES or not chr(cp).isalpha():
+            continue
+        m = pattern.fullmatch(chr(cp))
+        if m is not None and chr(cp) != alphabet[m.lastindex - 1]:
+            orbit[alphabet[m.lastindex - 1]].append(cp)
+    return {"alphabet": "".join(alphabet), "orbit": {k: v for k, v in orbit.items() if v}}
+
+
+EMAIL_FRAGMENTS = [
+    "I cannot log in and need a password reset.", "Please refund the duplicate charge.",
+    "On Mon, Jan 5, 2026 at 9:00 AM Ana <ana@x.com> wrote:", "On Monday I wrote:",
+    "Em seg., 5 de jan. de 2026 \u00e0s 09:00, Ana <ana@x.com> escreveu:",
+    "Em resposta ao que voc\u00ea escreveu:", "El lun, 5 ene 2026, Ana escribi\u00f3:",
+    "Le lun. 5 janv. 2026 \u00e0 09:00, Ana a \u00e9crit :", "Le rapport que vous avez \u00e9crit :", "Le rapport que Ana a \u00e9crit :", "El informe que Ana escribi\u00f3:",
+    "Le lun. 5 janv. 2026, Ana a \u00e9crit:", "ana@x.com> escreveu:", "support@x.com> a \u00e9crit :",
+    "-----Original Message-----", "-----Mensagem original-----", "-----Message d'origine-----",
+    "________________", "From: ana@x.com", "From: my side it works", "From: Ana Souza", "Sent: Monday 2026",
+    "De: Maria Souza", "Enviado: segunda 2026", "De: 10/09 a 15/09", "De : Marie Dupont",
+    "Envoy\u00e9 : lundi 5 janvier 2026", "Date: 5 Jan 2026", "Fecha: 5 enero 2026", "De: ana@x.com",
+    "> quoted line", "  > indented quote", "--", "-- ", "Regards,", "Regards, Ana", "Thanks for the reply.",
+    "Thanks, \u017canetta", "Thanks, \u0141ukasz", "Best regards", "Warm wishes, Jos\u00e9",
+    "Thanks, Jose\u0301", "Thanks, \u0301x", "Kind regards and thanks a lot very much", "Cheers",
+    "Atenciosamente,", "Obrigado pelo retorno, mas ainda n\u00e3o consigo entrar.", "Obrigada.",
+    "Saludos cordiales", "Gracias de antemano", "Cordialement,", "Merci pour votre aide, mais non.",
+    "Merci d'avance", "Bonne journ\u00e9e", "Sent from my iPhone", "Enviado do meu celular",
+    "Enviado do meu celular o comprovante ontem.", "Envoy\u00e9 depuis mon iPhone",
+    "Sent from my Samsung Galaxy smartphone using Outlook 365", "Get Outlook for iOS",
+    "Obter o Outlook para Android", "This email and its contents are confidential and intended solely for you.",
+    "This email and its contents are\nconfidential and intended solely for you.", "Is this confidential?",
+    "Confidential: I need a refund.", "If you have received this email in error please delete it.",
+    "Esta mensagem \u00e9 confidencial e de uso exclusivo do destinat\u00e1rio.",
+    "preciso do contrato confidencial", "Antes de imprimir, pense no meio ambiente.",
+    "antes de imprimir o boleto, confira o valor", "Ha recibido este mensaje por error.",
+    "Ce message est confidentiel et destin\u00e9 \u00e0 son destinataire.", "le contrat confidentiel",
+    "Vous avez re\u00e7u ce message par erreur.", "Usage exclusif du destinataire.",
+    "The account is locked\nThis email is confidential and intended solely for the addressee.",
+    "Please help. This message is confidential and privileged. Thank you.",
+    "\u0130f you received this message in error", "TH\u0130S EMAIL IS CONF\u0130DENT\u0130AL AND INTENDED SOLELY",
+    "this email is confidential and intended solely", "t\u0131his", "\u017f\u00e9nt from my iPhone",
+    "\u212aind regards", "REGARDS, ANA", "\u00a0Regards,\u00a0", "\u2028", "\x85", "\x1c", "a\u2028b",
+    "\u0661\u0662/\u0661\u0663 5 jan Ana escribi\u00f3:", "El \u0661\u0662 Ana escribi\u00f3:",
+    "This email\u0301 is confidential and intended solely", "\U0001d400 confidential and intended solely",
+    "\u4f60\u597d\uff0c\u8bf7\u9000\u6b3e\u3002", "x" * 70, "", " ", "\t", "a    b\t\tc",
+]
+EMAIL_JOINERS = ["\n", "\n", "\n", "\n\n", "\r\n", " ", "\n \n", "\\n", "\r", "\n\u00a0\n"]
+
+
+def email_fuzz_family(rng):
+    """clean_email_body and email_state over random runs of the corpus' own fragments.
+
+    The shared corpus is hand-built from the module's reasoning; this joins its rules, its
+    near-misses and the Unicode oddities (dotless i, long s, Kelvin, NEL, LS, FS, astral, marks,
+    non-ASCII digits) in orders nobody wrote down, at three budgets.
+    """
+    from laya import email as email_mod
+
+    cases = []
+    for _ in range(1500):
+        parts = [rng.choice(EMAIL_FRAGMENTS) for _ in range(rng.randrange(1, 16))]
+        body = parts[0]
+        for part in parts[1:]:
+            body += rng.choice(EMAIL_JOINERS) + part
+        budget = rng.choice([3000, 3000, 3000, 200, 40, 1, 0, -3])
+        case = {"body": body, "max_chars": budget,
+                "result": email_mod.clean_email_body(body, max_chars=budget)}
+        cases.append(case)
+    return {"cases": cases}
+
+
 def build():
     import tokenizers
 
@@ -952,6 +1042,8 @@ def build():
         "answers_fuzz": decode_fuzz_family(rng),
         "marker_refusals": marker_refusals_family(rng),
         "predict_plan": predict_plan_family(rng),
+        "email_fold": email_fold_family(rng),
+        "email_fuzz": email_fuzz_family(rng),
     }
 
 
