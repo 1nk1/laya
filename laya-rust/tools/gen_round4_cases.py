@@ -5,6 +5,16 @@ IEEE-754 pattern as 16 hex digits, so the Rust test compares exactly (``-0.0`` i
 file is an output of this script only; never edit it by hand.
 
     python laya-rust/tools/gen_round4_cases.py
+
+Writes LF, and ``.gitattributes`` pins the file to LF, so re-running this on any platform does
+not report all 20,000 lines as rewritten.
+
+Reproducible except for the ``kind == 4`` magnitudes: ``10 ** rng.uniform(-12, 14)`` goes through
+the platform's libm ``pow``, which is allowed to differ by one ulp, and 3 of the 20,000 inputs do
+differ between Windows and macOS. That is a corpus the port replays, not a contract it has to
+reproduce -- each line already carries both the input and Python's answer for it -- so a re-run
+that moves those 3 inputs is not a behaviour change. Do not commit such a re-run without saying
+which platform produced it.
 """
 
 import math
@@ -51,7 +61,7 @@ def values():
 
 def main():
     lines = [f"{bits(x)} {bits(round(x, 4))} {x!r} {round(x, 4)!r}" for x in values()]
-    OUT.write_text("\r\n".join(lines) + "\r\n", encoding="ascii", newline="")
+    OUT.write_text("\n".join(lines) + "\n", encoding="ascii", newline="")
     print(f"wrote {len(lines)} cases to {OUT}")
 
 
