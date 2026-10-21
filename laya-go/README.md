@@ -4,7 +4,8 @@ A pure-Go port of [laya](../README.md). This module is standard library only: no
 modules. Running the model needs the nested `onnx` module, which uses cgo.
 
 The foundation (language detection, questions, sequences, the tokenizer) and the predict path
-(`infer`, `agent`) are here, and the `onnx` module runs the graph. The router comes in a later change.
+(`infer`, `agent`) are here, and the `onnx` module runs the graph. The router's pure routing half
+(`router`) is here; loading, hooks and routed inference come in later changes.
 
 | Package | What it is |
 | --- | --- |
@@ -12,6 +13,7 @@ The foundation (language detection, questions, sequences, the tokenizer) and the
 | `schema` | Questions (`Choice`, `ChoiceOf`, `Score`, `Noul`, `NoulWith`, `Questions`) and results (`Answer`, `Prediction`, `Usage`) every other package shares. Questions are refused with laya's own wording and read or written in the Python wire form. |
 | `sequence` | `build_sequence`, `build_head`, `state_room`, `window_budget` and `window_batch_cap`: `EncodeState`, `Build`, `StateRoom`, `PlanWindows`, `BatchCap`. |
 | `infer` | The seam to a model runtime: `Batch` (the graph's five inputs), `Output` (its two), `Session`, and the shape checks `Batch.Validate` and `Output.Check`. |
+| `router` | Which checkpoint reads a request, the port of the routing half of `laya/router.py`: `New`, `Route`, `RouteBatch`, `NormaliseName`, `EnglishFromCode`, `MatchTypedDecisionsWorkflow`, `QuestionSchema`. Decisions carry laya's reason strings. Loads nothing. |
 | `agent` | `ONNXAgent.predict` and `predict_batch` over an `infer.Session`: `Open`, `Predict`, `PredictBatch`, `LoadConfig`, with batch size, sort-by-length and context cancellation between runs. |
 | `onnx` | A nested module (cgo, its own `go.mod`): `onnx.Open` runs a fused `laya.onnx` on ONNX Runtime and implements `infer.Session`, for `agent.Open`. Needs an ONNX Runtime 1.29+ shared library; `CGO_ENABLED=0` builds and `Open` returns `ErrNoCGO`. |
 | `tokenizer` | A reader and runner for Hugging Face `tokenizer.json` (BPE): normalizer, pre-tokenizer, added tokens, byte fallback, decoder. |
@@ -42,7 +44,7 @@ order-sensitive state. `Analyze` reads every leaf, so its cost grows with the nu
 
 - No root package: the module path ends in `laya-go`, so tags are `laya-go/vX.Y.Z`.
 - Every package in this module is pure Go: `lang`, `schema`, `sequence`, `tokenizer`, `infer` and
-  `agent` now, and `router`, `presets` and `shortlist` later.
+  `agent` and `router` now, and `presets` and `shortlist` later.
 - cgo lives only in `onnx`, a nested module with its own `go.mod`, so `go test ./...` here never
   compiles it. `onnx` requires this module and `github.com/yalue/onnxruntime_go`; until this module has
   a release tag, `onnx` builds only inside this repository (its `go.mod` points here with `replace`). Importing `lang` or `agent` never compiles cgo.
