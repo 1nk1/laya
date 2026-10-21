@@ -134,6 +134,7 @@ func TestWorkflowNeedsExactIDs(t *testing.T) {
 		append(append([]string{}, customerService...), "extra"),
 		{"urgency"},
 		{},
+		append(append([]string{}, customerService...), "zzz"),
 	} {
 		if got := router.MatchTypedDecisionsWorkflow(noul(t, ids...)); got != "" {
 			t.Errorf("%v matched %q", ids, got)

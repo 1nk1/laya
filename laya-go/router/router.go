@@ -36,7 +36,8 @@ func (d Decision) String() string {
 // LangHint answers, for a state, which language it is in: a code such as "en", "de-DE" or
 // "en_US.UTF-8". Returning "" or a code that names no language ("C", "und") abstains, which sends
 // the request on to detection. It only decides whether the English checkpoint can read the text,
-// so every non-English code selects Multilingual.
+// so every non-English code selects Multilingual. A Router calls its hint from every goroutine
+// that routes, so a hint must be safe for concurrent use.
 type LangHint func(state any) string
 
 // LangCode is a hint that always answers code.

@@ -1061,6 +1061,7 @@ def router_family(rng):
         sys.path.pop(0)
     from laya import router as pyrouter
     from laya.agent import Agent
+    from laya.common import _resolve_noul_labels, render_criterion, render_options
     from laya.router import Router
 
     names = []
@@ -1089,7 +1090,13 @@ def router_family(rng):
             Agent._check_question(qid, copy.deepcopy(definition))
         except ValueError:
             continue
-        signatures.append({"case": cid, "questions": {qid: definition},
+        internal = Agent._to_internal(copy.deepcopy(definition))
+        render = json.dumps([internal["t"], internal["ins"], render_options(internal),
+                             [str(k) for k in internal["crit"]] if internal["t"] == "choice" else
+                             [render_criterion(c) for c in internal["crit"]] if internal["t"] == "score" else
+                             list(_resolve_noul_labels(internal.get("labels"))),
+                             internal.get("option_order")], ensure_ascii=False)
+        signatures.append({"case": cid, "questions": {qid: definition}, "render": render,
                            "signature": pyrouter._question_schema({qid: definition})})
     for _ in range(30):
         picks = rng.sample([d for _, _, d in QUESTION_CASES if _accepted(d)], 3)

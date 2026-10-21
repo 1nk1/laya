@@ -163,6 +163,7 @@ func TestQuestionSchemaGolden(t *testing.T) {
 	if canonical != 50 {
 		t.Fatalf("only %d signatures equal Python's, want 50", canonical)
 	}
+	checkGrouping(t, cases, sigs)
 	pairs := 0
 	for i, c := range cases {
 		if str(t, fixtures.Obj(t, c), "case") == "multi-reversed" {
@@ -357,5 +358,67 @@ func TestRouteBatchGolden(t *testing.T) {
 	}
 	if failed < 3 {
 		t.Fatalf("only %d failing batches", failed)
+	}
+}
+
+// coarser are the pairs of definitions Python signs apart and Go signs alike. Each renders
+// identically (a noul's criteria {} against none or blank, labels in another key order), so sharing a forward
+// pass between them changes no prompt.
+var coarser = [][2]string{
+	{"noul-plain", "noul-null-criteria"},
+	{"noul-plain", "noul-empty-criteria"},
+	{"noul-plain", "noul-empty-is-default"},
+	{"noul-plain", "labels-null"},
+	{"noul-null-criteria", "noul-empty-criteria"},
+	{"noul-null-criteria", "noul-empty-is-default"},
+	{"noul-null-criteria", "labels-null"},
+	{"noul-empty-criteria", "noul-empty-is-default"},
+	{"noul-empty-criteria", "labels-null"},
+	{"noul-empty-is-default", "labels-null"},
+	{"labels-ok", "labels-reversed-keys"},
+}
+
+// checkGrouping compares every pair of single definitions: whatever Python groups Go groups, and
+// whatever Go groups renders the same; Go groups more only for the pairs listed above.
+func checkGrouping(t *testing.T, cases []any, sigs []string) {
+	t.Helper()
+	type def struct{ name, py, render string }
+	var defs []def
+	var goSig []string
+	for i, c := range cases {
+		rec := fixtures.Obj(t, c)
+		render, ok := rec.Get("render")
+		if !ok {
+			continue
+		}
+		defs = append(defs, def{str(t, rec, "case"), str(t, rec, "signature"), render.(string)})
+		goSig = append(goSig, sigs[i])
+	}
+	allowed := map[[2]string]bool{}
+	for _, p := range coarser {
+		allowed[p] = true
+	}
+	var seen int
+	pairs := 0
+	for i := range defs {
+		for j := i + 1; j < len(defs); j++ {
+			pairs++
+			pyEq, goEq := defs[i].py == defs[j].py, goSig[i] == goSig[j]
+			key := [2]string{defs[i].name, defs[j].name}
+			switch {
+			case pyEq && !goEq:
+				t.Errorf("Python groups %v, Go splits them", key)
+			case goEq && defs[i].render != defs[j].render:
+				t.Errorf("Go groups %v, which render differently", key)
+			case goEq && !pyEq:
+				seen++
+				if !allowed[key] {
+					t.Errorf("Go groups %v, which Python signs apart, and it is not listed", key)
+				}
+			}
+		}
+	}
+	if seen != len(coarser) || pairs != 1081 {
+		t.Errorf("%d coarser pairs seen, %d listed, over %d pairs", seen, len(coarser), pairs)
 	}
 }
