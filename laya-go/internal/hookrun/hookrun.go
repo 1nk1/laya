@@ -34,8 +34,7 @@ func Comparable(h any) (ok bool) {
 			ok = false
 		}
 	}()
-	_ = h == h
-	return h != nil
+	return h != nil && h == h
 }
 
 // Same compares hooks by identity: equal dynamic types that are comparable and equal. A value

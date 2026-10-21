@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -28,8 +29,9 @@ func TestSameDoesNotPanicOnHiddenNonComparable(t *testing.T) {
 
 func TestZeroValuesAreUsable(t *testing.T) {
 	var buf bytes.Buffer
+	prev := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(nil) })
+	t.Cleanup(func() { log.SetOutput(prev) })
 	var run Run // zero Policy: Raise false, Warn nil logs; zero Lock field is nil: concurrent
 	err := run.Dispatch(context.Background(), "on_route", 2, func(i int) string { return "H" }, func(i int) {
 		if i == 0 {
@@ -69,5 +71,16 @@ func TestNameIsOnlyComputedOnTheErrorPath(t *testing.T) {
 	_ = run.Dispatch(context.Background(), "e", 3, func(int) string { calls++; return "x" }, func(int) {})
 	if calls != 0 {
 		t.Fatalf("name called %d times on success", calls)
+	}
+}
+
+type nanHook struct{ v float64 }
+
+func TestComparableRefusesAValueThatIsNotEqualToItself(t *testing.T) {
+	if Comparable(nanHook{math.NaN()}) {
+		t.Fatal("a NaN-holding value can never be removed by equality, so it must be refused")
+	}
+	if !Comparable(&nanHook{math.NaN()}) {
+		t.Fatal("a pointer is always removable by identity")
 	}
 }

@@ -128,11 +128,11 @@ jobs:
           LAYA_GO_FIXTURES: ${{ github.workspace }}/.go-goldens
           LAYA_CHECKPOINTS: ${{ github.workspace }}/laya-java/.work/checkpoints
         run: go test -race -count=1 -json ./... > "$RUNNER_TEMP/go-test.json"
-      # Exactly the measured count (3868 tests and subtests, on both Go versions): dropping a
+      # Exactly the measured count (3869 tests and subtests, on both Go versions): dropping a
       # case fails here, and adding one means raising this number.
       - name: No test was skipped
         if: ${{ !cancelled() }}
-        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test.json" --min-tests 3868
+        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test.json" --min-tests 3869
 
       # go.mod declares go 1.22, so that is what a consumer may build with.
       - name: Run the tests on the oldest supported Go
@@ -144,7 +144,7 @@ jobs:
         run: go test -count=1 -json ./... > "$RUNNER_TEMP/go-test-oldest.json"
       - name: No test was skipped on the oldest Go either
         if: ${{ !cancelled() }}
-        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test-oldest.json" --min-tests 3868
+        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test-oldest.json" --min-tests 3869
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ failure() }}
