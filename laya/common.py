@@ -808,7 +808,8 @@ def answer_confidence(p: np.ndarray, k: int) -> float:
     """
     if k < 1:
         return 1.0
-    return float(np.clip(np.max(p[:k]), 0.0, 1.0))
+    val = float(p[:k].max())
+    return 0.0 if val < 0.0 else (1.0 if val > 1.0 else val)
 
 
 def confidence_from_probs(p: np.ndarray, k: int) -> float:
@@ -830,9 +831,16 @@ def confidence_from_probs(p: np.ndarray, k: int) -> float:
     """
     if k < 2:
         return 1.0
-    p = p[:k]
-    ent = -(p * np.log(np.clip(p, 1e-12, 1.0))).sum()
-    return float(np.clip(1.0 - ent / math.log(k), 0.0, 1.0))
+    pk = p[:k]
+    ent = 0.0
+    for val in pk:
+        v = float(val)
+        if v <= 0.0:
+            continue
+        c = 1e-12 if v < 1e-12 else (1.0 if v > 1.0 else v)
+        ent -= v * math.log(c)
+    score = 1.0 - ent / math.log(k)
+    return 0.0 if score < 0.0 else (1.0 if score > 1.0 else score)
 
 
 def temp_bucket(qtype: int, k: int) -> str:

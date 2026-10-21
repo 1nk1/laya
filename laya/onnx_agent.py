@@ -730,7 +730,7 @@ class ONNXAgent(HookRegistry):
                 t_scale = l_cfg["temperature_by_options"].get(temp_bucket(qt, k), l_cfg["temperature"][qt])
             z = logits[offset + r, :k] / t_scale
             p = np.exp(z - z.max())
-            p = p / p.sum()
+            p /= p.sum()
 
             # The row comes back in slot order; everything below indexes by option.
             p = unpermute_probs(p, q.get("option_order"))
