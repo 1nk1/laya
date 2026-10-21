@@ -474,6 +474,53 @@ with patch("urllib.request.build_opener") as mock_build_opener:
     check("remote/auth", req.headers.get("Authorization"), "Bearer sk-agno-key")
 
 
+# ---------------------------------------------------------------- 5b. Non-object remote response
+#
+# A remote laya-serve body is arbitrary JSON: a gateway, a mis-pointed `base_url`, or a proxy error
+# page can answer with a top-level array, string, number or `true`/`null`. `json.loads` accepts every
+# one of those, and both consumers read the result with `res.get("answers", …)` (route's delegation
+# lookup and the guardrail screen), so before the guard a non-object leaked `AttributeError` past the
+# fail-closed path instead of the `RuntimeError` every other remote failure raises here. These checks
+# hit `_call_remote` directly and the public `route()` path, so a regression at either layer is caught.
+from laya.integrations.agno import _call_remote
+
+_NON_OBJECT_BODIES = [
+    ([], "list"),
+    ([{"answers": {"delegation": {"choice": "agent_2"}}}], "list-of-objects"),
+    ("unauthorized", "str"),
+    (None, "null"),
+    (123, "int"),
+    (True, "bool"),
+]
+for _body, _label in _NON_OBJECT_BODIES:
+    with patch("urllib.request.build_opener") as _m:
+        _m.return_value.open.return_value = DummyHTTPResponse(_body)
+        try:
+            _call_remote("http://localhost:8000", "s", {"q": {}})
+            check_true("nonobj/%s/_call_remote raises" % _label, False, "no error raised")
+        except RuntimeError as exc:
+            check_true("nonobj/%s/malformed" % _label, "Malformed decision response" in str(exc))
+            check_true("nonobj/%s/names object" % _label, "expected a JSON object" in str(exc))
+        except Exception as exc:
+            check_true("nonobj/%s/_call_remote raises" % _label, False, type(exc).__name__)
+
+        try:
+            LayaAgnoRouter(base_url="http://localhost:8000", api_key="k").route(
+                "Write a Python function to reverse a string", agents)
+            check_true("nonobj/%s/route raises" % _label, False, "no error raised")
+        except RuntimeError as exc:
+            check_true("nonobj/%s/route malformed" % _label, "Malformed decision response" in str(exc))
+        except Exception as exc:
+            check_true("nonobj/%s/route surfaces RuntimeError" % _label, False, type(exc).__name__)
+
+# Positive control: a well-formed object body still routes -- the guard does not over-reject.
+with patch("urllib.request.build_opener") as _m:
+    _m.return_value.open.return_value = DummyHTTPResponse(remote_response)
+    check("nonobj/object still routes",
+          LayaAgnoRouter(base_url="http://localhost:8000").route(
+              "Write a Python function to reverse a string", agents).agent_index, 2)
+
+
 # ---------------------------------------------------------------- 6. Per-call decision controls
 #
 # The agno module must accept every control in `._controls` – a control added
