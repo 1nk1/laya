@@ -347,7 +347,7 @@ func TestHookMayCallRouteOnItsOwnRouterUnlessSerial(t *testing.T) {
 	}
 }
 
-type valueHook struct{ f func() }
+type valueHook struct{ _ func() }
 
 func (valueHook) OnRoute(*router.RouteContext) {}
 
