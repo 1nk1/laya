@@ -1062,7 +1062,7 @@ def _calib_cases():
 
 class _CalibObj:
     def __init__(self, cfg):
-        self.cfg = cfg   # an ONNXAgent keeps the parsed rl_agent_config.json and no model id
+        self.cfg = cfg   # the parsed rl_agent_config.json; Go has no model id, so it compares against (None, None)
 
 
 def calibration_family():

@@ -319,12 +319,12 @@ func TestVersionAndIntLiterals(t *testing.T) {
 	if ok, err := versionChecksIdentity(json.Number("2.0")); err != nil || !ok {
 		t.Errorf("2.0: %v %v", ok, err)
 	}
-	for s, want := range map[string]int64{"２": 2, "٢": 2, "0_2": 2, "  +2\n": 2, "-０_２": -2} {
+	for s, want := range map[string]int64{"２": 2, "٢": 2, "0_2": 2, "  +2\n": 2, "-０_２": -2, "\U0001d7ff": 9, "1\U0001d7d8": 10} {
 		if n, ok := pyInt(s); !ok || n.Int64() != want {
 			t.Errorf("pyInt(%q) = %v %v", s, n, ok)
 		}
 	}
-	for _, s := range []string{"²", "2__0", "_2", "2_", "", "2.0"} {
+	for _, s := range []string{"\x1c2", "2\x1f", "²", "2__0", "_2", "2_", "", "2.0"} {
 		if _, ok := pyInt(s); ok {
 			t.Errorf("pyInt(%q) accepted", s)
 		}

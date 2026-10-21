@@ -115,6 +115,12 @@ func Strip(s string) string {
 	return strings.TrimFunc(s, IsSpace)
 }
 
+// StripNumeric trims what int() and float() trim: str.isspace() characters except U+001C to
+// U+001F, which str.isspace() counts and those parsers do not.
+func StripNumeric(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return IsSpace(r) && !(0x1c <= r && r <= 0x1f) })
+}
+
 // IsBlank is Python's `not s.strip()`.
 func IsBlank(s string) bool {
 	for _, r := range s {

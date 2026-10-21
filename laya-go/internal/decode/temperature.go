@@ -256,7 +256,7 @@ func toFloat(v any) (float64, bool) {
 // between digits, and a signed nan, inf or infinity in any case. Go's hex floats are refused. A
 // value past the float range is infinite, as in Python.
 func PyFloat(s string) (float64, bool) {
-	s = unicodedata.DecimalASCII(unicodedata.Strip(s))
+	s = unicodedata.DecimalASCII(unicodedata.StripNumeric(s))
 	if strings.ContainsAny(s, "xXpP") {
 		return 0, false
 	}

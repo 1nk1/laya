@@ -217,7 +217,7 @@ func versionChecksIdentity(v any) (bool, error) {
 // pyInt is int(s) for an integer literal: surrounding space, a sign, and Unicode decimal digits
 // with single underscores between them.
 func pyInt(s string) (*big.Int, bool) {
-	s = unicodedata.DecimalASCII(unicodedata.Strip(s))
+	s = unicodedata.DecimalASCII(unicodedata.StripNumeric(s))
 	neg := false
 	if s != "" && (s[0] == '+' || s[0] == '-') {
 		neg = s[0] == '-'
