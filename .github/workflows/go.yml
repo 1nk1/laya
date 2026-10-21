@@ -135,6 +135,12 @@ jobs:
         run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test.json" --min-tests 1603
 
       # go.mod declares go 1.22, so that is what a consumer may build with.
+      # The samples are a nested module (they link the cgo onnx module), so the root steps do not
+      # see them. They must keep building against the API, and build without cgo too.
+      - name: The samples build and their tests pass
+        working-directory: laya-go/samples
+        run: go vet ./... && go build ./... && go test -count=1 ./... && CGO_ENABLED=0 go build ./...
+
       - name: Run the tests on the oldest supported Go
         working-directory: laya-go
         env:
