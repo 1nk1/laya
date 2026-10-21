@@ -34,9 +34,11 @@
 //!   JSON-representable data; there is no "opaque object with no JSON representation" case for a
 //!   fallback-to-`ToString()` path to handle. The blank-criterion rule and the float/escaping
 //!   rules are otherwise byte-for-byte identical to Python's `json.dumps`.
-//! - **No warning log for clamped temperatures.** [`laya_config::LayaConfig`] still records
-//!   [`laya_config::LayaConfig::clamped_temperatures`]; emitting a warning from library code is
-//!   left to the caller (this crate has no logging dependency).
+//! - **Warnings go through the `log` facade.** Python's `warnings.warn` calls that this crate
+//!   ports (a checkpoint whose temperatures were clamped, and `predict_long` capping the window or
+//!   reducing the stride) are sent to the [`log`](https://docs.rs/log) facade at `warn` level with
+//!   target `laya` and Python's text. [`laya_config::LayaConfig::clamped_temperatures`] still
+//!   records the clamped entries.
 
 pub mod answers;
 pub mod calibration;
@@ -50,13 +52,18 @@ pub mod laya_options;
 pub mod laya_presets;
 pub mod laya_router;
 pub mod laya_shortlist;
+pub mod long_prediction;
 pub mod model_artifacts;
 pub mod python_json;
+mod python_json_reader;
 pub mod questions;
 pub mod sequence_builder;
 pub mod tokenization;
 
-pub use answers::{ActionInfo, Answer, ChoiceAnswer, LayaResult, NoulAnswer, ScoreAnswer, Usage};
+pub use answers::{
+    ActionInfo, Answer, ChoiceAnswer, LayaResult, NoulAnswer, ScanUsage, ScoreAnswer, StateUsage,
+    Usage, WindowInfo,
+};
 pub use calibration::Calibration;
 pub use collator::{CollatedBatch, Collator, SequenceItem};
 pub use error::{LayaError, Result};
@@ -68,8 +75,12 @@ pub use laya_options::{
     ArtifactDownloadProgress, LayaCheckpoint, LayaExecutionProvider, LayaOptions,
 };
 pub use laya_presets::LayaPresets;
-pub use laya_router::{LayaPredictor, LayaRouter, LayaRouterOptions, RouteDecision};
+pub use laya_router::{
+    GuessInput, LangGuess, LayaLongPredictor, LayaPredictor, LayaRouter, LayaRouterOptions,
+    RouteDecision,
+};
 pub use laya_shortlist::{DEFAULT_SHORTLIST_K, LayaShortlist, ShortlistInfo};
+pub use long_prediction::LongOptions;
 pub use model_artifacts::{ModelArtifacts, ModelLayout, ModelPaths};
 pub use python_json::PythonJson;
 pub use questions::{

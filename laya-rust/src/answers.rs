@@ -25,6 +25,20 @@ pub struct ActionInfo {
     pub act_probability: f64,
 }
 
+/// The scan window that decided an answer, from `LayaEngine::predict_long`. Offsets index the
+/// tokenized state; the end is exclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowInfo {
+    /// Zero-based index of the deciding window.
+    pub index: usize,
+    /// First state token in the window.
+    pub token_start: usize,
+    /// One past the last state token in the window.
+    pub token_end: usize,
+    /// Total windows scored.
+    pub count: usize,
+}
+
 /// The answer to a [`QuestionType::Choice`] question.
 #[derive(Debug, Clone)]
 pub struct ChoiceAnswer {
@@ -35,6 +49,7 @@ pub struct ChoiceAnswer {
     confidence: f64,
     answer_confidence: f64,
     action: ActionInfo,
+    window: Option<WindowInfo>,
 }
 
 impl ChoiceAnswer {
@@ -52,6 +67,7 @@ impl ChoiceAnswer {
             confidence,
             answer_confidence,
             action,
+            window: None,
         }
     }
 
@@ -75,6 +91,7 @@ pub struct ScoreAnswer {
     confidence: f64,
     answer_confidence: f64,
     action: ActionInfo,
+    window: Option<WindowInfo>,
 }
 
 impl ScoreAnswer {
@@ -94,6 +111,7 @@ impl ScoreAnswer {
             confidence,
             answer_confidence,
             action,
+            window: None,
         }
     }
 
@@ -118,6 +136,7 @@ pub struct NoulAnswer {
     confidence: f64,
     answer_confidence: f64,
     action: ActionInfo,
+    window: Option<WindowInfo>,
 }
 
 impl NoulAnswer {
@@ -133,6 +152,7 @@ impl NoulAnswer {
             confidence,
             answer_confidence,
             action,
+            window: None,
         }
     }
 
@@ -185,6 +205,26 @@ impl Answer {
             Answer::Score(s) => s.answer_confidence,
             Answer::Noul(n) => n.answer_confidence,
         }
+    }
+
+    /// The scan window that decided this answer, or `None` for an ordinary `predict` and for a
+    /// `predict_long` state short enough to be scored in one pass. The probabilities describe that
+    /// window, not a calibrated whole-document probability.
+    pub fn window(&self) -> Option<WindowInfo> {
+        match self {
+            Answer::Choice(c) => c.window,
+            Answer::Score(s) => s.window,
+            Answer::Noul(n) => n.window,
+        }
+    }
+
+    pub(crate) fn with_window(mut self, window: WindowInfo) -> Self {
+        match &mut self {
+            Answer::Choice(c) => c.window = Some(window),
+            Answer::Score(s) => s.window = Some(window),
+            Answer::Noul(n) => n.window = Some(window),
+        }
+        self
     }
 
     /// The action head's output.
@@ -247,6 +287,17 @@ pub struct StateUsage {
     pub options: IndexMap<String, OptionUsage>,
 }
 
+/// How many scan windows `LayaEngine::predict_long` scored, and how many of them lost state
+/// tokens. Kept beside [`Usage`] rather than in it so `Usage` struct literals keep compiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanUsage {
+    /// Windows scored; 1 when the state fit one ordinary pass.
+    pub windows: usize,
+    /// Windows in which at least one question lost state tokens (Python's `usage["truncated"]`
+    /// for a scan; [`StateUsage::truncated`] is this being non-zero).
+    pub truncated_windows: usize,
+}
+
 /// The result of one `predict` call: one answer per question, plus token usage.
 #[derive(Debug, Clone)]
 pub struct LayaResult {
@@ -257,6 +308,7 @@ pub struct LayaResult {
     routing: Option<RouteDecision>,
     shortlist: Option<IndexMap<String, ShortlistInfo>>,
     state_usage: Option<StateUsage>,
+    scan_usage: Option<ScanUsage>,
 }
 
 impl LayaResult {
@@ -279,6 +331,7 @@ impl LayaResult {
             routing: None,
             shortlist: None,
             state_usage: None,
+            scan_usage: None,
         }
     }
 
@@ -323,6 +376,17 @@ impl LayaResult {
     /// retain `None`, preserving the existing constructor and the `Copy` token-total `Usage`.
     pub fn state_usage(&self) -> Option<&StateUsage> {
         self.state_usage.as_ref()
+    }
+
+    /// Window counts for a result from `LayaEngine::predict_long`; `None` for an ordinary
+    /// `predict`. When present, [`Self::state_usage`] holds the sums across windows.
+    pub fn scan_usage(&self) -> Option<ScanUsage> {
+        self.scan_usage
+    }
+
+    pub(crate) fn with_scan_usage(mut self, usage: ScanUsage) -> Self {
+        self.scan_usage = Some(usage);
+        self
     }
 
     pub(crate) fn with_state_usage(mut self, usage: StateUsage) -> Self {

@@ -23,6 +23,13 @@ pub(crate) struct StateTokenStats {
     pub options: Option<crate::answers::OptionUsage>,
 }
 
+/// The question-specific start of a sequence, before any state.
+struct Head {
+    ids: Vec<u32>,
+    markers: Vec<usize>,
+    options: Option<crate::answers::OptionUsage>,
+}
+
 impl SequenceBuilder {
     /// One option fragment is capped at this many tokens, before the marker is prepended.
     const MAX_OPTION_TOKENS: usize = 48;
@@ -132,18 +139,24 @@ impl SequenceBuilder {
         head_max_len: usize,
         truncate_left: bool,
     ) -> Result<(Vec<u32>, Vec<usize>)> {
-        Self::build_with_stats(tokenizer, state, question, max_len, head_max_len, truncate_left)
-            .map(|(ids, markers, _)| (ids, markers))
+        Self::build_with_stats(
+            tokenizer,
+            state,
+            question,
+            max_len,
+            head_max_len,
+            truncate_left,
+        )
+        .map(|(ids, markers, _)| (ids, markers))
     }
 
-    pub(crate) fn build_with_stats(
+    /// The question's own part of the sequence: everything up to and including the SEP that
+    /// closes the options. Ports `build_head` from `laya/common.py`.
+    fn build_head(
         tokenizer: &dyn LayaTokenizer,
-        state: &Value,
         question: &Question,
-        max_len: usize,
         head_max_len: usize,
-        truncate_left: bool,
-    ) -> Result<(Vec<u32>, Vec<usize>, StateTokenStats)> {
+    ) -> Result<Head> {
         let special = tokenizer.special();
         let mask_token = special.mask_token.as_str();
 
@@ -168,11 +181,14 @@ impl SequenceBuilder {
         let option_len_sum =
             |opts: &[Vec<u32>]| -> i64 { opts.iter().map(|o| o.len() as i64).sum() };
 
-        let mut opt_budget = head_max_len as i64 - option_len_sum(&option_ids);
+        // A bound beyond i64 (Python accepts any int) is as good as i64::MAX here: nothing the
+        // head can hold comes near it, and a plain `as i64` would wrap it negative.
+        let head_bound = i64::try_from(head_max_len).unwrap_or(i64::MAX);
+        let mut opt_budget = head_bound - option_len_sum(&option_ids);
         let mut tokens_per_option = None;
         if opt_budget < 16 {
             let per = 4i64.max(Self::floor_div(
-                head_max_len as i64 - 16,
+                head_bound - 16,
                 1i64.max(option_ids.len() as i64),
             )) as usize;
             tokens_per_option = Some(per);
@@ -181,7 +197,7 @@ impl SequenceBuilder {
                     fragment.truncate(per);
                 }
             }
-            opt_budget = head_max_len as i64 - option_len_sum(&option_ids);
+            opt_budget = head_bound - option_len_sum(&option_ids);
         }
 
         let head_take = (Self::MIN_HEAD_TOKENS as i64).max(opt_budget) as usize;
@@ -189,7 +205,10 @@ impl SequenceBuilder {
             header_ids.truncate(head_take);
         }
 
-        let mut ids: Vec<u32> = Vec::with_capacity(max_len);
+        // Sized from what is appended (CLS, header, SEP, the option fragments, SEP), never from
+        // the configured bound, which can be any size.
+        let appended = header_ids.len() + option_ids.iter().map(Vec::len).sum::<usize>() + 3;
+        let mut ids: Vec<u32> = Vec::with_capacity(appended);
         ids.push(special.cls_id);
         ids.extend_from_slice(&header_ids);
         ids.push(special.sep_id);
@@ -201,8 +220,60 @@ impl SequenceBuilder {
         }
         ids.push(special.sep_id);
 
+        let distinct = option_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        let options = (distinct < option_ids.len()).then_some(crate::answers::OptionUsage {
+            total: option_ids.len(),
+            distinct,
+            tokens_per_option,
+        });
+        Ok(Head {
+            ids,
+            markers,
+            options,
+        })
+    }
+
+    /// How many state tokens `question` leaves inside `max_len`: what `build_sequence` keeps of
+    /// the state. Ports `state_room` from `laya/common.py`.
+    pub(crate) fn state_room(
+        tokenizer: &dyn LayaTokenizer,
+        question: &Question,
+        max_len: usize,
+        head_max_len: usize,
+    ) -> Result<usize> {
+        let head = Self::build_head(tokenizer, question, head_max_len)?;
+        // -1 reserves the SEP that closes the state.
+        Ok(max_len.saturating_sub(head.ids.len() + 1))
+    }
+
+    /// The state's token ids exactly as `build_with_stats` slices them: serialized, mask token
+    /// scrubbed, encoded without special tokens.
+    pub(crate) fn encode_state(tokenizer: &dyn LayaTokenizer, state: &Value) -> Result<Vec<u32>> {
+        let mask_token = tokenizer.special().mask_token.as_str();
+        tokenizer.encode(&Self::scrub(&PythonJson::state(state), mask_token))
+    }
+
+    pub(crate) fn build_with_stats(
+        tokenizer: &dyn LayaTokenizer,
+        state: &Value,
+        question: &Question,
+        max_len: usize,
+        head_max_len: usize,
+        truncate_left: bool,
+    ) -> Result<(Vec<u32>, Vec<usize>, StateTokenStats)> {
+        let special = tokenizer.special();
+        let mask_token = special.mask_token.as_str();
+        let Head {
+            mut ids,
+            mut markers,
+            options,
+        } = Self::build_head(tokenizer, question, head_max_len)?;
+
         // -1 reserves the final SEP that closes the whole sequence, appended below.
-        let room = (max_len as i64 - ids.len() as i64 - 1).max(0) as usize;
+        let room = max_len.saturating_sub(ids.len() + 1);
         let state_text = Self::scrub(&PythonJson::state(state), mask_token);
         let state_ids = tokenizer.encode(&state_text)?;
         let sliced: &[u32] = if truncate_left {
@@ -225,14 +296,7 @@ impl SequenceBuilder {
         let stats = StateTokenStats {
             tokens: state_ids.len(),
             dropped: state_ids.len() - sliced.len(),
-            options: {
-                let distinct = option_ids.iter().collect::<std::collections::HashSet<_>>().len();
-                (distinct < option_ids.len()).then_some(crate::answers::OptionUsage {
-                    total: option_ids.len(),
-                    distinct,
-                    tokens_per_option,
-                })
-            },
+            options,
         };
         Ok((ids, markers, stats))
     }

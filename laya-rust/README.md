@@ -33,6 +33,7 @@ Mirrors the [Laya Python SDK](https://github.com/NandhaKishorM/laya/blob/main/RE
 - [Writing questions](#writing-questions)
 - [Built-in presets](#built-in-presets)
 - [Reading results](#reading-results)
+- [Long prediction](#long-prediction)
 - [Thread safety](#thread-safety)
 - [Execution providers and cargo features](#execution-providers-and-cargo-features)
 - [Async usage](#async-usage)
@@ -439,6 +440,59 @@ let options = LayaOptions {
 
 ---
 
+## Long prediction
+
+`predict` reads one sequence: a state longer than the room the questions leave is truncated (the
+start is kept, or the end for a conversation-turn list). `LayaEngine::predict_long` scans the whole
+state instead, in overlapping token windows, and keeps one answer per question. It ports
+`ONNXAgent.predict_long` with `aggregate="auto"`:
+
+```rust,no_run
+# use laya::{LayaEngine, LongOptions, QuestionSet};
+# let engine = LayaEngine::from_directory("x")?; let questions = QuestionSet::new();
+# let long_transcript = "";
+let options = LongOptions::new().window(96).stride(48).batch_size(8);
+let result = engine.predict_long(long_transcript, &questions, &options)?;
+
+result.scan_usage().unwrap().windows;      // windows scored (1 = no scan was needed)
+let answer = &result["refund_requested"];
+if let Some(window) = answer.window() {    // None for a single-pass state
+    println!("decided by window {}/{} (tokens {}..{})",
+             window.index + 1, window.count, window.token_start, window.token_end);
+}
+# Ok::<(), laya::LayaError>(())
+```
+
+- **Aggregation.** `noul` takes the window with the greatest P(true). `choice` and `score` take the
+  window with the greatest `answer_confidence`. A tie goes to the first window. The probabilities
+  are that window's, **not** a calibrated number for the whole document.
+- **One pass.** A state that fits the room the questions leave (with an explicit
+  `LongOptions::window`, a state that fits that window) is scored by the ordinary `predict` pass:
+  one window, no `Answer::window()`.
+- **Options.** `window`, `stride` and `batch_size` are optional and `0` counts as unset. The default
+  window is `max(64, max_len - head_max_len - 8)`, capped at the smallest state room any question
+  leaves; the default stride is half the effective window. A stride that would skip tokens between
+  windows is `LayaError::InvalidWindow`, as is a question set whose options leave no room for the
+  state. `aggregate` accepts only `"auto"` (`LayaError::UnsupportedAggregate` otherwise).
+- **Usage.** `result.usage().input_tokens` is summed over windows. `result.state_usage()` sums
+  `state_tokens` and `state_tokens_dropped` over windows and lists the last window's truncated
+  questions; `result.scan_usage()` gives the window count and how many windows lost state tokens.
+- **Re-encoding.** Each window is decoded back to text with special tokens kept (Python's default
+  `decode`) and scored as an ordinary state, so its tokens can differ slightly from the original
+  after re-encoding, exactly as in Python. A tokenizer that does not override `LayaTokenizer::decode`
+  makes `predict_long` fail with `LayaError::Tokenizer`.
+- **Router.** `LayaRouter::predict_long(state, &questions, &options, model, task, lang)` routes once,
+  on the original state, then scans on the chosen checkpoint. A predictor without a scan capability
+  (see `LayaPredictor::as_long_predictor`) gives `LayaError::NotSupported` rather than truncating.
+- **Warnings.** The two `warnings.warn` notices Python emits when it caps the window or reduces the
+  stride are sent, with Python's exact text, to the [`log`](https://docs.rs/log) facade at `warn`
+  level with target `laya`. Install any `log` backend (for example `env_logger`) to see them; with
+  none installed they are dropped.
+- **Not ported.** Per-call hooks, per-language temperatures and the confidence gate are not part of
+  `predict_long` here.
+
+---
+
 ## Routing, language detection, email and shortlist
 
 Runnable end-to-end example: [`samples/laya-routing`](https://github.com/NandhaKishorM/laya/tree/main/laya-rust/samples/laya-routing).
@@ -475,6 +529,27 @@ println!("{}", result.routing().unwrap().reason);   // "English Latin text"
 `router.route(state, Some(&questions), None, None, None)` decides without loading or running
 anything. `router.preload(None)` builds every checkpoint up front for a server or demo.
 
+A state that reads English as a whole is still checked line by line and field by field, so a
+Portuguese message under an English stack trace goes to the multilingual checkpoint
+(`LanguageAnalysis::mixed_segment` names the line). An explicit `lang` that names no language
+(blank, `C`, `POSIX`, `C.UTF-8`, `und`, `zxx`, `mul`) falls through to detection instead of pinning a
+checkpoint. If you already run a language-identification model, hand its answer to the router as a
+`LangGuess` -- a code or a callback, checked after an explicit `lang` and before detection, and
+abstaining (`None`, blank, `C`, ...) falls through:
+
+```rust,no_run
+use laya::laya_router::{LangGuess, LayaRouter, LayaRouterOptions};
+use serde_json::json;
+
+// one hint for every request ...
+let router = LayaRouter::new(LayaRouterOptions::default())?.with_lang_guess("ro");
+// ... or per call, as a function of the state
+let hint = LangGuess::callback(|state| my_language_id_model(state));
+let decision = router.route_with_lang_guess(&json!("Care este ora in Tokyo?"), None, None, None, None, Some(&hint))?;
+# fn my_language_id_model(_: laya::laya_router::GuessInput<'_>) -> Option<String> { None }
+# Ok::<(), laya::LayaError>(())
+```
+
 **Email cleaning** strips quoted history, signatures and disclaimers before you ask any questions:
 
 ```rust,no_run
@@ -483,6 +558,12 @@ use laya::laya_email::LayaEmail;
 let cleaned = LayaEmail::clean_body(raw_body, laya::laya_email::DEFAULT_MAX_CHARS);
 let state = LayaEmail::state(subject, raw_body, Some("user@acme.com"), true, std::iter::empty());
 ```
+
+It reads English, Portuguese, Spanish and French mail (Gmail's `Em ... escreveu:` / `Le ... a écrit :`,
+Outlook's `-----Mensagem original-----`, `Atenciosamente` / `Cordialement`, `Envoyé depuis mon
+iPhone`, confidentiality footers). `max_chars` is a slice budget: raise it for a long message
+(`LayaEmail::state_with_max_chars`, `clean_body_signed`). `0` gives an empty body and a negative value
+trims from the end, exactly as in Python, so "no limit" means a budget larger than the body.
 
 **Embedding shortlist** narrows a high-cardinality choice question before the model sees it, using
 a caller-supplied embedding function (bring your own bi-encoder — this SDK does not include one):
@@ -611,7 +692,7 @@ invocation that has the `download` feature enabled (the default) with no externa
 |---|---|---|
 | `src/python_json.rs` | Byte-for-byte `json.dumps` dialects | `PythonJson` |
 | `src/questions.rs` | Typed question definitions | `QuestionType`, `Question`, `ChoiceQuestion`, `ScoreQuestion`, `NoulQuestion`, `QuestionSet` |
-| `src/answers.rs` | Typed answer results | `Answer`, `ChoiceAnswer`, `ScoreAnswer`, `NoulAnswer`, `ActionInfo`, `LayaResult`, `Usage` |
+| `src/answers.rs` | Typed answer results | `Answer`, `ChoiceAnswer`, `ScoreAnswer`, `NoulAnswer`, `ActionInfo`, `LayaResult`, `Usage`, `ScanUsage`, `StateUsage`, `WindowInfo` |
 | `src/calibration.rs` | Temperature scaling and confidence math | `Calibration` |
 | `src/laya_config.rs` | Parsed `rl_agent_config.json` | `LayaConfig` |
 | `src/laya_options.rs` | Engine construction options | `LayaOptions`, `LayaCheckpoint`, `LayaExecutionProvider`, `ArtifactDownloadProgress` |
@@ -622,6 +703,7 @@ invocation that has the `download` feature enabled (the default) with no externa
 | `src/tokenization/laya_tokenizer.rs` | Tokenizer abstraction | `LayaTokenizer` (trait) |
 | `src/tokenization/hf_tokenizer.rs` | HuggingFace tokenizer implementation | `HfTokenizer` |
 | `src/laya_engine.rs` | Loads the ONNX model and answers questions | `LayaEngine` |
+| `src/long_prediction.rs` | Window plan and aggregation for `predict_long` | `LongOptions` |
 | `src/error.rs` | Error type | `LayaError`, `Result<T>` — every fallible call in this crate returns `Result<T, LayaError>` |
 
 Where the equivalent Python code is a module of related functions (`common.py`, `agent.py`), the
@@ -649,9 +731,9 @@ Rust port groups the corresponding functions into a unit struct with associated 
   own; the three dialect functions here take `&serde_json::Value`, which can only ever hold
   JSON-representable data, so that fallback path has nothing to reach. The blank-criterion rule and
   the float/escaping rules are otherwise byte-for-byte identical to Python.
-- **No log-level warning for clamped temperatures.** `LayaConfig` still records
-  `clamped_temperatures`; emitting a warning from library code is left to the caller (this crate
-  has no logging dependency).
+- **Warnings use the `log` facade.** The clamped-temperature warning (`LayaConfig::parse`) and the
+  two `predict_long` window warnings are sent, with Python's text, to `log` at `warn` level with
+  target `laya`. `LayaConfig::clamped_temperatures` still records the clamped entries.
 - **`QuestionType` carries no methods.** The Python type name lives on
   `SequenceBuilder::type_name` rather than on the enum, and the `qtype` tensor's integer encoding
   is a plain `qtype as i64` cast (the enum's discriminants already match `QTYPES`). The reverse
@@ -660,16 +742,31 @@ Rust port groups the corresponding functions into a unit struct with associated 
 - **`Agent::new_with_defaults()`, reused across all five files in one download.** Matches Python's
   single reused HTTP session, but there's no async cancellation token — a download that must be
   cancellable should run on its own thread and be dropped/joined by the caller.
+- **Config values Python reads loosely are refused at load.** `max_len` and `head_max_len` accept a
+  non-negative JSON integer or a bool (`true` is 1, `false` is 0), as Python does. A float, string,
+  `null`, list or object is refused when the engine is created, with the `TypeError` text Python
+  raises at its first prediction (`head_max_len` is met first); a negative value is refused with
+  `max_len=-5: must be a non-negative integer`, since Python slices from the end for it. Python
+  also tolerates a small fractional `head_max_len` (roughly up to 8 plus 4 per option); that is
+  refused here too.
+- **Lone surrogate escapes in config JSON are refused.** `"\ud800"` loads in Python and is an error
+  here, because a Rust `String` cannot hold a lone surrogate.
+- **JSON nesting is cut off at 1000 levels.** Python's limit depends on the interpreter's
+  recursion limit.
+- **Config files are decoded as strict UTF-8.** Python opens them with the locale's encoding (cp1252
+  on a default Windows install), which only differs for non-ASCII bytes; a BOM is rejected, as
+  `json.loads` does.
 
 ---
 
 ## Known gaps
 
-- **Python 0.4.0's routing defaults, script counting and fused-line disclaimer fixes are ported**
-  and checked against freshly regenerated probes. New mixed-field language heuristics remain
-  a follow-up; these probes are not a claim of full coverage of every new Python feature.
+- **Language detection, routing and email cleaning follow Python 0.4.12** and are checked against
+  routing probes and a seeded differential corpus regenerated at that version
+  (`tools/regen_golden.py --checkpoint routing`). A later Python change needs them regenerated.
 
 - **Opt-in features are not ported yet:** abstention (`min_confidence`, including per-bucket
-  thresholds), histogram-binning calibration, `predict_long`, and per-language temperatures
-  (`lang_temperatures`). They are off by default in
+  thresholds), histogram-binning calibration, and per-language temperatures
+  (`lang_temperatures`). `predict_long` is ported, without hooks, per-language temperatures or
+  the confidence gate. They are off by default in
   Python, so default predictions are unaffected. They are planned as follow-ups.

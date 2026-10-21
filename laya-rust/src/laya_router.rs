@@ -38,9 +38,10 @@
 
 use crate::answers::LayaResult;
 use crate::error::{LayaError, Result};
-use crate::language_detection::{LanguageAnalysis, LanguageDetection};
+use crate::language_detection::{LanguageAnalysis, LanguageDetection, prefix_chars, py_strip};
 use crate::laya_engine::LayaEngine;
 use crate::laya_options::{LayaCheckpoint, LayaOptions};
+use crate::long_prediction::LongOptions;
 use crate::questions::QuestionSet;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -58,11 +59,48 @@ use std::sync::{Arc, Mutex};
 pub trait LayaPredictor: Send + Sync {
     /// Answer every question in `questions` about `state`.
     fn predict(&self, state: Value, questions: &QuestionSet) -> Result<LayaResult>;
+
+    /// This predictor's scan capability, if it has one. The default is `None`, so implementing
+    /// [`LayaPredictor`] elsewhere keeps compiling; [`LayaEngine`] and [`LayaRouter`] return
+    /// themselves. [`LayaRouter::predict_long`] needs it: Rust has no run-time interface check on
+    /// a `dyn LayaPredictor`, and a predictor without it must fail loudly rather than silently
+    /// truncate a long state.
+    fn as_long_predictor(&self) -> Option<&dyn LayaLongPredictor> {
+        None
+    }
+}
+
+/// A [`LayaPredictor`] that can also scan a state longer than one sequence. The Rust counterpart
+/// of Python's router checking `getattr(agent, "predict_long", None)`.
+pub trait LayaLongPredictor: LayaPredictor {
+    /// Scan overlapping state-token windows and select one answer per question. See
+    /// [`LayaEngine::predict_long`].
+    fn predict_long(
+        &self,
+        state: Value,
+        questions: &QuestionSet,
+        options: &LongOptions,
+    ) -> Result<LayaResult>;
 }
 
 impl LayaPredictor for LayaEngine {
     fn predict(&self, state: Value, questions: &QuestionSet) -> Result<LayaResult> {
         LayaEngine::predict(self, state, questions)
+    }
+
+    fn as_long_predictor(&self) -> Option<&dyn LayaLongPredictor> {
+        Some(self)
+    }
+}
+
+impl LayaLongPredictor for LayaEngine {
+    fn predict_long(
+        &self,
+        state: Value,
+        questions: &QuestionSet,
+        options: &LongOptions,
+    ) -> Result<LayaResult> {
+        LayaEngine::predict_long(self, state, questions, options)
     }
 }
 
@@ -98,6 +136,96 @@ const TYPED_DECISION_WORKFLOWS: &[(&str, &[&str])] = &[
         ],
     ),
 ];
+
+/// The state a [`LangGuess`] callback is handed, exactly as the caller gave it to the router: a
+/// JSON value from `route`, `predict` and `predict_long`, the original bytes from `route_bytes`
+/// (Python passes the `bytes` object itself, invalid UTF-8 included).
+#[derive(Debug, Clone, Copy)]
+pub enum GuessInput<'a> {
+    /// A JSON state.
+    Value(&'a Value),
+    /// A `bytes` state, untouched.
+    Bytes(&'a [u8]),
+}
+
+/// The callback form of [`LangGuess`]: reads the state, answers with a language code or `None`.
+type GuessFn = dyn Fn(GuessInput<'_>) -> Option<String> + Send + Sync;
+
+/// A caller-supplied answer to "can the English checkpoint read this state?", Python's
+/// `lang_guess`: a language code, or a callback taking the state. Any code that is not English
+/// routes to the multilingual checkpoint; a code that names no language (blank, `C`, `POSIX`,
+/// `C.UTF-8`, `und`, `zxx`, `mul`) or a callback returning `None` abstains, and routing falls
+/// through to detection.
+#[derive(Clone)]
+#[non_exhaustive]
+pub enum LangGuess {
+    /// A language code such as `"en"`, `"en-US"`, `"en_US.UTF-8"` or `"pt-BR"`.
+    Code(String),
+    /// A function of the state that returns a language code, or `None` to abstain (for example
+    /// a language-identification model that is not confident).
+    Callback(Arc<GuessFn>),
+}
+
+impl LangGuess {
+    /// A hint that reads the state and answers with a code, or `None` to abstain.
+    pub fn callback(f: impl Fn(GuessInput<'_>) -> Option<String> + Send + Sync + 'static) -> Self {
+        Self::Callback(Arc::new(f))
+    }
+
+    /// `_resolve_hint`: `Some(true)` when the hint says English, `Some(false)` when it names
+    /// another language, `None` when it identifies nothing.
+    fn resolve(&self, state: GuessInput<'_>) -> Option<bool> {
+        match self {
+            Self::Code(code) => english_from_code(code),
+            Self::Callback(f) => f(state).and_then(|code| english_from_code(&code)),
+        }
+    }
+}
+
+impl std::fmt::Debug for LangGuess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Code(code) => f.debug_tuple("Code").field(code).finish(),
+            Self::Callback(_) => f.write_str("Callback(..)"),
+        }
+    }
+}
+
+impl From<&str> for LangGuess {
+    fn from(code: &str) -> Self {
+        Self::Code(code.to_string())
+    }
+}
+
+impl From<String> for LangGuess {
+    fn from(code: String) -> Self {
+        Self::Code(code)
+    }
+}
+
+/// Codes that are valid `$LANG` values but name no language, so they answer nothing about the
+/// state: `C`, `POSIX` and `C.UTF-8` (what minimal images ship) and the ISO 639-2 special codes
+/// `und` (undetermined), `zxx` (no linguistic content) and `mul` (multiple languages).
+const LANGUAGE_AGNOSTIC_CODES: [&str; 5] = ["c", "posix", "und", "zxx", "mul"];
+
+/// `_english_from_code`: `Some(true)` for an English code, `Some(false)` for any other language
+/// code, `None` when the code identifies nothing.
+///
+/// Accepts the forms a caller is likely to have to hand: `"en"`, `"EN"`, `"en-US"`, the POSIX
+/// `"en_US"` (which `$LANG` holds), and `"en_US.UTF-8"`.
+pub(crate) fn english_from_code(value: &str) -> Option<bool> {
+    let code = py_strip(value).to_lowercase();
+    if code.is_empty() {
+        return None;
+    }
+    let code = code.split('.').next().unwrap_or("");
+    let primary = code.replace('_', "-");
+    let primary = primary.split('-').next().unwrap_or("");
+    if primary.is_empty() || LANGUAGE_AGNOSTIC_CODES.contains(&primary) {
+        return None;
+    }
+    Some(matches!(primary, "en" | "eng" | "english"))
+}
 
 /// The routing outcome: which checkpoint, why, and what was detected. Serializes into
 /// `LayaResult::routing` (`answers.rs`). Python's `RouteDecision` also carries a `repo` field
@@ -143,7 +271,8 @@ pub struct LayaRouterOptions {
     /// `allow_download`, cache directory, HF token) is copied as-is.
     pub engine_options: LayaOptions,
     /// How many checkpoints may stay resident at once before the least-recently-used one is
-    /// evicted. Always at least 1.
+    /// evicted. Always at least 1. Defaults to 2, as Python's `Router(max_loaded=2)` does, so
+    /// alternating two languages does not reload a checkpoint on every request.
     pub max_loaded: usize,
     /// Checkpoint used when [`LayaRouter::route`] cannot find any letters in the state at all.
     /// Also used for undecided Latin text. Multilingual by default, matching Python 0.4.0;
@@ -162,7 +291,7 @@ impl Default for LayaRouterOptions {
     fn default() -> Self {
         Self {
             engine_options: LayaOptions::default(),
-            max_loaded: 1,
+            max_loaded: 2,
             default: LayaCheckpoint::Multilingual,
             auto_task_detection: false,
             preload: false,
@@ -196,6 +325,7 @@ pub struct LayaRouter {
     engine_options: LayaOptions,
     default: LayaCheckpoint,
     auto_task_detection: bool,
+    lang_guess: Option<LangGuess>,
     factory: Factory,
     state: Mutex<RouterState>,
 }
@@ -232,6 +362,7 @@ impl LayaRouter {
             engine_options: options.engine_options,
             default: options.default,
             auto_task_detection: options.auto_task_detection,
+            lang_guess: None,
             factory: Box::new(factory),
             state: Mutex::new(RouterState {
                 loaded: HashMap::new(),
@@ -243,6 +374,15 @@ impl LayaRouter {
             router.preload(None)?;
         }
         Ok(router)
+    }
+
+    /// Install a language hint that applies to every request, as Python's
+    /// `Router(lang_guess=...)` does: checked after an explicit `lang` and a per-call hint, and
+    /// before the built-in detection. See [`Self::route_with_lang_guess`].
+    #[must_use]
+    pub fn with_lang_guess(mut self, lang_guess: impl Into<LangGuess>) -> Self {
+        self.lang_guess = Some(lang_guess.into());
+        self
     }
 
     // ------------------------------------------------------------------ name resolution
@@ -410,7 +550,8 @@ impl LayaRouter {
     /// Decide which checkpoint to use, without loading or running anything.
     ///
     /// Precedence: explicit `model` > explicit `task` > detected workflow (opt-in) > explicit
-    /// `lang` > detected script/language > [`LayaRouterOptions::default`].
+    /// `lang` > `lang_guess` (see [`Self::route_with_lang_guess`]) > detected script/language >
+    /// [`LayaRouterOptions::default`].
     pub fn route(
         &self,
         state: &Value,
@@ -418,6 +559,76 @@ impl LayaRouter {
         model: Option<&str>,
         task: Option<&str>,
         lang: Option<&str>,
+    ) -> Result<RouteDecision> {
+        self.route_with_lang_guess(state, questions, model, task, lang, None)
+    }
+
+    /// [`Self::route_with_lang_guess`] for a `bytes` state, which Python's `lang.analyse` accepts:
+    /// the bytes are read as strict UTF-8 and invalid UTF-8 counts as no text. A `lang_guess`
+    /// callback receives the original bytes as [`GuessInput::Bytes`], as Python's receives the
+    /// `bytes` object.
+    pub fn route_bytes(
+        &self,
+        state: &[u8],
+        questions: Option<&QuestionSet>,
+        model: Option<&str>,
+        task: Option<&str>,
+        lang: Option<&str>,
+        lang_guess: Option<&LangGuess>,
+    ) -> Result<RouteDecision> {
+        let text = Value::String(std::str::from_utf8(state).unwrap_or("").to_string());
+        self.route_inner(
+            GuessInput::Bytes(state),
+            &text,
+            questions,
+            model,
+            task,
+            lang,
+            lang_guess,
+        )
+    }
+
+    /// [`Self::route`] with Python's per-call `lang_guess` hint.
+    ///
+    /// `lang_guess` is an opt-in hint -- a language code or a callback taking the state --
+    /// checked after an explicit `lang` and before the built-in detection. It only answers "can
+    /// the English checkpoint read this?", so any non-English code routes to the multilingual
+    /// checkpoint. A hint that resolves to nothing (a blank code, `C`, `POSIX`, `und`, ... or a
+    /// callback returning `None`) falls through to detection, which lets a language-identification
+    /// model abstain. A hint installed with [`Self::with_lang_guess`] applies to every request,
+    /// after this per-call one.
+    pub fn route_with_lang_guess(
+        &self,
+        state: &Value,
+        questions: Option<&QuestionSet>,
+        model: Option<&str>,
+        task: Option<&str>,
+        lang: Option<&str>,
+        lang_guess: Option<&LangGuess>,
+    ) -> Result<RouteDecision> {
+        self.route_inner(
+            GuessInput::Value(state),
+            state,
+            questions,
+            model,
+            task,
+            lang,
+            lang_guess,
+        )
+    }
+
+    /// `Router._route`: `given` is the state as the caller passed it (what a hint callback sees),
+    /// `state` the JSON text detection reads.
+    #[allow(clippy::too_many_arguments)]
+    fn route_inner(
+        &self,
+        given: GuessInput<'_>,
+        state: &Value,
+        questions: Option<&QuestionSet>,
+        model: Option<&str>,
+        task: Option<&str>,
+        lang: Option<&str>,
+        lang_guess: Option<&LangGuess>,
     ) -> Result<RouteDecision> {
         if let Some(model) = model {
             let key = Self::normalise_name(model)?;
@@ -461,19 +672,45 @@ impl LayaRouter {
         }
 
         if let Some(lang) = lang {
-            let lowered = lang.to_lowercase();
-            let head = lowered.split('-').next().unwrap_or("");
-            let key = if matches!(head, "en" | "eng" | "english") {
-                LayaCheckpoint::English
-            } else {
-                LayaCheckpoint::Multilingual
-            };
-            return Ok(RouteDecision {
-                model: key,
-                reason: format!("explicit lang={}", python_repr_str(lang)),
-                detection: None,
-                workflow,
-            });
+            // An explicit `lang` is decisive only when the code names a language. Blank or
+            // whitespace, and `C`/`POSIX`/`und`/`zxx`/`mul`, resolve to no usable hint, so they
+            // fall through to `lang_guess`/detection exactly as an abstaining hint does.
+            if let Some(english) = english_from_code(lang) {
+                return Ok(RouteDecision {
+                    model: if english {
+                        LayaCheckpoint::English
+                    } else {
+                        LayaCheckpoint::Multilingual
+                    },
+                    reason: format!("explicit lang={}", python_repr_str(lang)),
+                    detection: None,
+                    workflow,
+                });
+            }
+        }
+
+        // Caller-supplied hint, per-call first, then the one installed on the router. Only a hint
+        // that actually answers the question routes here; anything else falls through.
+        let hints = [
+            ("lang_guess", lang_guess),
+            ("Router(lang_guess=...)", self.lang_guess.as_ref()),
+        ];
+        for (source, hint) in hints {
+            if let Some(english) = hint.and_then(|h| h.resolve(given)) {
+                return Ok(RouteDecision {
+                    model: if english {
+                        LayaCheckpoint::English
+                    } else {
+                        LayaCheckpoint::Multilingual
+                    },
+                    reason: format!(
+                        "{source}: the caller identified this as {} text",
+                        if english { "English" } else { "non-English" }
+                    ),
+                    detection: None,
+                    workflow,
+                });
+            }
         }
 
         let det = LanguageDetection::analyse(state);
@@ -495,7 +732,19 @@ impl LayaRouter {
                 ),
             )
         } else if !det.is_english {
-            if let Some(lang) = &det.language {
+            if let (Some(lang), Some(mixed)) = (&det.language, det.mixed_segment.as_deref())
+                && !mixed.is_empty()
+            {
+                (
+                    LayaCheckpoint::Multilingual,
+                    format!(
+                        "Latin script, mostly English, but a line or field reads as {} ({}); \
+                         the English checkpoint cannot read it",
+                        python_repr_str(lang),
+                        python_repr_str(prefix_chars(mixed, 60))
+                    ),
+                )
+            } else if let Some(lang) = &det.language {
                 (
                     LayaCheckpoint::Multilingual,
                     format!(
@@ -546,12 +795,71 @@ impl LayaRouter {
         task: Option<&str>,
         lang: Option<&str>,
     ) -> Result<LayaResult> {
+        self.predict_with_lang_guess(state, questions, model, task, lang, None)
+    }
+
+    /// [`Self::predict`] with a per-call `lang_guess` hint; see [`Self::route_with_lang_guess`].
+    pub fn predict_with_lang_guess(
+        &self,
+        state: impl Into<Value>,
+        questions: &QuestionSet,
+        model: Option<&str>,
+        task: Option<&str>,
+        lang: Option<&str>,
+        lang_guess: Option<&LangGuess>,
+    ) -> Result<LayaResult> {
         let state = state.into();
-        let decision = self.route(&state, Some(questions), model, task, lang)?;
+        let decision =
+            self.route_with_lang_guess(&state, Some(questions), model, task, lang, lang_guess)?;
         let engine = self.load_checkpoint(decision.model)?;
         // Inference deliberately runs after the `Arc<dyn LayaPredictor>` clone above and outside
         // any lock: see the module docs on eviction safety.
         let result = engine.predict(state, questions)?;
+        Ok(result.with_routing(decision))
+    }
+
+    /// Route once, on the original state, then scan the whole state on the chosen checkpoint with
+    /// [`LayaEngine::predict_long`]. The result's [`LayaResult::routing`] records the decision.
+    ///
+    /// Returns [`LayaError::NotSupported`] when the chosen predictor (for example one registered
+    /// with [`Self::attach`]) has no scan capability, rather than truncating the state.
+    pub fn predict_long(
+        &self,
+        state: impl Into<Value>,
+        questions: &QuestionSet,
+        options: &LongOptions,
+        model: Option<&str>,
+        task: Option<&str>,
+        lang: Option<&str>,
+    ) -> Result<LayaResult> {
+        self.predict_long_with_lang_guess(state, questions, options, model, task, lang, None)
+    }
+
+    /// [`Self::predict_long`] with a per-call `lang_guess` hint; see
+    /// [`Self::route_with_lang_guess`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn predict_long_with_lang_guess(
+        &self,
+        state: impl Into<Value>,
+        questions: &QuestionSet,
+        options: &LongOptions,
+        model: Option<&str>,
+        task: Option<&str>,
+        lang: Option<&str>,
+        lang_guess: Option<&LangGuess>,
+    ) -> Result<LayaResult> {
+        let state = state.into();
+        let decision =
+            self.route_with_lang_guess(&state, Some(questions), model, task, lang, lang_guess)?;
+        let engine = self.load_checkpoint(decision.model)?;
+        let scanner = engine.as_long_predictor().ok_or_else(|| {
+            LayaError::NotSupported(format!(
+                "the predictor for '{}' has no predict_long, so a state longer than its window \
+                 cannot be scanned",
+                decision.model.subdir()
+            ))
+        })?;
+        let result = scanner.predict_long(state, questions, options)?;
         Ok(result.with_routing(decision))
     }
 }
@@ -562,13 +870,29 @@ impl LayaPredictor for LayaRouter {
     fn predict(&self, state: Value, questions: &QuestionSet) -> Result<LayaResult> {
         LayaRouter::predict(self, state, questions, None, None, None)
     }
+
+    fn as_long_predictor(&self) -> Option<&dyn LayaLongPredictor> {
+        Some(self)
+    }
+}
+
+impl LayaLongPredictor for LayaRouter {
+    /// [`LayaRouter::predict_long`] with every override left at its default.
+    fn predict_long(
+        &self,
+        state: Value,
+        questions: &QuestionSet,
+        options: &LongOptions,
+    ) -> Result<LayaResult> {
+        LayaRouter::predict_long(self, state, questions, options, None, None, None)
+    }
 }
 
 /// Python `repr()` for a string: single-quoted unless the string itself contains a `'` and no
 /// `"`, in which case double quotes are used instead; backslash, the chosen quote character, and
-/// the common control characters are escaped. Every model/task/lang name recorded in the routing
-/// golden vectors is plain ASCII, so this covers the cases that matter without attempting a full
-/// `repr()` (which would also need to classify every Unicode character as printable or not).
+/// the control characters are escaped, as is every character Python does not consider printable
+/// (`\xNN`, `\uNNNN`, `\UNNNNNNNN`). The routing reasons embed caller text in this form (the
+/// `lang` code and the mixed-language line), so the quoting has to agree with Python's.
 pub(crate) fn python_repr_str(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') {
         '"'
@@ -587,12 +911,38 @@ pub(crate) fn python_repr_str(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
-                out.push_str(&format!("\\x{:02x}", c as u32));
+            c if !python_is_printable(c) => {
+                let cp = c as u32;
+                if cp < 0x100 {
+                    out.push_str(&format!("\\x{cp:02x}"));
+                } else if cp < 0x10000 {
+                    out.push_str(&format!("\\u{cp:04x}"));
+                } else {
+                    out.push_str(&format!("\\U{cp:08x}"));
+                }
             }
             c => out.push(c),
         }
     }
     out.push(quote);
     out
+}
+
+/// `str.isprintable()` for one character: everything except the "Other" and "Separator"
+/// categories (control, format, surrogate, private use, unassigned, line/paragraph/space
+/// separators), with the ASCII space as the one printable separator.
+fn python_is_printable(c: char) -> bool {
+    use unicode_general_category::{GeneralCategory as G, get_general_category};
+    c == ' '
+        || !matches!(
+            get_general_category(c),
+            G::Control
+                | G::Format
+                | G::Surrogate
+                | G::PrivateUse
+                | G::Unassigned
+                | G::LineSeparator
+                | G::ParagraphSeparator
+                | G::SpaceSeparator
+        )
 }

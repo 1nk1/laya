@@ -36,4 +36,16 @@ pub trait LayaTokenizer: Send + Sync {
 
     /// The special token ids and mask token string this tokenizer resolved at load time.
     fn special(&self) -> &SpecialTokens;
+
+    /// Decodes token ids back to text, **keeping** special tokens in the output: Python's default
+    /// `tok.decode(ids)` (`skip_special_tokens=False`). Only `LayaEngine::predict_long` uses this,
+    /// to turn a token window back into a state string.
+    ///
+    /// A default method (returning an error) rather than a required one, so a downstream
+    /// implementation of this public trait keeps compiling; [`crate::HfTokenizer`] overrides it.
+    fn decode(&self, _ids: &[u32]) -> Result<String> {
+        Err(crate::error::LayaError::Tokenizer(
+            "this tokenizer does not support decode, which predict_long needs".to_string(),
+        ))
+    }
 }

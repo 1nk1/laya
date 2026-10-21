@@ -151,6 +151,7 @@ def main():
                 regen_checkpoint(name, root, args.revision, args.force_export)
         if "routing" in selected:
             run([sys.executable, os.path.join(TOOLS, "dump_routing_golden.py"), "--force"])
+            run([sys.executable, os.path.join(TOOLS, "dump_differential_golden.py")])
         if "repr" in selected:
             run([sys.executable, os.path.join(TOOLS, "repr_cases.py")])
     except subprocess.CalledProcessError as e:

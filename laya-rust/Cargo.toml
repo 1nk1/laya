@@ -25,7 +25,7 @@ path = "src/lib.rs"
 
 [dependencies]
 serde = "1"
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 indexmap = "2"
 thiserror = "2"
 ureq = { version = "3", optional = true }
@@ -41,10 +41,17 @@ ort = "2.0.0-rc.13"
 # L* only, which `char::is_alphabetic` does not match (it also accepts combining marks). This
 # crate gives a direct category lookup instead of hand-rolling Unicode tables.
 unicode-general-category = "1.1.0"
+# Routing port (`language_detection.rs`): `unicodedata.combining` (canonical combining class) decides
+# which characters never split a non-Latin word, and it is not derivable from the general category.
+unicode-normalization = "0.1"
 # Routing port (`laya_email.rs`): quote-header, signature and disclaimer detection. `regex` has no
 # lookbehind, so `email.py`'s one lookbehind pattern (`_SENTENCE`) is hand-written instead of
 # pulling in a second, heavier engine (`fancy-regex`) for a single pattern.
 regex = "1.13.1"
+# `predict_long` warnings (window capped, stride reduced): Python's `warnings.warn` text, sent to the
+# `log` facade at `warn` level with target `laya`. The facade only; no backend is linked, so a
+# program that installs none sees nothing. Already in the dependency tree through `ort`/`tokenizers`.
+log = "0.4"
 
 [dev-dependencies]
 proptest = "1"

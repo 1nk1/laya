@@ -440,11 +440,7 @@ fn assert_score(want: &Value, got: &ScoreAnswer, where_q: &str) {
     assert_eq!(legend.len(), got.legend.len(), "{where_q}: legend length");
     for i in 0..got.legend.len() {
         let expected_level = &legend[&i.to_string()];
-        assert_eq!(
-            expected_level,
-            &got.legend[i],
-            "{where_q}: legend[{i}]"
-        );
+        assert_eq!(expected_level, &got.legend[i], "{where_q}: legend[{i}]");
     }
 
     let probabilities = want["probabilities"].as_object().unwrap();

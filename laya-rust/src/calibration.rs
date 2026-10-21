@@ -151,13 +151,63 @@ impl Calibration {
         best
     }
 
-    /// Python's `round(x, 4)`: round-half-to-even at 4 decimal places. Both runtimes round half
-    /// to even, so small binary-vs-decimal tie discrepancies (at most ~5e-5) are well within the
-    /// parity tolerances used everywhere this is applied.
+    /// Python's `round(x, 4)`, exactly: the *exact binary value* of `x` is rounded half to even at
+    /// four decimals (so `round(0.00625, 4)` is `0.0063` because the double is a hair above the
+    /// tie, while `round(0.03125, 4)` is `0.0312` because that one is an exact tie), and the result
+    /// is the double nearest that decimal, as CPython's `float.__round__` returns it. The sign is
+    /// kept, so a negative value that rounds to zero gives `-0.0`. NaN and the infinities pass
+    /// through unchanged. Integer arithmetic only: no `x * 10_000.0`, whose product is itself rounded.
     pub fn round4(value: f64) -> f64 {
         if !value.is_finite() {
             return value;
         }
-        (value * 10_000.0).round_ties_even() / 10_000.0
+        let bits = value.to_bits();
+        let negative = bits >> 63 == 1;
+        let biased = ((bits >> 52) & 0x7ff) as i32;
+        let fraction = bits & ((1u64 << 52) - 1);
+        // |value| = mantissa * 2^exponent
+        let (mantissa, exponent) = if biased == 0 {
+            (fraction, -1074)
+        } else {
+            (fraction | (1u64 << 52), biased - 1075)
+        };
+        if exponent >= 0 || mantissa == 0 {
+            // An integer (or zero): already exact at four decimals.
+            return value;
+        }
+        let shift = (-exponent) as u32;
+        // |value| * 10^4 = scaled / 2^shift, with scaled < 2^53 * 10^4 < 2^67.
+        let scaled = u128::from(mantissa) * 10_000;
+        let quotient: u128 = if shift >= 128 {
+            0 // below 2^-61, far under one half
+        } else {
+            let whole = scaled >> shift;
+            let remainder = scaled & ((1u128 << shift) - 1);
+            let half = 1u128 << (shift - 1);
+            if remainder > half || (remainder == half && whole & 1 == 1) {
+                whole + 1
+            } else {
+                whole
+            }
+        };
+        let magnitude = Self::decimal_quotient_to_f64(quotient);
+        if negative { -magnitude } else { magnitude }
+    }
+
+    /// The double nearest `quotient / 10_000`, correctly rounded for any `quotient < 2^67`.
+    fn decimal_quotient_to_f64(quotient: u128) -> f64 {
+        if quotient < (1u128 << 53) {
+            // Exactly representable, so IEEE division is the single correctly rounded step.
+            return quotient as f64 / 10_000.0;
+        }
+        // Beyond 2^53 converting first would round twice. Divide in integers with 40 extra bits
+        // and fold the remainder into a sticky bit; the conversion then rounds once.
+        const EXTRA: u32 = 40;
+        let numerator = quotient << EXTRA;
+        let mut q = numerator / 10_000;
+        if !numerator.is_multiple_of(10_000) {
+            q |= 1;
+        }
+        q as f64 / (1u64 << EXTRA) as f64
     }
 }
