@@ -106,3 +106,17 @@ func TestLiteralSpacesAndDigitsStayASCII(t *testing.T) {
 		}
 	}
 }
+
+// helpers whose edge is a non-ASCII space: the trailing colon guard and the quote-line test.
+func TestNonASCIISpaceAtLineEdges(t *testing.T) {
+	for body, want := range map[string]string{
+		"Hi\nI need help.\nana@x.com> escreveu: \nold":   "Hi\nI need help.",
+		"Hi\nI need help.\nbob@x.com> wrote:\u3000\nold": "Hi\nI need help.",
+		"Hi\nI need help.\n > quoted\nmore":              "Hi\nI need help.\nmore",
+		"Hi\nI need help.\n\u3000>old\n\u3000>old2":      "Hi\nI need help.",
+	} {
+		if got := CleanBody(body, DefaultMaxChars); got != want {
+			t.Errorf("CleanBody(%q) = %q, want %q", body, got, want)
+		}
+	}
+}

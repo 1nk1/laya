@@ -93,16 +93,14 @@ func viewOf(runes []rune) string {
 }
 
 // disclaimerViewOf is the view for the disclaimer pattern, which has no \s or \d of its own but
-// does use \b: a non-ASCII digit has to read as a word character there, and a non-ASCII space
-// as a non-word one that no literal matches.
+// does use \b: a non-ASCII digit has to read as a word character there. A non-ASCII space stays
+// the control byte it is, which is non-word and matches no literal.
 func disclaimerViewOf(runes []rune) string {
 	out := []byte(viewOf(runes))
 	for i, c := range out {
 		switch c {
 		case nonASCIIDigit:
 			out[i] = '0'
-		case nonASCIISpace:
-			out[i] = 1
 		}
 	}
 	return string(out)
