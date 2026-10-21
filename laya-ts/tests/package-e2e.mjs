@@ -107,7 +107,8 @@ test("the packed module installs and works in an external ESM TypeScript project
   await writeFile(
     join(consumerDir, "runtime.mjs"),
     `import assert from "node:assert/strict";
-import { Agent, VERSION, predictTournament, DEFAULT_TOURNAMENT_GROUP } from "laya-ts";
+import { Agent, VERSION, predictTournament, DEFAULT_TOURNAMENT_GROUP,
+  OptionStabilityHook, calibrateReliability, decideReliability } from "laya-ts";
 
 let encoderCalls = 0;
 let headCalls = 0;
@@ -116,9 +117,9 @@ const provider = {
     encoderCalls += 1;
     return { lastHidden: [[[0]]] };
   },
-  async runHead() {
+  async runHead(_hidden, batch) {
     headCalls += 1;
-    return { logits: [[4, 0]], act: [[3, 0]] };
+    return { logits: batch.qtype.map(() => [4, 0]), act: batch.qtype.map(() => [3, 0]) };
   },
 };
 const agent = new Agent({ provider });
@@ -142,6 +143,14 @@ const tournament = await predictTournament(agent, "charged twice", {
 });
 assert.equal(tournament.answers.intent.choice, "refund");
 assert.deepEqual(tournament.tournament.intent, { labels: ["refund", "other"], n: 2, rounds: 0 });
+const stable = await agent.predict("charged twice", {
+  intent: { type: "choice", instructions: "Pick a route", criteria: ["refund", "other"] },
+}, { hooks: [new OptionStabilityHook({ accept: null, escalate: null, variants: "fast" })] });
+assert.deepEqual(Object.keys(stable.answers), ["intent"]);
+assert.equal(stable.answers.intent.reliability.n_variants, 3);
+assert.equal(stable.answers.intent.reliability.decision, null);
+const cuts = calibrateReliability([0.80001, 0.80002], [false, true], { targetAccuracy: 1 });
+assert.equal(decideReliability(0.80002, ...cuts), "ACCEPT");
 `,
   );
   await run(process.execPath, ["runtime.mjs"], consumerDir);
@@ -153,6 +162,8 @@ assert.deepEqual(tournament.tournament.intent, { labels: ["refund", "other"], n:
   VERSION,
   predictTournament,
   DEFAULT_TOURNAMENT_GROUP,
+  OptionStabilityHook,
+  type OptionStabilityReport,
   type QuestionDef,
   type SessionProvider,
   type SystemOneResult,
@@ -187,6 +198,13 @@ void prediction;
 const tournament: Promise<SystemOneResult & { tournament: Record<string, TournamentMeta> }> =
   predictTournament(new Agent({ provider }), "charged twice", questions, DEFAULT_TOURNAMENT_GROUP);
 void tournament;
+const stability = new OptionStabilityHook({ accept: null, escalate: null });
+new Agent({ provider }).addHook(stability);
+async function reliability(): Promise<OptionStabilityReport | undefined> {
+  const result = await prediction;
+  return result.answers.intent.type === "choice" ? result.answers.intent.reliability : undefined;
+}
+void reliability;
 `,
   );
   await writeFile(

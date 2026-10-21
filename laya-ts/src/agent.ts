@@ -21,6 +21,7 @@ import {
 } from "./common.js";
 import type { BinningMap, InternalQ, MinConfidence, OptionStats, SequenceStats } from "./common.js";
 import type { Batch, SessionProvider } from "./providers.js";
+import type { OptionStabilityReport } from "./option-stability.js";
 import { encodeWithData, parseTokenizerJson, type TokenizerLike } from "./tokenizer.js";
 import { decide, decideBatch, type DecideOptions, type DecideBatchOptions, type DecisionResult } from "./structured.js";
 import {
@@ -56,6 +57,7 @@ export interface ChoiceAnswer {
   answer_confidence: number;
   action: ActionInfo;
   low_confidence?: boolean;
+  reliability?: OptionStabilityReport;
 }
 
 export interface ScoreAnswer {

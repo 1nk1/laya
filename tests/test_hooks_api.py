@@ -1617,6 +1617,14 @@ from laya import hooks as _hooks_mod  # noqa: E402
 
 check_true("hooks module exports compose_hooks", callable(_hooks_mod.compose_hooks))
 
+# The local TypeScript stability port consumes these reference helper contracts.
+check("stability/make_variants reference parameters", list(sig(_hooks_mod.make_variants)),
+      ["labels", "seed_key", "n_shuffles", "relabel", "include", "reorder"])
+check("stability/calibrate_reliability reference parameters", list(sig(_hooks_mod.calibrate_reliability)),
+      ["soft_scores", "correct", "target_accuracy", "max_escalate_accuracy"])
+check("stability/decide_reliability reference parameters", list(sig(_hooks_mod.decide_reliability)),
+      ["soft_stability", "accept", "escalate"])
+
 _patterns_md = os.path.join(REPO, "docs", "hooks", "patterns.md")
 with open(_patterns_md, encoding="utf-8", newline="") as _pmf:
     _patterns_text = _pmf.read().replace("\r\n", "\n")
