@@ -206,8 +206,8 @@ class Dataset:
         # whose `expected` names a question `questions` does not carry. A row built in Python with
         # `Example(...)` skipped all three, and every reader of it takes the two fields as mappings: a
         # non-object `expected` died as an unhandled ``AttributeError``, in `evaluate` only after the
-        # runner had answered (`laya/evals.py:1205`), and a non-object `questions` leaked through
-        # `questions_fingerprint` (`laya/evals.py:285`). An `expected` key with no question behind it
+        # runner had answered (`laya/evals.py:1217`), and a non-object `questions` leaked through
+        # `questions_fingerprint` (`laya/evals.py:297`). An `expected` key with no question behind it
         # was answered with "runner returned no answer for question 'x'" -- a verdict about the runner,
         # paid for with a whole inference run, for a mistake in the caller's row. The two opt-in doors
         # refused the same rows before calling anything, but as tracebacks
