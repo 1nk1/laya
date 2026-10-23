@@ -1725,6 +1725,7 @@ Embedding the message alone gave the highest or tied-highest recall@20 for both 
 * **[laya-Ascend](https://github.com/zzhdbw/laya-Ascend)**: Laya on Huawei Ascend NPUs through `torch-npu`, with a CPU vs NPU benchmark (34x to 71x faster at batch size 1), a setup guide, and Snake and Tetris demos.
 * **[laya-apple](https://github.com/tc3oliver/laya-apple)**: a correctness-validated Laya runtime for Apple silicon that uses the MLX GPU and the Apple Neural Engine, with automatic routing and concurrent heterogeneous serving.
 * **[stuntd](https://github.com/bladedevoff/stuntd)**: runs Laya locally behind the Jev API (`POST /v1/systemone`, no key) and trains a head per decision on the frozen encoder from your own labelled rows, with a calibrated confidence threshold (a 12-label intent task: 89.5% zero-shot to 100% trained).
+* **[pydecide](https://github.com/gopaljigaur/decide)**: a Python client (`pip install "pydecide[mlx]"`) for typed `Choice`, `Score` and `Noul` questions answered by `laya` or `laya-mlx` in process. Local inference is the default, even when hosted API keys are set; server backends require explicit configuration. An answer below the confidence threshold comes back marked on the route, or raises carrying the rejected answer if you ask it to. Also serves `POST /v1/systemone`, so a Jev client can point at local Laya unchanged.
 
 ---
 
