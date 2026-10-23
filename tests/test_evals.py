@@ -776,6 +776,67 @@ def test_dataset_rejects_malformed_json_and_empty(tmp_path):
         Dataset.from_jsonl(str(empty))
 
 
+def test_dataset_names_an_unreadable_file_as_an_evalerror(tmp_path, monkeypatch):
+    """Four ways a dataset cannot be handed over are `EvalError`, not a crash.
+
+    `from_jsonl` opened bare, so a path that is a directory, a read the volume refuses, bytes that
+    are not UTF-8 and a line nested deeper than `json` will walk each left the module as
+    `IsADirectoryError` / `PermissionError` / `UnicodeDecodeError` / `RecursionError` -- and the CLI
+    that calls it keeps exit 1 for "a threshold or a baseline tolerance failed", so all four were
+    reported as a quality failure. The row-level refusals below are unchanged: this is about the
+    file, not its contents, and the message has to name the path because three of the four errors
+    do not.
+    """
+    real_open = open                      # captured before any patch below delegates to it
+
+    def make_refuser(wanted, err):
+        """`open` for real, except that one path raises. A factory, so nothing binds late."""
+        def refuse(target, *a, **k):
+            if str(target) == wanted:
+                raise err
+            return real_open(target, *a, **k)
+        return refuse
+
+    a_directory = tmp_path / "a-directory"
+    a_directory.mkdir()
+    denied = tmp_path / "denied.jsonl"
+    denied.write_text(json.dumps({"state": "s", "questions": Q, "expected": {"intent": "a"}}),
+                      encoding="utf-8")
+    not_utf8 = tmp_path / "not-utf8.jsonl"
+    not_utf8.write_bytes(b'{"state": "s", "q": "\xff\xfe"}\n')
+    too_deep = tmp_path / "too-deep.jsonl"
+    too_deep.write_text("[" * 100000 + "]" * 100000 + "\n", encoding="utf-8")
+
+    shapes = [("a path that is a directory", str(a_directory), None),
+              ("a volume that refuses the read", str(denied), OSError(13, "Permission denied")),
+              ("bytes that are not UTF-8", str(not_utf8), None),
+              ("a line nested too deep to read", str(too_deep), None)]
+    for label, path, error in shapes:
+        monkeypatch.setattr("builtins.open", real_open)
+        if error is not None:
+            monkeypatch.setattr("builtins.open", make_refuser(path, error))
+        with pytest.raises(EvalError) as exc:
+            Dataset.from_jsonl(path)
+        assert "cannot be read" in str(exc.value), "%s: %s" % (label, exc.value)
+        assert path in str(exc.value), "%s did not name the path: %s" % (label, exc.value)
+        if error is not None:
+            assert "Permission denied" in str(exc.value), (
+                "%s lost the errno the caller needs: %s" % (label, exc.value))
+    monkeypatch.setattr("builtins.open", real_open)
+
+    # The refusals that were already correct are untouched: they name the line, not the file.
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text("{not json\n", encoding="utf-8")
+    with pytest.raises(EvalError) as exc:
+        Dataset.from_jsonl(str(bad))
+    assert "is not valid JSON" in str(exc.value) and ":1" in str(exc.value), str(exc.value)
+    blank = tmp_path / "blank.jsonl"
+    blank.write_text("# only a comment\n", encoding="utf-8")
+    with pytest.raises(EvalError) as exc:
+        Dataset.from_jsonl(str(blank))
+    assert "contains no examples" in str(exc.value), str(exc.value)
+
+
 # A row built in Python never passes through `Example.from_dict`, which is the only place these three
 # checks were made: `questions` and `expected` must be objects, and every `expected` key must name a
 # question that is actually there. Every reader takes the two fields as mappings, so a row that
@@ -2779,6 +2840,63 @@ def test_cli_report_reads_refuse_an_unreadable_report_with_code_2(monkeypatch, t
         assert "Traceback" not in err, "%s under run leaked a traceback: %s" % (label, err)
         assert "cannot read report" in err and path in err, "%s under run: %s" % (label, err)
     monkeypatch.setattr("builtins.open", real_open)
+
+
+def test_cli_dataset_reads_refuse_an_unreadable_dataset_with_code_2(monkeypatch, tmp_path, capsys):
+    """`validate` and `run` both call a dataset that cannot be read a usage error, not a crash.
+
+    Both doors read the file before any checkpoint is reached, so the exit code is the only thing a CI
+    job sees -- and on `main` a directory, a refused read, non-UTF-8 bytes and an unclosably deep line
+    each escaped `Dataset.from_jsonl` as a traceback with exit 1, the code `docs/evals.md` reserves for
+    "a threshold or a baseline tolerance failed". The one shape already refused properly, a line that
+    is not JSON, is included so this PR cannot be read as moving the goalposts: same door, same code,
+    different reason, and the reason is what the message says.
+    """
+    from laya import evals_cli
+
+    real_open = open                      # captured before any patch below delegates to it
+
+    def make_refuser(wanted, err):
+        """`open` for real, except that one path raises. A factory, so nothing binds late."""
+        def refuse(target, *a, **k):
+            if str(target) == wanted:
+                raise err
+            return real_open(target, *a, **k)
+        return refuse
+
+    a_directory = tmp_path / "a-directory"
+    a_directory.mkdir()
+    denied = tmp_path / "denied.jsonl"
+    denied.write_text(json.dumps({"state": "s", "questions": Q, "expected": {"intent": "a"}}) + "\n",
+                      encoding="utf-8")
+    not_utf8 = tmp_path / "not-utf8.jsonl"
+    not_utf8.write_bytes(b'{"state": "s", "q": "\xff\xfe"}\n')
+    too_deep = tmp_path / "too-deep.jsonl"
+    too_deep.write_text("[" * 100000 + "]" * 100000 + "\n", encoding="utf-8")
+    not_json = tmp_path / "not-json.jsonl"
+    not_json.write_text("{nope\n", encoding="utf-8")
+
+    # (label, path, injected open() error, the fragment the message must carry)
+    cases = [("a path that is a directory", str(a_directory), None, "cannot be read"),
+             ("a volume that refuses the read", str(denied), OSError(13, "Permission denied"),
+              "cannot be read"),
+             ("bytes that are not UTF-8", str(not_utf8), None, "cannot be read"),
+             ("a line nested too deep to read", str(too_deep), None, "cannot be read"),
+             ("a line that is not JSON", str(not_json), None, "is not valid JSON")]
+    built = _patch_router(monkeypatch)
+    for label, path, error, fragment in cases:
+        for command in ("validate", "run"):
+            monkeypatch.setattr("builtins.open", real_open)
+            if error is not None:
+                monkeypatch.setattr("builtins.open", make_refuser(path, error))
+            capsys.readouterr()
+            assert evals_cli.main([command, path]) == 2, "%s under %s" % (label, command)
+            err = capsys.readouterr().err
+            assert "Traceback" not in err, "%s under %s leaked a traceback: %s" % (label, command, err)
+            assert fragment in err, "%s under %s: %s" % (label, command, err)
+            assert path in err, "%s under %s did not name the path: %s" % (label, command, err)
+    monkeypatch.setattr("builtins.open", real_open)
+    assert not built, "the dataset is read before a checkpoint is constructed"
 
 
 def test_cli_run_refuses_a_baseline_from_a_different_dataset(monkeypatch, tmp_path, capsys):
