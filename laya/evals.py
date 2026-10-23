@@ -231,17 +231,29 @@ class Dataset:
 
     @classmethod
     def from_jsonl(cls, path: str) -> "Dataset":
+        # `laya-evals` promises exit 2 on a usage error and exit 1 only when a threshold or a
+        # tolerance failed (`docs/evals.md`), and a dataset the caller cannot hand over is the
+        # caller's mistake. Four shapes of unreadable escaped that as a traceback and exit 1 -- a
+        # path that is a directory, a file without read permission, bytes that are not UTF-8 and a
+        # line nested deeper than `json` will walk -- while a line that is merely malformed JSON was
+        # already reported, three lines below. `file_fingerprint` above and `_load_report` in
+        # `laya/evals_cli.py` read a caller's path this way already; this makes the dataset reader
+        # agree with them. `UnicodeDecodeError` rather than `ValueError` on purpose: `EvalError`
+        # *is* a `ValueError`, so the wider class would re-wrap the row errors named just below.
         examples: List[Example] = []
-        with open(path, "r", encoding="utf-8") as handle:
-            for lineno, line in enumerate(handle, 1):
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError as exc:
-                    raise EvalError("%s:%d is not valid JSON: %s" % (path, lineno, exc))
-                examples.append(Example.from_dict(row, where="%s:%d" % (path, lineno)))
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                for lineno, line in enumerate(handle, 1):
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError as exc:
+                        raise EvalError("%s:%d is not valid JSON: %s" % (path, lineno, exc))
+                    examples.append(Example.from_dict(row, where="%s:%d" % (path, lineno)))
+        except (OSError, UnicodeDecodeError, RecursionError) as exc:
+            raise EvalError("%s cannot be read: %s" % (path, exc)) from exc
         if not examples:
             raise EvalError("%s contains no examples" % path)
         return cls(examples)
