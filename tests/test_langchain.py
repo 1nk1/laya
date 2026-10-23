@@ -1927,6 +1927,17 @@ try:
         check_true("badans/empty answers keeps its KeyError", False, "no error raised")
     except KeyError as _e:
         check_true("badans/empty answers keeps its KeyError", str(_e) == "'route'", str(_e))
+
+    # A body with no `answers` key at all is the other no-decision shape: the guard fires on a present
+    # field only, so the guardrail still reports no violations rather than refusing the response.
+    langchain_module.urllib.request.build_opener = (
+        lambda *a: _RawBodyOpener(json.dumps({"model": "laya-multilingual"})))
+    check("badans/answers absent still screens safe",
+          LayaGuardrail(base_url="http://localhost:8000").invoke(
+              "What is the capital of France?"), "What is the capital of France?")
+    check_true("badans/answers absent still triages",
+               isinstance(LayaTriage(base_url="http://localhost:8000").invoke(
+                   {"state": "I want a refund"}), dict))
 finally:
     langchain_module.urllib.request.build_opener = _lc_orig_opener_badans
 
