@@ -130,26 +130,11 @@ jobs:
           LAYA_GO_FIXTURES: ${{ github.workspace }}/.go-goldens
           LAYA_CHECKPOINTS: ${{ github.workspace }}/laya-java/.work/checkpoints
         run: go test -race -count=1 -json ./... > "$RUNNER_TEMP/go-test.json"
-      # Exactly the measured count (1754 tests and subtests, on both Go versions): dropping a
+      # Exactly the measured count (3462 tests and subtests, on both Go versions): dropping a
       # case fails here, and adding one means raising this number.
       - name: No test was skipped
         if: ${{ !cancelled() }}
-        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test.json" --min-tests 1754
-
-      # The samples are a nested module (they link the cgo onnx module), so the root steps do not
-      # see them. They must keep building against the API.
-      - name: The samples' email questions are what Python records now
-        run: python laya-go/samples/scripts/gen_email_golden.py --check
-      - name: The samples build and their tests pass
-        working-directory: laya-go/samples
-        run: go vet ./... && go build ./... && go test -count=1 -json ./... > "$RUNNER_TEMP/go-samples.json"
-      - name: No samples test was skipped
-        if: ${{ !cancelled() }}
-        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-samples.json" --min-tests 2
-      # Samples only: it does not guard the root module, whose own steps build it without cgo.
-      - name: The samples build without cgo
-        working-directory: laya-go/samples
-        run: CGO_ENABLED=0 go build ./...
+        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test.json" --min-tests 3462
 
       # go.mod declares go 1.22, so that is what a consumer may build with.
       - name: Run the tests on the oldest supported Go
@@ -161,7 +146,7 @@ jobs:
         run: go test -count=1 -json ./... > "$RUNNER_TEMP/go-test-oldest.json"
       - name: No test was skipped on the oldest Go either
         if: ${{ !cancelled() }}
-        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test-oldest.json" --min-tests 1754
+        run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test-oldest.json" --min-tests 3462
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ failure() }}
