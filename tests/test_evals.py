@@ -3454,7 +3454,7 @@ def test_cli_relative_slice_rule_requires_baseline_before_loading(monkeypatch, t
     assert not built
 
 
-def test_cli_rejects_invalid_policy_json_and_version(monkeypatch, tmp_path):
+def test_cli_rejects_invalid_policy_json_and_version(monkeypatch, tmp_path, capsys):
     from laya import evals_cli
 
     built = _patch_router(monkeypatch)
@@ -3462,9 +3462,16 @@ def test_cli_rejects_invalid_policy_json_and_version(monkeypatch, tmp_path):
     path = tmp_path / "gates.json"
     for content in ("{not json", json.dumps({"version": 2, "rules": [
             {"slice": {"language": "zh"}, "metric": "choice_accuracy",
-             "min_count": 1, "min": 0.5}]})):
+             "min_count": 1, "min": 0.5}]}),
+            # Unclosable depth is a document `json` refuses to read, and it says so with a
+            # `RecursionError` rather than a `ValueError`. It is the caller's file, so `docs/evals.md`
+            # ("Invalid policy syntax exits 2 before a checkpoint loads") belongs to it too.
+            "[" * 100000 + "]" * 100000):
         path.write_text(content, encoding="utf-8")
         assert evals_cli.main(["run", dataset, "--gate-policy", str(path)]) == 2
+        err = capsys.readouterr().err
+        assert "Traceback" not in err, "exit 2 with a traceback is the shape this refuses"
+        assert err.startswith("laya-evals: "), "a usage error, named as one: %r" % err
     assert not built
 
 
