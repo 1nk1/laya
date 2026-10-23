@@ -830,6 +830,8 @@ def test_dataset_names_an_unreadable_file_as_an_evalerror(tmp_path, monkeypatch)
     with pytest.raises(EvalError) as exc:
         Dataset.from_jsonl(str(bad))
     assert "is not valid JSON" in str(exc.value) and ":1" in str(exc.value), str(exc.value)
+    assert "cannot be read" not in str(exc.value), \
+        "a row refusal is not a file refusal: catching `ValueError` above would say so twice"
     blank = tmp_path / "blank.jsonl"
     blank.write_text("# only a comment\n", encoding="utf-8")
     with pytest.raises(EvalError) as exc:
@@ -2895,6 +2897,9 @@ def test_cli_dataset_reads_refuse_an_unreadable_dataset_with_code_2(monkeypatch,
             assert "Traceback" not in err, "%s under %s leaked a traceback: %s" % (label, command, err)
             assert fragment in err, "%s under %s: %s" % (label, command, err)
             assert path in err, "%s under %s did not name the path: %s" % (label, command, err)
+            if fragment == "is not valid JSON":
+                assert "cannot be read" not in err, \
+                    "%s under %s re-wrapped a row refusal as a file refusal: %s" % (label, command, err)
     monkeypatch.setattr("builtins.open", real_open)
     assert not built, "the dataset is read before a checkpoint is constructed"
 
