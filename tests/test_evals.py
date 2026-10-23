@@ -779,10 +779,11 @@ def test_dataset_rejects_malformed_json_and_empty(tmp_path):
 # A row built in Python never passes through `Example.from_dict`, which is the only place these three
 # checks were made: `questions` and `expected` must be objects, and every `expected` key must name a
 # question that is actually there. Every reader takes the two fields as mappings, so a row that
-# skipped the checks reached `evaluate`'s scoring loop (`laya/evals.py:1217`), `questions_fingerprint`
-# (`laya/evals.py:297`) or an opt-in door's `_validate_dataset` as an unhandled ``AttributeError`` --
-# or got as far as the runner and came back as a verdict *about the runner*. `Dataset` is the one door
-# all four readers share, so the refusal names the row and lands before a call is paid for.
+# skipped the checks reached `evaluate`'s scoring loop (`laya/evals.py:1205`), `questions_fingerprint`
+# (`laya/evals.py::questions_fingerprint`) or an opt-in door's `_validate_dataset` as an unhandled
+# ``AttributeError`` -- or got as far as the runner and came back as a verdict *about the runner*.
+# `Dataset` is the one door all four readers share, so the refusal names the row and lands before a
+# call is paid for.
 @pytest.mark.parametrize("field, value, fragment", [
     ("expected", True, "'expected' must be an object keyed by question id, got bool"),
     ("expected", "a", "'expected' must be an object keyed by question id, got str"),
