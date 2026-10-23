@@ -5,7 +5,7 @@ modules. Running the model needs the nested `onnx` module, which uses cgo.
 
 The foundation (language detection, questions, sequences, the tokenizer) and the predict path
 (`infer`, `agent`) are here, and the `onnx` module runs the graph. The router's pure routing half
-(`router`) is here; loading, hooks and routed inference come in later changes.
+(`router`) and its `on_route` hooks are here; loading and routed inference come in later changes.
 
 | Package | What it is |
 | --- | --- |
@@ -20,6 +20,8 @@ The foundation (language detection, questions, sequences, the tokenizer) and the
 | `agent` | `ONNXAgent.predict` and `predict_batch` over an `infer.Session`: `Open`, `Predict`, `PredictBatch`, `LoadConfig`, `WithCalibration` (installs a `calibrate` payload at `Open`) and `CalibrationPayload` (writes one), with batch size, sort-by-length and context cancellation between runs. |
 
 | `router` | Which checkpoint reads a request, the port of the routing half of `laya/router.py`: `New`, `Route`, `RouteBatch`, `NormaliseName`, `EnglishFromCode`, `MatchTypedDecisionsWorkflow`, `QuestionSchema`. Decisions carry laya's reason strings. Loads nothing. |
+
+| `router` | Which checkpoint reads a request, the port of the routing half of `laya/router.py`: `New`, `Route`, `RouteBatch`, `NormaliseName`, `EnglishFromCode`, `MatchTypedDecisionsWorkflow`, `QuestionSchema`. Decisions carry laya's reason strings. `OnRoute` hooks (`AddHook`, `WithInstalledHooks`, `ForHooks`) may observe or replace a decision, under the agent's hook dispatcher. Loads nothing. |
 | `agent` | `ONNXAgent.predict` and `predict_batch` over an `infer.Session`: `Open`, `Predict`, `PredictBatch`, `LoadConfig`, with batch size, sort-by-length and context cancellation between runs. |
 | `onnx` | A nested module (cgo, its own `go.mod`): `onnx.Open` runs a fused `laya.onnx` on ONNX Runtime and implements `infer.Session`, for `agent.Open`. Needs an ONNX Runtime 1.29+ shared library; `CGO_ENABLED=0` builds and `Open` returns `ErrNoCGO`. |
 | `tokenizer` | A reader and runner for Hugging Face `tokenizer.json` (BPE): normalizer, pre-tokenizer, added tokens, byte fallback, decoder. |

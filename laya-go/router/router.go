@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/user"
 	"strings"
+	"time"
 
 	"github.com/NandhaKishorM/laya/laya-go/internal/pyjson"
 	"github.com/NandhaKishorM/laya/laya-go/internal/unicodedata"
@@ -49,12 +50,14 @@ type Router struct {
 	def    Checkpoint
 	auto   bool
 	hint   LangHint
+	hk     *hookState
 }
 
 // Option configures New.
 type Option func(*config) error
 
 type config struct {
+	hooks      hookConfig
 	standalone bool
 	def        string
 	auto       bool
@@ -109,10 +112,11 @@ func WithSourceIn(name, repo, subfolder string) Option {
 	}
 }
 
-// New builds a Router. A default or source name that is neither a checkpoint nor an alias is an
+// New builds a Router. Hooks run concurrently unless WithSerialHooks is given, and a serial hook
+// must not call Route on its own Router. A default or source name that is neither a checkpoint nor an alias is an
 // *UnknownModelError. Sources are applied in the order given, the last one for a name winning.
 func New(opts ...Option) (*Router, error) {
-	c := config{def: string(Multilingual)}
+	c := config{def: string(Multilingual), hooks: hookConfig{raise: true}}
 	for _, o := range opts {
 		if err := o(&c); err != nil {
 			return nil, err
@@ -122,7 +126,7 @@ func New(opts ...Option) (*Router, error) {
 	if c.standalone {
 		base = standalone
 	}
-	r := &Router{models: make(map[Checkpoint]ModelSpec, len(base)), auto: c.auto, hint: c.hint}
+	r := &Router{models: make(map[Checkpoint]ModelSpec, len(base)), auto: c.auto, hint: c.hint, hk: newHookState(c.hooks)}
 	for k, v := range base {
 		r.models[k] = v
 	}
@@ -193,6 +197,10 @@ type CallOption func(*call)
 type call struct {
 	model, task, lang *string
 	hint              LangHint
+	hooks             []any
+	raise             *bool
+	timeout           *time.Duration
+	err               error
 }
 
 // ForModel routes to the named checkpoint or alias, ahead of every other signal.
@@ -212,13 +220,30 @@ func ForLangGuess(h LangHint) CallOption { return func(c *call) { c.hint = h } }
 // Route decides which checkpoint reads state, without loading or running anything. qs is only
 // looked at for its ids, to recognise a typed-decisions workflow; the zero value is fine.
 //
-// The error is an *UnknownModelError for a model or task that names no checkpoint.
+// Hooks with an OnRoute method then see the decision and may replace it; the replacement is
+// returned (see hooks.go). Under WithSerialHooks a hook must not call Route on the Router that is
+// running it: the call would wait for itself.
+//
+// The error is an *UnknownModelError for a model or task that names no checkpoint, or a hook's
+// failure under WithHookErrors(true).
 func (r *Router) Route(state any, qs schema.Questions, opts ...CallOption) (Decision, error) {
 	var c call
 	for _, o := range opts {
 		o(&c)
 	}
-	return r.route(state, qs, c)
+	return r.routeHooked(state, qs, c)
+}
+
+// routeHooked is route followed by the OnRoute hooks, Python's Router.route.
+func (r *Router) routeHooked(state any, qs schema.Questions, c call) (Decision, error) {
+	d, err := r.route(state, qs, c)
+	if err != nil {
+		return Decision{}, err
+	}
+	if c.err != nil {
+		return Decision{}, c.err
+	}
+	return r.dispatchRoute(state, qs, d, c)
 }
 
 func (r *Router) decision(key Checkpoint, reason string, det *lang.Analysis, wf string) Decision {
@@ -332,13 +357,17 @@ type Request struct {
 // RouteBatch routes a heterogeneous batch without loading anything. The decisions keep the
 // order of reqs. A nil State is refused with laya's text; the first failing request ends the
 // batch.
-func (r *Router) RouteBatch(reqs []Request) ([]Decision, error) {
+//
+// opts apply to every request, before the request's own Options; they are meant for the hook
+// options (ForHooks, ForHookErrors, ForHookTimeout), as route_batch's hooks, hooks_raise and
+// hooks_timeout are.
+func (r *Router) RouteBatch(reqs []Request, opts ...CallOption) ([]Decision, error) {
 	out := make([]Decision, 0, len(reqs))
 	for i, req := range reqs {
 		if req.State == nil {
 			return nil, fmt.Errorf("request %d 'state' must not be None; pass a string, dict, or list", i)
 		}
-		d, err := r.Route(req.State, req.Questions, req.Options...)
+		d, err := r.Route(req.State, req.Questions, append(append([]CallOption(nil), opts...), req.Options...)...)
 		if err != nil {
 			return nil, err
 		}

@@ -51,6 +51,7 @@ import json
 import os
 import random
 import sys
+import time
 import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1532,8 +1533,213 @@ def router_family(rng):
     if len(routes) < 1000 or refused < 40 or len(names) < 250:
         raise AssertionError("the router cases stopped covering enough (%d routes, %d refused)"
                              % (len(routes), refused))
+    hooks, hook_batches = router_hooks_family(rng)
     return {"names": names, "codes": codes, "workflows": workflows, "signatures": signatures,
-            "routes": routes, "batches": batches}
+            "routes": routes, "batches": batches, "hooks": hooks, "hook_batches": hook_batches,
+            "timeout_text": [{"seconds": x, "text": "%g" % x} for x in TIMEOUT_TEXT_VALUES]}
+
+
+# Python's %g on a timeout: six significant digits, exponent form below 1e-4 and from 1e6.
+TIMEOUT_TEXT_VALUES = [0.1234567, 1234.567, 123456.7, 1234567.0, 12345678.9, 0.0001, 0.00012345678, 0.00001234567, 1e-07,
+                       0.5, 1.0, 30.0, 100000.0, 999999.5, 999999.4, 1000000.0, 0.1, 0.05, 2.5, 3600.0, 1e9,
+                       0.30000000000000004, 1.0000005, 1.0000004, 0.99999949, 7.0000001]
+
+ROUTER_HOOK_MODELS = ["english", "multilingual", "typed-decisions"]
+
+
+def _hook_class(name, events, behaviour, log, run_ids):
+    """A hook object whose class is called `name` and which implements only `events`."""
+    from laya.router import RouteDecision, _repo_str
+
+    def on_route(self, ctx):
+        run_ids.append(ctx.run_id)
+        log.append({"hook": name, "event": "on_route", "model": ctx.decision["model"],
+                    "reason": ctx.decision["reason"], "states": [x if isinstance(x, str) else "<%s>" % type(x).__name__ for x in ctx.states],
+                    "questions": list(ctx.questions), "run_id_len": len(ctx.run_id),
+                    "run_id_shared": ctx.run_id == run_ids[0], "router_is_self": ctx.router is not None})
+        kind, _, arg = behaviour.partition(":")
+        if kind in ("replace", "replace_raise"):
+            ctx.decision = RouteDecision(model=arg, repo=_repo_str(ctx.router.models.get(arg)),
+                                         reason="replaced by %s" % name, detection=None, workflow=None)
+        if kind == "suffix":
+            ctx.decision = RouteDecision(dict(ctx.decision, reason=ctx.decision["reason"] + "|" + name))
+        if kind in ("raise", "replace_raise"):
+            raise RuntimeError("boom from %s" % name)
+        if kind == "sleep":
+            time.sleep(float(arg))
+
+    def other(self, ctx):
+        log.append({"hook": name, "event": "other"})
+
+    on_route.__qualname__ = name + ".on_route"
+    other.__qualname__ = name + ".other"
+    methods = {event: (on_route if event == "on_route" else other) for event in events}
+    return type(name, (), methods)()
+
+
+def _router_hooks_case(label, router_kwargs, chain, call_kwargs, route_kwargs, requests=None):
+    import warnings
+
+    from laya import hooks as pyhooks
+    from laya.router import Router
+
+    log, run_ids, objects = [], [], {"default": [], "installed": [], "call": []}
+    for spec in chain:
+        objects[spec["where"]].append(_hook_class(spec["name"], spec["events"], spec["behaviour"], log, run_ids))
+    record = {"case": label, "router": router_kwargs, "chain": chain, "call": call_kwargs, "route": route_kwargs}
+    if requests is not None:
+        record["requests"] = requests
+    pyhooks.clear_default_hooks()
+    try:
+        for hook in objects["default"]:
+            pyhooks.add_default_hook(hook)
+        try:
+            router = Router(**dict(router_kwargs, hooks=objects["installed"]))
+        except ValueError as refused:
+            record["router_error"] = str(refused)
+            return record
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                if requests is None:
+                    record["decision"] = _router_decision(
+                        router.route(hooks=objects["call"], **call_kwargs, **route_kwargs))
+                else:
+                    record["decisions"] = [_router_decision(d) for d in router.route_batch(
+                        requests, hooks=objects["call"], **call_kwargs)]
+            except Exception as refused:  # noqa: BLE001 -- the text is the golden
+                record["error"] = {"type": type(refused).__name__, "message": str(refused)}
+        record["warnings"] = [str(w.message) for w in caught]
+    finally:
+        pyhooks.clear_default_hooks()
+    record["calls"] = log
+    return record
+
+
+def router_hooks_family(rng):
+    """on_route through the real Router: order, replacement, raise, warn, timeout, per-call overrides."""
+    out = []
+
+    def hook(name, where="installed", behaviour="ok", events=("on_route",)):
+        return {"name": name, "where": where, "events": list(events), "behaviour": behaviour}
+
+    en = {"state": "I was charged twice, please refund the duplicate payment on my invoice.",
+          "questions": _noul_questions(["urgency"])}
+    de = {"state": "Der Kunde wurde zweimal belastet und moechte eine Rueckerstattung fuer die Rechnung",
+          "questions": _noul_questions(["urgency"])}
+    td = {"state": "x", "questions": _noul_questions(ROUTER_TD["customer_service"])}
+    fixed = [
+        ("no-hooks", {}, [], {}, en),
+        ("observe", {}, [hook("Seen")], {}, en),
+        ("observe-multilingual", {}, [hook("Seen")], {}, de),
+        ("replace", {}, [hook("Pin", behaviour="replace:multilingual")], {}, en),
+        ("replace-typed", {}, [hook("Pin", behaviour="replace:typed-decisions")], {}, de),
+        ("second-hook-sees-the-replacement", {},
+         [hook("A", behaviour="replace:multilingual"), hook("B")], {}, en),
+        ("last-replacement-wins", {},
+         [hook("A", behaviour="replace:multilingual"), hook("B", behaviour="replace:typed-decisions")], {}, en),
+        ("suffix-chain-keeps-order", {}, [hook("A", behaviour="suffix"), hook("B", behaviour="suffix"),
+                                          hook("C", behaviour="suffix")], {}, en),
+        ("defaults-then-installed-then-call", {},
+         [hook("Call1", "call", "suffix"), hook("Inst1", "installed", "suffix"), hook("Def1", "default", "suffix"),
+          hook("Inst2", "installed", "suffix"), hook("Call2", "call", "suffix"), hook("Def2", "default", "suffix")],
+         {}, en),
+        ("hook-without-on-route-is-skipped", {}, [hook("Other", events=["on_predict_end"]), hook("Seen")], {}, en),
+        ("hook-with-several-events", {}, [hook("Many", events=["on_route", "on_load", "on_evict", "on_error"])], {}, en),
+        ("raise", {}, [hook("Bad", behaviour="raise")], {}, en),
+        ("raise-stops-the-chain", {}, [hook("A"), hook("Bad", behaviour="raise"), hook("C")], {}, en),
+        ("raise-warns-and-continues", {"hooks_raise": False},
+         [hook("A"), hook("Bad", behaviour="raise"), hook("C")], {}, en),
+        ("replace-then-raise-raises", {}, [hook("Bad", behaviour="replace_raise:multilingual")], {}, en),
+        ("replace-then-raise-keeps-the-replacement-when-warned", {"hooks_raise": False},
+         [hook("Bad", behaviour="replace_raise:multilingual"), hook("C")], {}, en),
+        ("call-overrides-raise-to-warn", {}, [hook("Bad", behaviour="raise"), hook("C")], {"hooks_raise": False}, en),
+        ("call-overrides-warn-to-raise", {"hooks_raise": False}, [hook("Bad", behaviour="raise")],
+         {"hooks_raise": True}, en),
+        ("call-hook-raises", {}, [hook("Bad", "call", "raise")], {}, en),
+        ("default-hook-raises", {}, [hook("Bad", "default", "raise"), hook("C")], {}, en),
+        ("timeout-raises", {"hooks_timeout": 0.1}, [hook("Slow", behaviour="sleep:0.6")], {}, en),
+        ("timeout-stops-the-chain", {"hooks_timeout": 0.1},
+         [hook("A"), hook("Slow", behaviour="sleep:0.6"), hook("C")], {}, en),
+        ("timeout-text-keeps-six-significant-digits", {"hooks_timeout": 0.1234567}, [hook("Slow", behaviour="sleep:0.6")],
+         {}, en),
+        ("timeout-text-per-call-shorter", {}, [hook("Slow", behaviour="sleep:0.6")], {"hooks_timeout": 0.1049999}, en),
+        ("timeout-warns-and-continues", {"hooks_timeout": 0.1, "hooks_raise": False},
+         [hook("A"), hook("Slow", behaviour="sleep:0.6"), hook("C")], {}, en),
+        ("timeout-does-not-trip-a-fast-hook", {"hooks_timeout": 5.0}, [hook("A", behaviour="replace:multilingual")], {}, en),
+        ("call-timeout-overrides-router", {}, [hook("Slow", behaviour="sleep:0.6")], {"hooks_timeout": 0.1}, en),
+        ("call-timeout-loosens-router", {"hooks_timeout": 0.1}, [hook("Slow", behaviour="sleep:0.3")],
+         {"hooks_timeout": 5.0}, en),
+        ("call-timeout-zero", {}, [hook("A")], {"hooks_timeout": 0}, en),
+        ("call-timeout-negative", {}, [hook("A")], {"hooks_timeout": -1}, en),
+        ("call-timeout-zero-with-no-hooks", {}, [], {"hooks_timeout": 0}, en),
+        ("call-timeout-zero-after-a-route-error", {}, [hook("A")], {"hooks_timeout": 0}, dict(en, model="nope")),
+        ("router-timeout-zero", {"hooks_timeout": 0}, [], {}, en),
+        ("router-timeout-negative", {"hooks_timeout": -0.5}, [], {}, en),
+        ("route-error-runs-no-hook", {}, [hook("A")], {}, dict(en, model="nope")),
+        ("explicit-model-then-hook-replaces", {}, [hook("Pin", behaviour="replace:english")], {}, dict(de, model="ml")),
+        ("workflow-states-and-questions-seen", {"auto_task_detection": True}, [hook("Seen")], {}, td),
+        ("empty-questions-seen", {}, [hook("Seen")], {}, {"state": "hello there my friend"}),
+        ("unserialised-hooks", {"hooks_concurrent": False}, [hook("A", behaviour="suffix"), hook("B", behaviour="suffix")],
+         {}, en),
+    ]
+    for label, router_kwargs, chain, call_kwargs, route_kwargs in fixed:
+        out.append(_router_hooks_case(label, router_kwargs, chain, call_kwargs, route_kwargs))
+
+    behaviours = ["ok", "ok", "ok", "suffix", "suffix", "replace:english", "replace:multilingual",
+                  "replace:typed-decisions", "raise", "replace_raise:multilingual", "sleep:0.6"]
+    event_sets = [["on_route"], ["on_route"], ["on_route"], ["on_route", "on_load"], ["on_predict_end"], ["on_error"]]
+    questions_pool = _router_questions(rng)
+    for i in range(300):
+        chain = [hook("H%d" % j, rng.choice(["default", "installed", "installed", "call"]),
+                      rng.choice(behaviours), rng.choice(event_sets)) for j in range(rng.randint(1, 4))]
+        router_kwargs, call_kwargs = {}, {}
+        if rng.random() < 0.3:
+            router_kwargs["hooks_raise"] = rng.random() < 0.5
+        if rng.random() < 0.3:
+            router_kwargs["hooks_timeout"] = rng.choice([0.1, 5.0])
+        if rng.random() < 0.2:
+            router_kwargs["hooks_concurrent"] = rng.random() < 0.5
+        if rng.random() < 0.3:
+            call_kwargs["hooks_raise"] = rng.random() < 0.5
+        if rng.random() < 0.2:
+            call_kwargs["hooks_timeout"] = rng.choice([0.1, 5.0, 0, -1])
+        if any(h["behaviour"].startswith("sleep") for h in chain) and "hooks_timeout" not in call_kwargs:
+            router_kwargs.setdefault("hooks_timeout", 0.05)
+        if rng.random() < 0.25:
+            router_kwargs["auto_task_detection"] = True
+        route_kwargs = {"state": _router_state(rng)}
+        if rng.random() < 0.5:
+            route_kwargs["questions"] = _noul_questions(rng.choice(questions_pool))
+        if rng.random() < 0.1:
+            route_kwargs["model"] = rng.choice(["english", "ml", "typed", "nope"])
+        if rng.random() < 0.2:
+            route_kwargs["lang"] = rng.choice(CODE_CASES[:30])
+        out.append(_router_hooks_case("fuzz-%d" % i, router_kwargs, chain, call_kwargs, route_kwargs))
+
+    batches = []
+    for i in range(40):
+        chain = [hook("H%d" % j, rng.choice(["default", "installed", "call"]),
+                      rng.choice(behaviours[:10]), ["on_route"]) for j in range(rng.randint(1, 3))]
+        router_kwargs, call_kwargs = {}, {}
+        if rng.random() < 0.3:
+            router_kwargs["hooks_raise"] = rng.random() < 0.5
+        if rng.random() < 0.3:
+            call_kwargs["hooks_raise"] = rng.random() < 0.5
+        if rng.random() < 0.2:
+            call_kwargs["hooks_timeout"] = rng.choice([5.0, 0])
+        requests = []
+        for _ in range(rng.randint(0, 4)):
+            request = {"state": _router_state(rng), "questions": _noul_questions(rng.choice(questions_pool))}
+            if rng.random() < 0.2:
+                request["model"] = rng.choice(["english", "typed"])
+            requests.append(request)
+        batches.append(_router_hooks_case("batch-%d" % i, router_kwargs, chain, call_kwargs, {}, requests=requests))
+    batches.append(_router_hooks_case("batch-hook-sees-each-request", {}, [hook("Seen", behaviour="suffix")], {}, {},
+                                      requests=[{"state": "one", "questions": {}}, {"state": "two", "questions": {}}]))
+    batches.append(_router_hooks_case("batch-timeout-applies-to-every-request", {}, [hook("Slow", behaviour="sleep:0.6")],
+                                      {"hooks_timeout": 0.1}, {}, requests=[{"state": "one", "questions": {}}]))
+    return out, batches
 
 
 def _accepted(definition):

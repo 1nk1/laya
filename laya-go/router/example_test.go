@@ -66,3 +66,19 @@ func ExampleNormaliseName() {
 	// typed-decisions
 	// unknown model 'gpt'; choose one of ['english', 'multilingual', 'typed-decisions'] (or an alias: ['decisions', 'default', 'en', 'laya', 'laya-multilingual', 'laya-typed-decisions', 'ml', 'multi', 'typed', 'typed_decisions'])
 }
+
+func ExampleRouter_AddHook() {
+	r, _ := router.New()
+	// A hook may replace the decision; Route returns the replacement.
+	_ = r.AddHook(&router.HookFuncs{OnRouteFunc: func(c *router.RouteContext) {
+		fmt.Println("saw", c.Decision.Model)
+		if c.Decision.Model == router.English {
+			c.Decision = router.Decision{Model: router.Multilingual, Repo: c.Decision.Repo, Reason: "pinned by policy"}
+		}
+	}})
+	d, _ := r.Route("Please refund the duplicate charge from March.", schema.Questions{})
+	fmt.Println(d.Model, "|", d.Reason)
+	// Output:
+	// saw english
+	// multilingual | pinned by policy
+}
