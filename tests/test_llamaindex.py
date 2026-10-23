@@ -442,7 +442,7 @@ with patch("urllib.request.build_opener") as _m:
               tools, "Query via remote server").selections[0].index, 1)
 
 
-# --------------------------------------------------------------- 5b. Non-Object `answers` Field
+# --------------------------------------------------------------- 5c. Non-Object `answers` Field
 #
 # Section 5 makes `_call_remote` refuse a top-level array, string, number or `true`/`null`. One level
 # deeper is the same arbitrary JSON: a gateway can answer `{"answers": []}`. `res.get("answers", {})`

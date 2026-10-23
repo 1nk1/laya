@@ -521,7 +521,7 @@ with patch("urllib.request.build_opener") as _m:
               "Write a Python function to reverse a string", agents).agent_index, 2)
 
 
-# ---------------------------------------------------------------- 5b. Non-Object `answers` Field
+# ---------------------------------------------------------------- 5c. Non-Object `answers` Field
 #
 # Section 5 makes `_call_remote` refuse a top-level array, string, number or `true`/`null`. One level
 # deeper is the same arbitrary JSON: a gateway can answer `{"answers": []}`. `res.get("answers", {})`
