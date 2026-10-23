@@ -657,10 +657,28 @@ def calibrate_reliability(
     If no cutoff reaches `target_accuracy`, accept is returned as 1.01 (accept nothing).
     Cutoffs use the supplied scores without rounding, matching the hook's reported
     `soft_stability` and runtime comparison. Equal scores are evaluated together.
+
+    Scores and correctness labels must have equal, nonzero lengths. Scores and
+    accuracy targets must be finite int/float values in [0, 1], excluding bool;
+    invalid lengths or values raise ValueError. Correctness labels must be bool
+    values or TypeError is raised. Invalid evidence is never filtered or coerced.
     """
-    pairs = sorted(zip(soft_scores, correct))
-    if not pairs:
+    if len(soft_scores) != len(correct):
+        raise ValueError("soft_scores and correct must have the same length")
+    if len(soft_scores) == 0:
         raise ValueError("cannot calibrate reliability on empty scores/correct pairs")
+    for name, value in (("target_accuracy", target_accuracy), ("max_escalate_accuracy", max_escalate_accuracy)):
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not (0.0 <= value <= 1.0) or not math.isfinite(value)):
+            raise ValueError("%s must be a finite number in [0, 1], got %r" % (name, value))
+    for i, score in enumerate(soft_scores):
+        if (isinstance(score, bool) or not isinstance(score, (int, float))
+                or not (0.0 <= score <= 1.0) or not math.isfinite(score)):
+            raise ValueError("soft_scores[%d] must be a finite number in [0, 1], got %r" % (i, score))
+    for i, label in enumerate(correct):
+        if not isinstance(label, bool):
+            raise TypeError("correct[%d] must be a bool, got %r" % (i, label))
+    pairs = sorted(zip(soft_scores, correct))
     cuts = sorted({s for s, _ in pairs})
 
     accept = 1.01

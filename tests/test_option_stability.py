@@ -102,6 +102,52 @@ kept = [c for s, c in zip(scores, correct) if s >= acc]
 check_true("calibrate/target accuracy reached", sum(kept) / len(kept) >= 0.90)
 
 
+# Invalid evidence must not fit a usable gate by silently losing rows (#1312).
+complete_cuts = calibrate_reliability([0.9, 0.9], [True, False])
+check("calibrate/complete tied evidence accepts nothing", complete_cuts, (1.01, 0.0))
+check("calibrate/complete tied evidence replays as VERIFY",
+      decide_reliability(0.9, *complete_cuts), "VERIFY")
+for name, values, labels in (
+    ("short labels", [0.9, 0.9], [True]),
+    ("short scores", [0.9], [True, False]),
+    ("empty labels", [0.9], []),
+    ("empty scores", [], [True]),
+    ("NaN first", [float("nan"), 0.9], [False, True]),
+    ("NaN last", [0.9, float("nan")], [True, False]),
+):
+    check_raises("calibrate/rejects " + name, ValueError,
+                 lambda: calibrate_reliability(values, labels))
+
+invalid_probabilities = (
+    -0.1, 1.01, float("nan"), float("inf"), -float("inf"),
+    True, False, "0.9", None, 0.9 + 0j, 10 ** 1000,
+)
+for value in invalid_probabilities:
+    check_raises("calibrate/rejects score %r" % (value,), ValueError,
+                 lambda: calibrate_reliability([0.9, value], [True, False]))
+    for parameter in ("target_accuracy", "max_escalate_accuracy"):
+        check_raises("calibrate/rejects %s=%r" % (parameter, value), ValueError,
+                     lambda: calibrate_reliability([0.9], [False], **{parameter: value}))
+
+for label in (0, 1, 2, 0.0, 1.0, "false", None):
+    check_raises("calibrate/rejects non-boolean label %r" % (label,), TypeError,
+                 lambda: calibrate_reliability([0.9, 0.9], [True, label]))
+
+# Integer endpoints and tuple sequences remain valid; fitting must not mutate callers.
+for target in (0, 1):
+    for max_escalate in (0, 1):
+        cuts = calibrate_reliability((0, 1), (False, True), target, max_escalate)
+        check("calibrate/target=%d max_escalate=%d endpoints" % (target, max_escalate),
+              cuts, (target, 0.0))
+        check("calibrate/target=%d max_escalate=%d replay" % (target, max_escalate),
+              [decide_reliability(score, *cuts) for score in (0, 1)],
+              ["ACCEPT", "ACCEPT"] if target == 0 else ["VERIFY", "ACCEPT"])
+unsorted_scores, unsorted_labels = [0.9, 0.1, 0.5], [True, False, False]
+check("calibrate/unsorted evidence", calibrate_reliability(unsorted_scores, unsorted_labels), (0.9, 0.5))
+check("calibrate/does not mutate evidence", (unsorted_scores, unsorted_labels),
+      ([0.9, 0.1, 0.5], [True, False, False]))
+
+
 # --------------------------------------------------------------- hook lifecycle: single state
 hook = OptionStabilityHook(accept=0.77, escalate=0.61, seed="fixed-seed")
 q_choice = {
