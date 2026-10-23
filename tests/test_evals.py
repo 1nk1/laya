@@ -805,6 +805,64 @@ def test_dataset_refuses_a_row_whose_maps_are_not_objects(field, value, fragment
     assert str(exc.value) == "example 0 " + fragment
 
 
+# The three checks above read `example.questions` and `example.expected`, so a row that is not a row
+# at all never reached any of them: `Dataset(json.load(handle))` -- the natural mistake for a dataset
+# saved as a JSON *array* rather than as JSONL, which is the shape `Example.from_dict` exists to
+# convert -- died inside the door on `AttributeError: 'dict' object has no attribute 'questions'`. A
+# traceback names no row index, and `docs/evals.md` ("Dataset format") promises that a mistake in a
+# dataset fails as `EvalError` instead. The guard is on the two attributes this door reads, not on
+# `isinstance(example, Example)`, so no row a Python caller can pass today starts being refused.
+@pytest.mark.parametrize("row, name", [
+    ({"state": "s1", "questions": Q, "expected": {"intent": "a"}}, "dict"),
+    (None, "NoneType"),
+    ("s1", "str"),
+    (["s1", Q, {"intent": "a"}], "list"),
+    (7, "int"),
+])
+def test_dataset_refuses_a_row_that_is_not_a_row(row, name):
+    with pytest.raises(EvalError) as exc:
+        Dataset([row])
+    assert str(exc.value) == (
+        "example 0 must be an Example, got %s with no 'questions'; build each row with "
+        "laya.evals.Example(...) or Example.from_dict(...)" % name)
+
+
+def test_the_non_row_refusal_names_the_offender_and_the_missing_field():
+    class QuestionsOnly:
+        """Carries one of the two maps the door reads, so it is refused for the other."""
+
+        questions = Q
+
+    with pytest.raises(EvalError) as exc:
+        Dataset([Example("s1", Q, {"intent": "a"}), QuestionsOnly()])
+    assert str(exc.value) == (
+        "example 1 must be an Example, got QuestionsOnly with no 'expected'; build each row "
+        "with laya.evals.Example(...) or Example.from_dict(...)")
+
+
+def test_a_non_row_is_refused_on_what_the_door_reads_not_on_its_type():
+    class DuckRow:
+        """Not an ``Example``, but answers both attributes the door reads."""
+
+        def __init__(self):
+            self.state, self.tags, self.language, self.model = "s1", (), None, None
+            self.questions, self.expected = Q, {"intent": "a"}
+
+    class ExampleSubclass(Example):
+        pass
+
+    good = {"state": "s1", "questions": Q, "expected": {"intent": "a"}}
+    for row in (DuckRow(), Example(**good), ExampleSubclass(**good)):
+        assert len(Dataset([row])) == 1
+
+
+def test_the_refused_json_row_is_the_one_from_dict_converts():
+    row = {"state": "s1", "questions": Q, "expected": {"intent": "a"}}
+    with pytest.raises(EvalError):
+        Dataset([row])
+    assert len(Dataset([Example.from_dict(row)])) == 1
+
+
 @pytest.mark.parametrize("expected, names", [
     ({"nope": "a"}, "nope"),
     # Sorted, so the same mistake in two runs reads as one error rather than two.
