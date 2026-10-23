@@ -310,12 +310,18 @@ with open(_not_json, "w", encoding="utf-8") as f:
 _not_text = os.path.join(tmp, "not-text.json")
 with open(_not_text, "wb") as f:
     f.write(b"\xff\xfe\x00\x01binary")
+# `json` reports unclosable depth as a `RecursionError`, which is neither a `ValueError` decode
+# failure nor an `OSError`, so it is the one shape of unreadable artifact that used to reach the
+# caller as a traceback.
+_deep_report = os.path.join(tmp, "deep.json")
+with open(_deep_report, "w", encoding="utf-8") as f:
+    f.write("[" * 100000 + "]" * 100000)
 _bad_config_ckpt = os.path.join(tmp, "ckpt-bad-config")
 os.makedirs(_bad_config_ckpt)
 with open(os.path.join(_bad_config_ckpt, "rl_agent_config.json"), "w", encoding="utf-8") as f:
     f.write("{nope")
 
-# The last tuple element is the string the refusal must contain. For four rows that is the whole
+# The last tuple element is the string the refusal must contain. For five rows that is the whole
 # path, because `laya/evidence.py` builds those messages from the argument the caller passed. The
 # directory row is the exception: its refusal is the operating system's own `OSError` text, and the
 # Windows CI runner reports that path in 8.3 form (`C:\Users\RUNNER~1\...` where the test holds
@@ -331,6 +337,8 @@ for _label, _argv, _expect in (
          _not_json),
         ("--report is not UTF-8 text", ["evidence", "--checkpoint", ckpt, "--report", _not_text],
          _not_text),
+        ("--report is JSON nested too deep to read",
+         ["evidence", "--checkpoint", ckpt, "--report", _deep_report], _deep_report),
         ("the checkpoint's own config is not JSON",
          ["evidence", "--checkpoint", _bad_config_ckpt],
          os.path.join(_bad_config_ckpt, "rl_agent_config.json"))):
