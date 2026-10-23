@@ -88,9 +88,37 @@ func IsUpperString(s string) bool {
 	return sawCased
 }
 
+// DecimalASCII rewrites every Nd digit to its ASCII digit, as int() and float() read them.
+// Blocks of Nd digits run zero to nine from the start of their range.
+func DecimalASCII(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 0x80 && contains(digit[:], r) {
+			lo, hi := 0, len(digit)/2-1
+			for lo < hi {
+				mid := (lo + hi + 1) / 2
+				if digit[mid*2] <= r {
+					lo = mid
+				} else {
+					hi = mid - 1
+				}
+			}
+			r = '0' + (r-digit[lo*2])%10
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // Strip is Python's str.strip() with no argument.
 func Strip(s string) string {
 	return strings.TrimFunc(s, IsSpace)
+}
+
+// StripNumeric trims what int() and float() trim: str.isspace() characters except U+001C to
+// U+001F, which str.isspace() counts and those parsers do not.
+func StripNumeric(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return IsSpace(r) && !(0x1c <= r && r <= 0x1f) })
 }
 
 // IsBlank is Python's `not s.strip()`.
