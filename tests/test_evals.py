@@ -3473,6 +3473,16 @@ def test_cli_rejects_invalid_policy_json_and_version(monkeypatch, tmp_path, caps
         assert "Traceback" not in err, "exit 2 with a traceback is the shape this refuses"
         assert err.startswith("laya-evals: "), "a usage error, named as one: %r" % err
         assert "gate policy" in err, "and named as *which* usage error: %r" % err
+    # A path that is not there is `OSError`, and `load_policy` names it as a gate policy on purpose:
+    # `main`'s own `FileNotFoundError` arm would still exit 2, with a message that no longer says
+    # which flag pointed at the missing file.
+    missing = tmp_path / "absent-gates.json"
+    assert evals_cli.main(["run", dataset, "--gate-policy", str(missing)]) == 2
+    err = capsys.readouterr().err
+    assert "Traceback" not in err, "exit 2 with a traceback is the shape this refuses: %r" % err
+    assert err.startswith("laya-evals: ") and "gate policy" in err, (
+        "the refusal still names the flag it came from: %r" % err)
+    assert str(missing) in err, "and the path the caller typed: %r" % err
     assert not built
 
 
