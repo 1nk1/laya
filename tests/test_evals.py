@@ -3472,6 +3472,7 @@ def test_cli_rejects_invalid_policy_json_and_version(monkeypatch, tmp_path, caps
         err = capsys.readouterr().err
         assert "Traceback" not in err, "exit 2 with a traceback is the shape this refuses"
         assert err.startswith("laya-evals: "), "a usage error, named as one: %r" % err
+        assert "gate policy" in err, "and named as *which* usage error: %r" % err
     assert not built
 
 
