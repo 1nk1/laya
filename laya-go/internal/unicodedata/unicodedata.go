@@ -59,6 +59,12 @@ func IsLower(r rune) bool { return lookup(&lowerASCII, lower[:], r) }
 // IsSpace is Python's str.isspace() for one character.
 func IsSpace(r rune) bool { return lookup(&spaceASCII, space[:], r) }
 
+// IsMark is Python's unicodedata.category(ch).startswith("M"): the Mn, Mc and Me categories.
+func IsMark(r rune) bool { return lookup(&markASCII, mark[:], r) }
+
+// IsInitial reports category Lu, Lt or Lo: a letter that is not lowercase.
+func IsInitial(r rune) bool { return lookup(&initialASCII, initial[:], r) }
+
 // IsPrintable is Python's str.isprintable() for one character.
 func IsPrintable(r rune) bool { return lookup(&printableASCII, printable[:], r) }
 

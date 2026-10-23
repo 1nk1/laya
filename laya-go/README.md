@@ -11,6 +11,8 @@ The foundation (language detection, questions, sequences, the tokenizer) and the
 | `lang` | Script and language detection, the port of `laya/lang.py`: `DetectScript`, `ScriptProfile`, `LatinProfileOf`, `GuessLatinLanguage`, `Analyze`, `DetectLanguage`, `IsEnglish`. |
 | `presets` | Ready-made question sets (`Triage`, `Email`, `Guard`, `Moderation`, `Router`), the port of `laya/presets.py`, and `StateField`, which reads the field a set asks about. |
 | `shortlist` | Embedding shortlist for high-cardinality choice questions, the port of `laya/shortlist.py`: `Rank`, `Predict`, `Cached`. `predict_tournament` is not ported. |
+
+| `email` | Mail-body cleaning and state building, the port of `laya/email.py`: `CleanBody` strips quoted history, signatures, device footers and disclaimers (English, Portuguese, Spanish, French); `State` builds the state, with `WithSender`, `WithoutCleaning`, `WithMaxChars` and `WithField`. |
 | `schema` | Questions (`Choice`, `ChoiceOf`, `Score`, `Noul`, `NoulWith`, `Questions`) and results (`Answer`, `Prediction`, `Usage`) every other package shares. Questions are refused with laya's own wording and read or written in the Python wire form. |
 | `sequence` | `build_sequence`, `build_head`, `state_room`, `window_budget` and `window_batch_cap`: `EncodeState`, `Build`, `StateRoom`, `PlanWindows`, `BatchCap`. |
 | `infer` | The seam to a model runtime: `Batch` (the graph's five inputs), `Output` (its two), `Session`, and the shape checks `Batch.Validate` and `Output.Check`. |
@@ -45,6 +47,9 @@ order-sensitive state. `Analyze` reads every leaf, so its cost grows with the nu
 - No root package: the module path ends in `laya-go`, so tags are `laya-go/vX.Y.Z`.
 - Every package in this module is pure Go: `lang`, `schema`, `sequence`, `tokenizer`, `infer` and
   `agent`, `presets` and `shortlist` now, and `router` later.
+
+- Every package in this module is pure Go: `lang`, `email`, `schema`, `sequence`, `tokenizer`, `infer` and
+  `agent` now, and `router`, `presets` and `shortlist` later.
 - cgo lives only in `onnx`, a nested module with its own `go.mod`, so `go test ./...` here never
   compiles it. `onnx` requires this module and `github.com/yalue/onnxruntime_go`; until this module has
   a release tag, `onnx` builds only inside this repository (its `go.mod` points here with `replace`). Importing `lang` or `agent` never compiles cgo.
