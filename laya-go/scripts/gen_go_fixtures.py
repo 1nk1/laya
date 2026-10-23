@@ -1164,6 +1164,7 @@ def shortlist_order_family(rng):
             "warnings": [str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)],
             "labels": {qid: entry["labels"] for qid, entry in result["shortlist"].items()},
         })
+    return {"cases": cases}
 
 def email_fold_family(rng):
     """Which code points `re.I` treats as each literal letter laya/email.py's patterns spell.
@@ -1778,13 +1779,16 @@ def build():
         "marker_refusals": marker_refusals_family(rng),
         "predict_plan": predict_plan_family(rng),
         "calibration": calibration_family(),
-
         "shortlist_order": shortlist_order_family(rng),
-
+        # `router` stays ahead of `email_fuzz`. Both draw from this one shared `rng`, so whichever
+        # runs first fixes the other's inputs: #1311 recorded `router.signatures` with nothing
+        # between it and `predict_plan`, and `router/golden_test.go` pins how many of those 107
+        # signatures come out byte-identical to Python's. `email_fuzz` has no such constant, only
+        # a case count, so it is the one that may be re-drawn. `calibration_family` takes no rng
+        # and `shortlist_order_family`/`email_fold_family` consume no draws, so they are free.
+        "router": router_family(rng),
         "email_fold": email_fold_family(rng),
         "email_fuzz": email_fuzz_family(rng),
-
-        "router": router_family(rng),
     }
 
 

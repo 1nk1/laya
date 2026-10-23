@@ -130,8 +130,11 @@ jobs:
           LAYA_GO_FIXTURES: ${{ github.workspace }}/.go-goldens
           LAYA_CHECKPOINTS: ${{ github.workspace }}/laya-java/.work/checkpoints
         run: go test -race -count=1 -json ./... > "$RUNNER_TEMP/go-test.json"
-      # Exactly the measured count (3869 tests and subtests, on both Go versions): dropping a
-      # case fails here, and adding one means raising this number.
+      # A FLOOR, not the exact count. Each of #1306, #1307, #1308, #1310 and #1311 measured its
+      # own total against main alone (1754, 1667, 1742, 3462, 3869 against main's 1603); merged
+      # they add up to roughly 4223, which no single run has confirmed. 3869 is the highest
+      # number any of them measured, so it still catches a package going missing. Raise it to the
+      # count this lane actually reports, and restore "exactly", on the next green run.
       - name: No test was skipped
         if: ${{ !cancelled() }}
         run: python laya-go/scripts/check_test_json.py "$RUNNER_TEMP/go-test.json" --min-tests 3869
