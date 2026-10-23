@@ -215,6 +215,18 @@ class Dataset:
         # readers share names the row and lands before a single call: a leaked traceback exits 1, the
         # code `laya-evals` reserves for a failed threshold (`laya/evals_cli.py:591`).
         for index, example in enumerate(self.examples):
+            # Both checks below read the row's own fields, so a row that is not a row at all died on the
+            # attribute before either could answer: `Dataset(json.load(handle))` -- the natural mistake
+            # when a dataset is a JSON *array* rather than JSONL, and the shape `Example.from_dict` exists
+            # to convert -- raised `AttributeError: 'dict' object has no attribute 'questions'` from
+            # inside the door. `docs/evals.md` ("Dataset format") promises this route fails as `EvalError`
+            # before the first model call, and a traceback names no row. The check is on the two attributes
+            # this door reads rather than on the type, so no row that works today starts being refused.
+            if not hasattr(example, "questions") or not hasattr(example, "expected"):
+                missing = "questions" if not hasattr(example, "questions") else "expected"
+                raise EvalError("example %d must be an Example, got %s with no %r; build each row "
+                                "with laya.evals.Example(...) or Example.from_dict(...)"
+                                % (index, type(example).__name__, missing))
             if not isinstance(example.questions, dict):
                 raise EvalError("example %d 'questions' must be an object, got %s"
                                 % (index, type(example.questions).__name__))
