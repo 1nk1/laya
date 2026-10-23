@@ -2172,6 +2172,58 @@ def test_an_infinite_limit_would_have_decided_nothing():
     assert evals_cli._check_thresholds({"choice_accuracy": 0.10}, {"choice_accuracy": -inf}, {}) == []
 
 
+def test_a_choice_threshold_never_reads_the_noul_number():
+    """A threshold names its metric, and `noul_accuracy` is not a stand-in for `choice_accuracy`.
+
+    A noul-only report publishes no `choice_accuracy` at all, so both directions used to be decided
+    by the noul figure: `--min choice_accuracy=0.5` exited 0 on a run that never answered a choice
+    question, and `--min choice_accuracy=0.9` printed the noul value under the choice name. Either
+    way the reader could not tell which metric gated the run. `docs/evals.md` (score-only `ece`)
+    states the rule the same way: a threshold naming an absent metric reports it missing "rather than
+    passing on a number that was never computed".
+    """
+    from laya import evals_cli
+
+    noul_only = {"noul_accuracy": 0.6667, "ece": 0.1}
+    for mins, maxs in (({"choice_accuracy": 0.5}, {}), ({"choice_accuracy": 0.9}, {}),
+                       ({}, {"choice_accuracy": 0.9})):
+        assert evals_cli._check_thresholds(noul_only, mins, maxs) == \
+            ["metric 'choice_accuracy' is not in the report"], "%r %r" % (mins, maxs)
+
+    # The metric named correctly is still gated normally, in both directions.
+    assert evals_cli._check_thresholds(noul_only, {"noul_accuracy": 0.5}, {}) == []
+    assert evals_cli._check_thresholds(noul_only, {}, {"noul_accuracy": 0.5}) == \
+        ["noul_accuracy=0.6667 is above the maximum 0.5000"]
+
+    # A report that does carry the metric is unaffected: this is only about the absent key.
+    both = {"choice_accuracy": 0.4, "noul_accuracy": 0.6667}
+    assert evals_cli._check_thresholds(both, {"choice_accuracy": 0.5}, {}) == \
+        ["choice_accuracy=0.4000 is below the minimum 0.5000"]
+
+
+def test_cli_run_gates_a_noul_only_dataset_by_the_flag_that_means_it(monkeypatch, tmp_path, capsys):
+    """End to end: `--min-accuracy` follows the report, `--min choice_accuracy=` refuses it.
+
+    `_cmd_run` resolves `--min-accuracy` to `noul_accuracy` when the report has no `choice_accuracy`,
+    so the ergonomics the substitution was standing in for stay intact while a threshold that names a
+    metric explicitly is answered by that metric or by a missing-metric failure.
+    """
+    from laya import evals_cli
+
+    _patch_router(monkeypatch, {"flag": {"flag": noul_answer(0.9)}})
+    dataset = _write_dataset(tmp_path, [{"state": "flag", "questions": QNOUL,
+                                         "expected": {"flag": True}}])
+
+    assert evals_cli.main(["run", dataset, "--min-accuracy", "0.5"]) == 0
+    capsys.readouterr()
+    assert evals_cli.main(["run", dataset, "--min", "choice_accuracy=0.5"]) == 1
+    captured = capsys.readouterr()
+    assert "FAIL: metric 'choice_accuracy' is not in the report" in captured.err, \
+        "the gate says the metric is missing instead of passing on the noul number"
+    assert "choice_accuracy=" not in captured.err, \
+        "no failure may attribute the noul figure to it either"
+
+
 def test_default_evaluators_cover_the_three_types():
     names = {e.name for e in default_evaluators()}
     assert {"choice_accuracy", "noul_accuracy", "score_mae", "mean_confidence"} <= names
