@@ -19,11 +19,13 @@ use crate::answers::{
 use crate::batch_prediction::{self, BatchOptions};
 use crate::calibration::Calibration;
 use crate::collator::{CollatedBatch, Collator, SequenceItem};
+use crate::confidence::apply_confidence_gate;
 use crate::error::{LayaError, Result};
 use crate::laya_config::{Deferred, LayaConfig};
 use crate::laya_options::{LayaCheckpoint, LayaExecutionProvider, LayaOptions};
 use crate::long_prediction::{self, LongOptions};
 use crate::model_artifacts::{ModelArtifacts, ModelPaths};
+use crate::predict_options::PredictOptions;
 use crate::questions::{Question, QuestionSet};
 use crate::sequence_builder::SequenceBuilder;
 use crate::tokenization::{HfTokenizer, LayaTokenizer};
@@ -195,7 +197,20 @@ impl LayaEngine {
     /// Returns [`LayaError::NoMarkers`] if a question's options cannot fit within
     /// `Config::head_max_len`, rather than silently scoring fewer options than it was asked about.
     pub fn predict(&self, state: impl Into<Value>, questions: &QuestionSet) -> Result<LayaResult> {
-        self.predict_value(state.into(), questions)
+        self.predict_value(state.into(), questions, &PredictOptions::default())
+    }
+
+    /// [`Self::predict`] with per-call [`PredictOptions`]. Ports `system_one(min_confidence=...)`:
+    /// with `options.min_confidence` set, every answer reports its gate state (see
+    /// [`Answer::abstention`]); a threshold Python's `check_min_confidence` rejects is
+    /// [`LayaError::InvalidMinConfidence`], checked before the state is, as in `predict_batch`.
+    pub fn predict_with_options(
+        &self,
+        state: impl Into<Value>,
+        questions: &QuestionSet,
+        options: &PredictOptions,
+    ) -> Result<LayaResult> {
+        self.predict_value(state.into(), questions, options)
     }
 
     /// [`Self::predict`], for a state that implements [`serde::Serialize`] but not
@@ -206,15 +221,25 @@ impl LayaEngine {
         questions: &QuestionSet,
     ) -> Result<LayaResult> {
         let value = serde_json::to_value(state)?;
-        self.predict_value(value, questions)
+        self.predict_value(value, questions, &PredictOptions::default())
     }
 
     /// Python's `system_one` is `predict_batch([state], ...)`, so this is a one-state batch: a
     /// `null` state is refused and no questions give an empty result.
-    fn predict_value(&self, state: Value, questions: &QuestionSet) -> Result<LayaResult> {
+    fn predict_value(
+        &self,
+        state: Value,
+        questions: &QuestionSet,
+        options: &PredictOptions,
+    ) -> Result<LayaResult> {
+        let min_confidence = options.min_confidence.as_ref();
+        if let Some(min_confidence) = min_confidence {
+            min_confidence.validate()?;
+        }
         let states = [state];
         refuse_null_states(&states)?;
         let mut results = self.predict_states(&states, questions)?;
+        apply_confidence_gate(&mut results, min_confidence);
         results
             .pop()
             .ok_or_else(|| LayaError::Onnx("internal error: no result for the state".to_string()))
@@ -238,9 +263,10 @@ impl LayaEngine {
     /// slightly from the original after re-encoding, exactly as in Python. Windows go through the
     /// model together unless [`LongOptions::batch_size`] or the automatic cap chunks them.
     ///
-    /// Per-call hooks, per-language temperatures and the confidence gate are not part of this
-    /// port. Errors: [`LayaError::UnsupportedAggregate`], [`LayaError::InvalidWindow`] (no room
-    /// for the state, or a stride that leaves gaps), plus everything [`Self::predict`] returns.
+    /// Per-call hooks and per-language temperatures are not part of this port, and, as in Python,
+    /// `predict_long` takes no `min_confidence`. Errors: [`LayaError::UnsupportedAggregate`],
+    /// [`LayaError::InvalidWindow`] (no room for the state, or a stride that leaves gaps), plus
+    /// everything [`Self::predict`] returns.
     #[track_caller]
     pub fn predict_long(
         &self,
@@ -338,16 +364,34 @@ impl LayaEngine {
     /// * No states give an empty list. No questions give one empty result per state, with no
     ///   state usage, as Python does.
     ///
-    /// A `null` state is refused with [`LayaError::InvalidState`] (Python's `TypeError`: scoring it
-    /// would answer a decision about the text `"null"`). Everything else [`Self::predict`] returns
-    /// applies per state, and the first error fails the whole call.
+    /// * `min_confidence` gates every answer of every result, batch-wide; see [`BatchOptions`].
+    ///
+    /// A threshold Python's `check_min_confidence` rejects is [`LayaError::InvalidMinConfidence`],
+    /// checked first. A `null` state is refused with [`LayaError::InvalidState`] (Python's
+    /// `TypeError`: scoring it would answer a decision about the text `"null"`). Everything else
+    /// [`Self::predict`] returns applies per state, and the first error fails the whole call.
     pub fn predict_batch(
         &self,
         states: &[Value],
         questions: &QuestionSet,
         options: &BatchOptions,
     ) -> Result<Vec<LayaResult>> {
+        let min_confidence = options.min_confidence.as_ref();
+        if let Some(min_confidence) = min_confidence {
+            min_confidence.validate()?;
+        }
         refuse_null_states(states)?;
+        let mut results = self.predict_batch_ungated(states, questions, options)?;
+        apply_confidence_gate(&mut results, min_confidence);
+        Ok(results)
+    }
+
+    fn predict_batch_ungated(
+        &self,
+        states: &[Value],
+        questions: &QuestionSet,
+        options: &BatchOptions,
+    ) -> Result<Vec<LayaResult>> {
         if states.is_empty() {
             return Ok(Vec::new());
         }

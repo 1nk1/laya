@@ -503,6 +503,20 @@ BATCH_CASES = [
      "questions": {"cancel": BATCH_QUESTIONS["cancel"]}, "options": {"batch_size": 2}},
     {"name": "batch_empty_questions_with_options", "states": BATCH_STATES[:3], "questions": {},
      "options": {"batch_size": 2, "sort_by_length": True}},
+    # The abstention gate (`min_confidence`): batch-wide, applied to every answer of every state.
+    {"name": "batch_min_confidence_scalar", "states": BATCH_MIXED_STATES, "questions": BATCH_QUESTIONS,
+     "options": {"min_confidence": 0.6}},
+    {"name": "batch_min_confidence_zero", "states": BATCH_MIXED_STATES, "questions": BATCH_QUESTIONS,
+     "options": {"min_confidence": 0.0}},
+    {"name": "batch_min_confidence_map", "states": BATCH_SORT_STATES[:7], "questions": BATCH_QUESTIONS,
+     "options": {"batch_size": 3, "sort_by_length": True,
+                 "min_confidence": {"choice:3-5": 0.8, "score:3-5": 0.5, "noul:2": 0.7}}},
+    {"name": "batch_min_confidence_map_default", "states": BATCH_STATES[:3], "questions": BATCH_QUESTIONS,
+     "options": {"min_confidence": {"default": 0.55}}},
+    {"name": "batch_min_confidence_empty_questions", "states": BATCH_STATES[:3], "questions": {},
+     "options": {"min_confidence": 0.5}},
+    {"name": "batch_min_confidence_empty_states", "states": [], "questions": BATCH_QUESTIONS,
+     "options": {"min_confidence": 0.5}},
 ]
 
 BATCH_ERROR_CASES = [
@@ -510,4 +524,33 @@ BATCH_ERROR_CASES = [
      "error_type": "TypeError"},
     {"name": "batch_options_exceed_head", "states": ["short", QUICKSTART_STATE],
      "questions": ERROR_CASES[0]["questions"], "error_type": "ValueError"},
+    # The threshold is validated before anything else, so it wins over a missing state.
+    {"name": "batch_min_confidence_invalid", "states": [QUICKSTART_STATE], "questions": BATCH_QUESTIONS,
+     "options": {"min_confidence": 1.5}, "error_type": "ValueError"},
+    {"name": "batch_min_confidence_before_none_state", "states": [QUICKSTART_STATE, None],
+     "questions": BATCH_QUESTIONS, "options": {"min_confidence": -0.25}, "error_type": "ValueError"},
+    {"name": "batch_min_confidence_bad_key", "states": [QUICKSTART_STATE], "questions": BATCH_QUESTIONS,
+     "options": {"min_confidence": {"choice:2": 0.5, "choice:3": 0.5}}, "error_type": "ValueError"},
+]
+
+# `system_one` with the abstention gate. `options` go to `system_one` verbatim, and are recorded
+# only for these cases so every earlier golden stays byte-identical.
+MIN_CONFIDENCE_CASES = [
+    {"name": "min_confidence_scalar", "state": QUICKSTART_STATE, "questions": CASES[0]["questions"],
+     "options": {"min_confidence": 0.6}},
+    {"name": "min_confidence_zero", "state": QUICKSTART_STATE, "questions": CASES[0]["questions"],
+     "options": {"min_confidence": 0.0}},
+    {"name": "min_confidence_map", "state": QUICKSTART_STATE, "questions": CASES[0]["questions"],
+     "options": {"min_confidence": {"choice:3-5": 0.9, "score:3-5": 0.5, "noul:2": 0.7}}},
+    {"name": "min_confidence_map_default", "state": "Thanks, that is all sorted now.",
+     "questions": CASES[0]["questions"], "options": {"min_confidence": {"default": 0.55}}},
+]
+
+MIN_CONFIDENCE_ERROR_CASES = [
+    {"name": "min_confidence_invalid", "state": QUICKSTART_STATE, "questions": CASES[0]["questions"],
+     "options": {"min_confidence": 1.5}},
+    {"name": "min_confidence_empty_map", "state": QUICKSTART_STATE, "questions": CASES[0]["questions"],
+     "options": {"min_confidence": {}}},
+    {"name": "min_confidence_bad_key", "state": QUICKSTART_STATE, "questions": CASES[0]["questions"],
+     "options": {"min_confidence": {"default": 0.5, "choice:3": 0.5}}},
 ]

@@ -338,6 +338,42 @@
     "kind": "batch"
   },
   {
+    "name": "batch_min_confidence_scalar",
+    "file": "case_batch_min_confidence_scalar.json",
+    "expects_error": false,
+    "kind": "batch"
+  },
+  {
+    "name": "batch_min_confidence_zero",
+    "file": "case_batch_min_confidence_zero.json",
+    "expects_error": false,
+    "kind": "batch"
+  },
+  {
+    "name": "batch_min_confidence_map",
+    "file": "case_batch_min_confidence_map.json",
+    "expects_error": false,
+    "kind": "batch"
+  },
+  {
+    "name": "batch_min_confidence_map_default",
+    "file": "case_batch_min_confidence_map_default.json",
+    "expects_error": false,
+    "kind": "batch"
+  },
+  {
+    "name": "batch_min_confidence_empty_questions",
+    "file": "case_batch_min_confidence_empty_questions.json",
+    "expects_error": false,
+    "kind": "batch"
+  },
+  {
+    "name": "batch_min_confidence_empty_states",
+    "file": "case_batch_min_confidence_empty_states.json",
+    "expects_error": false,
+    "kind": "batch"
+  },
+  {
     "name": "batch_none_state",
     "file": "case_batch_none_state.json",
     "expects_error": true,
@@ -348,5 +384,58 @@
     "file": "case_batch_options_exceed_head.json",
     "expects_error": true,
     "kind": "batch"
+  },
+  {
+    "name": "batch_min_confidence_invalid",
+    "file": "case_batch_min_confidence_invalid.json",
+    "expects_error": true,
+    "kind": "batch"
+  },
+  {
+    "name": "batch_min_confidence_before_none_state",
+    "file": "case_batch_min_confidence_before_none_state.json",
+    "expects_error": true,
+    "kind": "batch"
+  },
+  {
+    "name": "batch_min_confidence_bad_key",
+    "file": "case_batch_min_confidence_bad_key.json",
+    "expects_error": true,
+    "kind": "batch"
+  },
+  {
+    "name": "min_confidence_scalar",
+    "file": "case_min_confidence_scalar.json",
+    "expects_error": false
+  },
+  {
+    "name": "min_confidence_zero",
+    "file": "case_min_confidence_zero.json",
+    "expects_error": false
+  },
+  {
+    "name": "min_confidence_map",
+    "file": "case_min_confidence_map.json",
+    "expects_error": false
+  },
+  {
+    "name": "min_confidence_map_default",
+    "file": "case_min_confidence_map_default.json",
+    "expects_error": false
+  },
+  {
+    "name": "min_confidence_invalid",
+    "file": "case_min_confidence_invalid.json",
+    "expects_error": true
+  },
+  {
+    "name": "min_confidence_empty_map",
+    "file": "case_min_confidence_empty_map.json",
+    "expects_error": true
+  },
+  {
+    "name": "min_confidence_bad_key",
+    "file": "case_min_confidence_bad_key.json",
+    "expects_error": true
   }
 ]

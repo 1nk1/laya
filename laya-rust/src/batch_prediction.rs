@@ -7,10 +7,11 @@
 //! and the order restoration are testable without a model: the engine supplies the tokenizing and
 //! the forward pass.
 //!
-//! Python's per-call hooks, `min_confidence`, `lang`, `max_len` and `head_max_len` are not part of
-//! this port yet. [`BatchOptions`] is `#[non_exhaustive]` so they can be added as fields without a
-//! signature change.
+//! Python's per-call hooks, `lang`, `max_len` and `head_max_len` are not part of this port yet.
+//! [`BatchOptions`] is `#[non_exhaustive]` so they can be added as fields without a signature
+//! change.
 
+use crate::confidence::MinConfidence;
 use crate::error::{LayaError, Result};
 use std::ops::Range;
 
@@ -21,9 +22,9 @@ const SORT_WINDOW_BATCHES: usize = 8;
 /// Options for `LayaEngine::predict_batch` and `LayaRouter::predict_batch`. Every field is
 /// optional; `Default` gives Python's defaults. Build one with the chained setters.
 ///
-/// Per-call hooks, `min_confidence`, `lang`, `max_len` and `head_max_len`, which Python's
-/// `predict_batch` also accepts, are not part of this port yet.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Per-call hooks, `lang`, `max_len` and `head_max_len`, which Python's `predict_batch` also
+/// accepts, are not part of this port yet.
+#[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
 pub struct BatchOptions {
     /// Most states per forward pass. `None` or `0` sends them all in one pass. Python treats a
@@ -36,6 +37,10 @@ pub struct BatchOptions {
     /// than the number of states; otherwise it does nothing. Results keep input order. Changing
     /// the batch shapes can slightly change floating-point predictions near decision thresholds.
     pub sort_by_length: bool,
+    /// Opt-in abstention threshold on `answer_confidence` (#361), applied batch-wide to every
+    /// answer of every result; it plays no part in how states are grouped or batched. See
+    /// [`crate::PredictOptions::min_confidence`] for what it reports.
+    pub min_confidence: Option<MinConfidence>,
 }
 
 impl BatchOptions {
@@ -55,6 +60,14 @@ impl BatchOptions {
     #[must_use]
     pub fn sort_by_length(mut self, sort_by_length: bool) -> Self {
         self.sort_by_length = sort_by_length;
+        self
+    }
+
+    /// Set [`Self::min_confidence`]. Build the value with [`MinConfidence::scalar`] or
+    /// [`MinConfidence::map`].
+    #[must_use]
+    pub fn min_confidence(mut self, min_confidence: MinConfidence) -> Self {
+        self.min_confidence = Some(min_confidence);
         self
     }
 
@@ -391,6 +404,7 @@ mod tests {
                 .get("sort_by_length")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
+            min_confidence: None,
         }
     }
 
