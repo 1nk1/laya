@@ -207,9 +207,10 @@ class Dataset:
         # `Example(...)` skipped all three, and every reader of it takes the two fields as mappings: a
         # non-object `expected` died as an unhandled ``AttributeError``, in `evaluate` only after the
         # runner had answered (`laya/evals.py:1205`), and a non-object `questions` leaked through
-        # `questions_fingerprint` (`laya/evals.py:285`). An `expected` key with no question behind it
-        # was answered with "runner returned no answer for question 'x'" -- a verdict about the runner,
-        # paid for with a whole inference run, for a mistake in the caller's row. The two opt-in doors
+        # `questions_fingerprint` (`laya/evals.py::questions_fingerprint`). An `expected` key with no
+        # question behind it was answered with "runner returned no answer for question 'x'" -- a
+        # verdict about the runner, paid for with a whole inference run, for a mistake in the
+        # caller's row. The two opt-in doors
         # refused the same rows before calling anything, but as tracebacks
         # (`laya/evals_shortlist.py:38`, `laya/evals_tournament.py:33`). Checking at the door all four
         # readers share names the row and lands before a single call: a leaked traceback exits 1, the
@@ -231,17 +232,29 @@ class Dataset:
 
     @classmethod
     def from_jsonl(cls, path: str) -> "Dataset":
+        # `laya-evals` promises exit 2 on a usage error and exit 1 only when a threshold or a
+        # tolerance failed (`docs/evals.md`), and a dataset the caller cannot hand over is the
+        # caller's mistake. Four shapes of unreadable escaped that as a traceback and exit 1 -- a
+        # path that is a directory, a file without read permission, bytes that are not UTF-8 and a
+        # line nested deeper than `json` will walk -- while a line that is merely malformed JSON was
+        # already reported, three lines below. `file_fingerprint` above and `_load_report` in
+        # `laya/evals_cli.py` read a caller's path this way already; this makes the dataset reader
+        # agree with them. `UnicodeDecodeError` rather than `ValueError` on purpose: `EvalError`
+        # *is* a `ValueError`, so the wider class would re-wrap the row errors named just below.
         examples: List[Example] = []
-        with open(path, "r", encoding="utf-8") as handle:
-            for lineno, line in enumerate(handle, 1):
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError as exc:
-                    raise EvalError("%s:%d is not valid JSON: %s" % (path, lineno, exc))
-                examples.append(Example.from_dict(row, where="%s:%d" % (path, lineno)))
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                for lineno, line in enumerate(handle, 1):
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError as exc:
+                        raise EvalError("%s:%d is not valid JSON: %s" % (path, lineno, exc))
+                    examples.append(Example.from_dict(row, where="%s:%d" % (path, lineno)))
+        except (OSError, UnicodeDecodeError, RecursionError) as exc:
+            raise EvalError("%s cannot be read: %s" % (path, exc)) from exc
         if not examples:
             raise EvalError("%s contains no examples" % path)
         return cls(examples)
