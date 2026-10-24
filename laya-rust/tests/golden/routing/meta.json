@@ -9,6 +9,8 @@
   "counts": {
     "lang_probe": 261,
     "route_probe": 159,
+    "route_batch_probe": 10,
+    "route_batch_probe_errors": 6,
     "email_probe_clean": 253,
     "email_probe_state": 22,
     "shortlist_probe": 22,
