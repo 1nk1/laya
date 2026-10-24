@@ -3506,7 +3506,7 @@ def test_cli_relative_slice_rule_requires_baseline_before_loading(monkeypatch, t
     assert not built
 
 
-def test_cli_rejects_invalid_policy_json_and_version(monkeypatch, tmp_path):
+def test_cli_rejects_invalid_policy_json_and_version(monkeypatch, tmp_path, capsys):
     from laya import evals_cli
 
     built = _patch_router(monkeypatch)
@@ -3514,9 +3514,27 @@ def test_cli_rejects_invalid_policy_json_and_version(monkeypatch, tmp_path):
     path = tmp_path / "gates.json"
     for content in ("{not json", json.dumps({"version": 2, "rules": [
             {"slice": {"language": "zh"}, "metric": "choice_accuracy",
-             "min_count": 1, "min": 0.5}]})):
+             "min_count": 1, "min": 0.5}]}),
+            # Unclosable depth is a document `json` refuses to read, and it says so with a
+            # `RecursionError` rather than a `ValueError`. It is the caller's file, so `docs/evals.md`
+            # ("Invalid policy syntax exits 2 before a checkpoint loads") belongs to it too.
+            "[" * 100000 + "]" * 100000):
         path.write_text(content, encoding="utf-8")
         assert evals_cli.main(["run", dataset, "--gate-policy", str(path)]) == 2
+        err = capsys.readouterr().err
+        assert "Traceback" not in err, "exit 2 with a traceback is the shape this refuses"
+        assert err.startswith("laya-evals: "), "a usage error, named as one: %r" % err
+        assert "gate policy" in err, "and named as *which* usage error: %r" % err
+    # A path that is not there is `OSError`, and `load_policy` names it as a gate policy on purpose:
+    # `main`'s own `FileNotFoundError` arm would still exit 2, with a message that no longer says
+    # which flag pointed at the missing file.
+    missing = tmp_path / "absent-gates.json"
+    assert evals_cli.main(["run", dataset, "--gate-policy", str(missing)]) == 2
+    err = capsys.readouterr().err
+    assert "Traceback" not in err, "exit 2 with a traceback is the shape this refuses: %r" % err
+    assert err.startswith("laya-evals: ") and "gate policy" in err, (
+        "the refusal still names the flag it came from: %r" % err)
+    assert str(missing) in err, "and the path the caller typed: %r" % err
     assert not built
 
 
