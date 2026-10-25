@@ -121,6 +121,12 @@ pub enum LayaError {
     /// router whose predictor has no scan capability).
     #[error("{0}")]
     NotSupported(String),
+
+    /// A `min_confidence` threshold or per-bucket map that Python's `check_min_confidence` would
+    /// reject with a `ValueError`: out of `[0.0, 1.0]`, NaN, an empty map, or a key that is not a
+    /// bucket. The text is Python's, with `%r` rendered as Python's `repr`.
+    #[error("{0}")]
+    InvalidMinConfidence(String),
 }
 
 #[cfg(test)]

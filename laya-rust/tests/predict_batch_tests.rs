@@ -440,6 +440,7 @@ fn batch_options(options: &Value) -> BatchOptions {
         .get("sort_by_length")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    built.min_confidence = golden_data::recorded_min_confidence(options);
     built
 }
 
@@ -575,6 +576,15 @@ fn rejects_the_same_batch_requests_python_rejects() {
                 "TypeError" => {
                     assert!(
                         matches!(error, LayaError::InvalidState(_)),
+                        "{}/{case}: wrong error variant: {error:?}",
+                        checkpoint.subdir()
+                    );
+                    assert_eq!(message, error.to_string(), "{}/{case}", checkpoint.subdir());
+                }
+                "ValueError" if root["options"].get("min_confidence").is_some() => {
+                    // A rejected threshold: Python's text, whole, checked before any state.
+                    assert!(
+                        matches!(error, LayaError::InvalidMinConfidence(_)),
                         "{}/{case}: wrong error variant: {error:?}",
                         checkpoint.subdir()
                     );

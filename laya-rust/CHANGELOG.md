@@ -11,6 +11,21 @@ regenerated from laya (Python) 0.4.14 for the supported paths (see the known gap
 
 ### Added
 
+- The abstention gate, ported from `laya/confidence.py`: `PredictOptions::min_confidence` with
+  `LayaEngine::predict_with_options` and `LayaRouter::predict_with_options`, and
+  `BatchOptions::min_confidence` for `predict_batch` on the engine and the router (one threshold
+  for the whole batch, applied to every result and no part of the router's grouping).
+  `MinConfidence` is a scalar or a per-bucket map, built with `MinConfidence::scalar` and
+  `MinConfidence::map`, which refuse what `check_min_confidence` refuses with Python's `ValueError`
+  text (`LayaError::InvalidMinConfidence`); the router validates before it routes or loads, and the
+  engine before it looks at the states. With a threshold set, `Answer::{low_confidence, abstention,
+  abstention_threshold}` report the gate (`GATE_STATES`: passed, abstained, unevaluated); without
+  one they report nothing. `Answer::jev_confidence` is Python's `jev_confidence` and
+  `bucket_keys()` its `bucket_keys`. `predict_long` takes no threshold, as in Python. Checked
+  against `routing/confidence_probe.json`, which Python's own `confidence.py` writes. Two API
+  notes: `BatchOptions` no longer derives `Eq` (it now holds floats), and `LayaError` is not
+  `#[non_exhaustive]`, so an exhaustive `match` on it outside the crate needs an arm for
+  `InvalidMinConfidence`.
 - `LangGuess` and `LayaRouter::{route_with_lang_guess, predict_with_lang_guess,
   predict_long_with_lang_guess, with_lang_guess}`: Python's `lang_guess` hint (a language code or a
   callback taking the state), per call or installed on the router, checked after an explicit `lang`
@@ -26,7 +41,7 @@ regenerated from laya (Python) 0.4.14 for the supported paths (see the known gap
   longer than one sequence in overlapping token windows and keep the most confident window per
   question, with `Answer::window()` attribution, `LayaResult::scan_usage()` and summed
   `state_usage()`. Matches Python's `ONNXAgent.predict_long` and the .NET SDK; hooks, per-language
-  temperatures and the confidence gate are not part of it. New `LongOptions`, `LayaLongPredictor`,
+  temperatures are not part of it, and, as in Python, it takes no `min_confidence`. New `LongOptions`, `LayaLongPredictor`,
   `LayaError::{UnsupportedAggregate, InvalidWindow, NotSupported}` and a default
   `LayaTokenizer::decode`. `LayaError` is not `#[non_exhaustive]`, so an exhaustive `match` on it
   outside the crate needs arms for the three new variants.
@@ -38,10 +53,10 @@ regenerated from laya (Python) 0.4.14 for the supported paths (see the known gap
   requests by checkpoint and then by question schema, restores request order, attaches each
   request's `routing`, and honours each request's `model`, `task`, `lang` and `lang_guess`;
   `route_batch` loads nothing. New `BatchOptions`, `BatchRequest` (both `#[non_exhaustive]`, with
-  chained setters, so hooks, `min_confidence`, `lang` and per-request token budgets can be added
+  chained setters, so hooks, `lang` and per-request token budgets can be added
   later), `LayaBatchPredictor` with the provided method `LayaPredictor::as_batch_predictor` (a
   default of `None`, so existing implementors keep compiling) and `LayaError::InvalidState`, raised
-  for a `null` state as Python raises `TypeError`. Hooks, `min_confidence`, per-call `lang` and
+  for a `null` state as Python raises `TypeError`. Hooks, per-call `lang` and
   `max_len` / `head_max_len` and the router's `diagnostics` report are not part of it. `LayaError`
   is not `#[non_exhaustive]`, so an exhaustive `match` on it outside the crate needs an arm for the
   new variant.
@@ -124,5 +139,4 @@ regenerated from laya (Python) 0.4.14 for the supported paths (see the known gap
 
 - Language detection, routing and email cleaning follow the regenerated Python 0.4.14 probes; a
   later Python change needs the probes regenerated.
-- Not yet ported: abstention (`min_confidence`, including per-bucket thresholds),
-  histogram-binning calibration and `lang_temperatures`.
+- Not yet ported: histogram-binning calibration and `lang_temperatures`.
