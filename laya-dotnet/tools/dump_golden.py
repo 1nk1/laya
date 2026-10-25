@@ -47,6 +47,8 @@ from golden_cases import (  # noqa: E402
     ERROR_CASES,
     LONG_CASES,
     LONG_ERROR_CASES,
+    MIN_CONFIDENCE_CASES,
+    MIN_CONFIDENCE_ERROR_CASES,
     SHORTLIST_E2E_CASES,
 )
 
@@ -307,9 +309,10 @@ def describe_questions(agent: Agent, state, questions: dict) -> list:
 def record_case(agent: Agent, case: dict) -> dict:
     state, questions = case["state"], case["questions"]
     per_question = describe_questions(agent, state, questions)
-    result = agent.system_one(state, questions)
+    options = case.get("options")
+    result = agent.system_one(state, questions, **(options or {}))
     last = agent.model.last
-    return {
+    rec = {
         "name": case["name"],
         "state": state,
         "serialized_state": serialize_state(state),
@@ -327,6 +330,9 @@ def record_case(agent: Agent, case: dict) -> dict:
         "act_logits": last["act_logits"].tolist(),
         "result": result,
     }
+    if options:
+        rec["options"] = options
+    return rec
 
 
 def record_shortlist_case(agent: Agent, case: dict) -> dict:
@@ -380,16 +386,20 @@ def record_shortlist_case(agent: Agent, case: dict) -> dict:
 
 
 def record_error_case(agent: Agent, case: dict) -> dict:
+    options = case.get("options")
     try:
-        agent.system_one(case["state"], case["questions"])
+        agent.system_one(case["state"], case["questions"], **(options or {}))
     except ValueError as e:
-        return {
+        rec = {
             "name": case["name"],
             "state": case["state"],
             "questions": case["questions"],
             "error_type": "ValueError",
             "error_message": str(e),
         }
+        if options:
+            rec["options"] = options
+        return rec
     raise SystemExit("case %r was expected to raise ValueError but did not" % case["name"])
 
 
@@ -612,6 +622,15 @@ def run_checkpoint(onnx_dir: str, out_dir: str) -> int:
                 "name": case["name"], "file": "case_%s.json" % case["name"],
                 "expects_error": expects_error, "kind": "batch",
             })
+
+    # Appended after the batch cases, so index.json's diff stays a pure append. No `kind`: these are
+    # standard system_one cases whose recorded `options` the parity tests forward.
+    for cases, expects_error in ((MIN_CONFIDENCE_CASES, False), (MIN_CONFIDENCE_ERROR_CASES, True)):
+        for case in cases:
+            rec = (record_error_case if expects_error else record_case)(agent, case)
+            dump(rec, os.path.join(out_dir, "case_%s.json" % case["name"]))
+            index.append({"name": case["name"], "file": "case_%s.json" % case["name"],
+                          "expects_error": expects_error})
 
     dump(index, os.path.join(out_dir, "index.json"))
     print("done: %d cases -> %s" % (len(index), out_dir))

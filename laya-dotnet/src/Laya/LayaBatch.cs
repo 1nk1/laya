@@ -4,7 +4,7 @@ namespace Laya;
 /// Per-call knobs for <see cref="ILayaBatchPredictor.PredictBatch"/> and
 /// <see cref="LayaRouter.PredictBatch"/>. Ports the batching arguments of Python's
 /// <c>ONNXAgent.predict_batch</c> (<c>batch_size</c>, <c>sort_by_length</c>). It is a class with
-/// init-only properties so later per-call options (<c>min_confidence</c>, <c>lang</c>,
+/// init-only properties so later per-call options (<c>lang</c>,
 /// <c>max_len</c>, <c>head_max_len</c>) can be added without changing any signature.
 /// </summary>
 public sealed class LayaBatchOptions
@@ -24,6 +24,13 @@ public sealed class LayaBatchOptions
     /// decision thresholds.
     /// </summary>
     public bool SortByLength { get; init; }
+
+    /// <summary>
+    /// Opt-in abstention threshold (Python <c>min_confidence</c>), applied to every answer of every state
+    /// in the call; on a router it is batch-wide, not part of the request grouping. <see langword="null"/>
+    /// writes nothing onto the answers. See <see cref="Laya.MinConfidence"/>.
+    /// </summary>
+    public MinConfidence? MinConfidence { get; init; }
 }
 
 /// <summary>
