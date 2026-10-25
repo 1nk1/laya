@@ -501,6 +501,26 @@ public sealed class LayaRouter : ILayaLongPredictor, IDisposable
         => PredictRouted(state, questions, model, task, lang, langGuess,
             predictor => predictor.Predict(state, questions));
 
+    /// <summary>
+    /// Routes as <see cref="Predict(object?, QuestionSet)"/> does (no model, task, language or hint overrides), with
+    /// per-call options (a <see langword="null"/> <paramref name="options"/> gates nothing, so a literal <c>Predict(s, q, null)</c> still means what it meant); see <see cref="Predict(object?, QuestionSet, string?, string?, string?, LangGuess?, LayaPredictOptions?)"/>.
+    /// </summary>
+    public LayaResult Predict(object? state, QuestionSet questions, LayaPredictOptions? options)
+        => Predict(state, questions, null, null, null, null, options);
+
+    /// <summary>
+    /// <see cref="Predict(object?, QuestionSet, string?, string?, string?, LangGuess?)"/> with per-call options.
+    /// Ports the <c>min_confidence</c> argument of Python's <c>Router.predict</c>: the threshold is validated after the
+    /// state and questions are checked and before anything is routed or loaded, and the gate is applied to the
+    /// answers whichever checkpoint produced them. <c>PredictLong</c> takes none, as in Python.
+    /// </summary>
+    /// <exception cref="ArgumentException">The threshold is invalid, with Python's <c>ValueError</c> text.</exception>
+    public LayaResult Predict(
+        object? state, QuestionSet questions, string? model, string? task, string? lang, LangGuess? langGuess,
+        LayaPredictOptions? options)
+        => PredictRouted(state, questions, model, task, lang, langGuess,
+            predictor => predictor.Predict(state, questions), options?.MinConfidence);
+
     LayaResult ILayaLongPredictor.PredictLong(
         object state, QuestionSet questions, int? window, int? stride, string aggregate, int? batchSize) =>
         PredictLong(state, questions, window, stride, aggregate, batchSize);
@@ -535,15 +555,18 @@ public sealed class LayaRouter : ILayaLongPredictor, IDisposable
 
     private LayaResult PredictRouted(
         object? state, QuestionSet questions, string? model, string? task, string? lang, LangGuess? langGuess,
-        Func<ILayaPredictor, LayaResult> predict)
+        Func<ILayaPredictor, LayaResult> predict, MinConfidence? minConfidence = null)
     {
         StateGuard.NotNull(state);
         ArgumentNullException.ThrowIfNull(questions);
+        // router.py:1338: validated after the state and questions, before routing or loading anything.
+        var gate = minConfidence?.Check();
         var decision = Route(state, questions, model, task, lang, langGuess);
         // Inference runs outside the lock, exactly as Python's predict() calls
         // agent.system_one after load() has already returned and released the lock — so
         // concurrent predictions on a shared checkpoint are not serialised by the router.
-        return WithLease(decision.Model, predict).WithRouting(decision);
+        var result = WithLease(decision.Model, predict);
+        return (gate is { } g ? ConfidenceGate.Apply(result, g) : result).WithRouting(decision);
     }
 
     // Loads (or finds) the checkpoint, holds a lease so eviction cannot dispose it mid-call, and
@@ -610,11 +633,18 @@ public sealed class LayaRouter : ILayaLongPredictor, IDisposable
     /// </summary>
     /// <param name="requests">The requests; an empty list returns an empty list and loads nothing.</param>
     /// <param name="options">Passed to every checkpoint batch; <see cref="LayaBatchOptions.SortByLength"/>
-    /// acts per question group, as in Python.</param>
+    /// acts per question group, as in Python. <see cref="LayaBatchOptions.MinConfidence"/> is batch-wide: it is
+    /// applied by the router to every result, is not passed to the checkpoints, and is not part of the grouping.</param>
     /// <exception cref="NotSupportedException">A routed checkpoint (an attached predictor) has no batch support.</exception>
     public IReadOnlyList<LayaResult> PredictBatch(
         IReadOnlyList<LayaBatchRequest> requests, LayaBatchOptions? options = null)
     {
+        // router.py:1669: validated before any request is looked at.
+        var gate = options?.MinConfidence?.Check();
+        // router.py:1789 calls the agent without min_confidence and gates the results itself.
+        var inner = options is { MinConfidence: not null }
+            ? new LayaBatchOptions { BatchSize = options.BatchSize, SortByLength = options.SortByLength }
+            : options;
         var decisions = RouteBatch(requests);
         if (decisions.Count == 0) return [];
 
@@ -643,12 +673,13 @@ public sealed class LayaRouter : ILayaLongPredictor, IDisposable
                         $"{predictor.GetType().Name} has no PredictBatch, so requests cannot share forward passes");
                 foreach (var (questions, group) in GroupBySchema(requests, indices))
                 {
-                    var batch = batcher.PredictBatch([.. group.Select(i => requests[i].State)], questions, options);
+                    var batch = batcher.PredictBatch([.. group.Select(i => requests[i].State)], questions, inner);
                     if (batch.Count != group.Count)
                         throw new InvalidOperationException(
                             $"internal error: Agent.predict_batch returned {batch.Count} results for {group.Count} states");
                     for (var k = 0; k < batch.Count; k++)
-                        results[group[k]] = batch[k].WithRouting(decisions[group[k]]);
+                        results[group[k]] = (gate is { } g ? ConfidenceGate.Apply(batch[k], g) : batch[k])
+                            .WithRouting(decisions[group[k]]);
                 }
                 return 0;
             });

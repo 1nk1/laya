@@ -78,7 +78,8 @@ public sealed partial class PredictParityTests(AllEnginesFixture fixture)
 
         var state     = GoldenData.ToClr(root.GetProperty("state"));
         var questions = GoldenData.BuildQuestions(root.GetProperty("questions"));
-        var result    = engine.Predict(state, questions);
+        var result    = engine.Predict(state, questions,
+                                       new LayaPredictOptions { MinConfidence = ConfidenceGateTests.MinConfidenceOf(root) });
         var expected  = root.GetProperty("result");
 
         Assert.Equal(expected.GetProperty("model").GetString(), result.Model);
@@ -102,6 +103,7 @@ public sealed partial class PredictParityTests(AllEnginesFixture fixture)
             Assert.Equal(want.GetProperty("type").GetString(), SequenceBuilder.TypeName(got.Type));
             AssertClose(want.GetProperty("confidence").GetDouble(), got.Confidence,
                         ProbTolerance, $"{where}.confidence");
+            ConfidenceGateTests.AssertGateFields(want, got, where);
             AssertClose(want.GetProperty("action").GetProperty("act_probability").GetDouble(),
                         got.Action.ActProbability, ProbTolerance, $"{where}.action.act_probability");
 
@@ -139,7 +141,8 @@ public sealed partial class PredictParityTests(AllEnginesFixture fixture)
 
         var state     = GoldenData.ToClr(root.GetProperty("state"));
         var questions = GoldenData.BuildQuestions(root.GetProperty("questions"));
-        var result    = engine.Predict(state, questions);
+        var result    = engine.Predict(state, questions,
+                                       new LayaPredictOptions { MinConfidence = ConfidenceGateTests.MinConfidenceOf(root) });
         var expected  = root.GetProperty("result");
 
         Assert.Equal(expected.GetProperty("model").GetString(), result.Model);
@@ -158,6 +161,7 @@ public sealed partial class PredictParityTests(AllEnginesFixture fixture)
 
             AssertClose(want.GetProperty("confidence").GetDouble(), got.Confidence,
                         ProbTolerance, $"{where}.confidence");
+            ConfidenceGateTests.AssertGateFields(want, got, where);
 
             switch (got.Type)
             {
@@ -189,7 +193,8 @@ public sealed partial class PredictParityTests(AllEnginesFixture fixture)
         var state     = GoldenData.ToClr(root.GetProperty("state"));
         var questions = GoldenData.BuildQuestions(root.GetProperty("questions"));
 
-        var error = Assert.Throws<ArgumentException>(() => engine.Predict(state, questions));
+        var options = new LayaPredictOptions { MinConfidence = ConfidenceGateTests.MinConfidenceOf(root) };
+        var error = Assert.Throws<ArgumentException>(() => engine.Predict(state, questions, options));
         // ArgumentException appends the parameter name, so the recorded text is a prefix of the
         // message rather than all of it.
         Assert.StartsWith(root.GetProperty("error_message").GetString()!, error.Message, StringComparison.Ordinal);

@@ -22,6 +22,7 @@ public sealed partial class PredictParityTests
     {
         BatchSize = options.TryGetProperty("batch_size", out var size) ? size.GetInt32() : null,
         SortByLength = options.TryGetProperty("sort_by_length", out var sort) && sort.GetBoolean(),
+        MinConfidence = ConfidenceGateTests.MinConfidenceIn(options),
     };
 
     private static List<object?> BatchStates(JsonElement root) =>
@@ -56,6 +57,7 @@ public sealed partial class PredictParityTests
                 var at = $"{where}/{entry.Name}";
                 Assert.Equal(want.GetProperty("type").GetString(), SequenceBuilder.TypeName(answer.Type));
                 AssertClose(want.GetProperty("confidence").GetDouble(), answer.Confidence, ProbTolerance, at + ".confidence");
+                ConfidenceGateTests.AssertGateFields(want, answer, at);
                 AssertClose(want.GetProperty("answer_confidence").GetDouble(), answer.AnswerConfidence,
                             ProbTolerance, at + ".answer_confidence");
                 AssertClose(want.GetProperty("action").GetProperty("act_probability").GetDouble(),

@@ -376,8 +376,43 @@ by routed checkpoint (first-seen order, so each checkpoint loads at most once), 
 schema (order-sensitive) so same-schema states share a pass, and returns results in request order, each with
 `Routing`. `LayaRouter.RouteBatch(requests)` returns just the `RouteDecision`s and loads nothing. A null
 state or questions, or an unknown model, fails the whole call before anything loads. Attached predictors must
-implement `ILayaBatchPredictor`, else `NotSupportedException`. Hooks, `min_confidence`, per-call
+implement `ILayaBatchPredictor`, else `NotSupportedException`. Hooks, per-call
 `lang` / `max_len` / `head_max_len` and the `diagnostics` dictionary are not ported yet.
+
+### Abstention: `MinConfidence`
+
+Python's opt-in `min_confidence`, off by default. Pass a `MinConfidence` per call and every answer says
+whether it cleared the gate; leave it unset and nothing is written (`Abstention`, `AbstentionThreshold`
+are `null`, `LowConfidence` is `false`).
+
+```csharp
+var result = engine.Predict(state, questions,
+    new LayaPredictOptions { MinConfidence = MinConfidence.Of(0.85) });
+var answer = result["department"];
+answer.LowConfidence;        // true only when AnswerConfidence fell below the threshold
+answer.Abstention;           // "passed" | "abstained" | "unevaluated" (GateStates.*)
+answer.AbstentionThreshold;  // the threshold this answer was gated at
+
+// One cut per option-count bucket (MinConfidence.BucketKeys, plus "default"):
+var perBucket = MinConfidence.ForBuckets(new Dictionary<string, double>
+{
+    ["choice:2"] = 0.9, ["choice:3-5"] = 0.8, ["default"] = 0.6,
+});
+engine.PredictBatch(states, questions, new LayaBatchOptions { MinConfidence = perBucket });
+router.Predict(state, questions, null, null, null, null, new LayaPredictOptions { MinConfidence = perBucket });
+```
+
+The gate compares `AnswerConfidence`, falling back to `Confidence`; an answer with neither usable (NaN, infinite)
+is `unevaluated`, never `passed`. A map is read per answer bucket (`choice:3-5`, `score:11+`, `noul:2`, ...): a
+bucket the map omits falls to its `"default"`, then to 0.0 (ungated). A threshold outside [0, 1], NaN or infinite,
+an empty map or an unknown key throws `ArgumentException` with Python's `ValueError` text, when the call receives it
+(the engine checks it before anything else, the router after the state and questions and before routing or
+loading). Answers are immutable; the gate returns new answers, so a reused result never carries a stale flag.
+`PredictLong` takes no threshold, as Python's `predict_long` takes none. The router and `LayaBatchOptions.MinConfidence`
+apply one batch-wide threshold; it is not part of the request grouping.
+
+`Answer.JevConfidence()` is Python's `jev_confidence`: the `confidence` Jev would report for the answer's
+(rounded) probabilities, `null` for noul answers and malformed probabilities.
 
 ---
 
@@ -984,12 +1019,12 @@ identifies the foreign line or field that overrides a mostly-English state. Unde
 Latin text uses the router's configured default. Email cleaning follows current request,
 disclaimer, signature and reply-header rules, including Portuguese, Spanish and French markers.
 
-- **Opt-in features added in Python 0.3.21 are not ported yet:** abstention (`min_confidence`),
-  and per-language temperatures (`lang_temperatures`). They are off by default in
-  Python, so default predictions are unaffected. They are planned as follow-ups.
+- **Opt-in features added in Python 0.3.21 are not ported yet:** per-language temperatures
+  (`lang_temperatures`). They are off by default in Python, so default predictions are unaffected. They
+  are planned as follow-ups. Abstention (`min_confidence`) is ported (see "Abstention" above).
 - **Other Python-only APIs are not ported:** hooks, question option ordering and digest controls.
   Batching is ported (`PredictBatch`, `LayaRouter.PredictBatch` / `RouteBatch`) without hooks,
-  `min_confidence`, per-call `lang` / `max_len` / `head_max_len` and the router `diagnostics` dictionary.
+  per-call `lang` / `max_len` / `head_max_len` and the router `diagnostics` dictionary.
 - **Usage diagnostics:** Python's `state_tokens`, `truncated`, `state_tokens_dropped`, `truncated_questions`
   and `options` are reported by `Predict`, `PredictBatch` and `PredictLong`, as Python's `system_one` is
   `predict_batch([state])`.

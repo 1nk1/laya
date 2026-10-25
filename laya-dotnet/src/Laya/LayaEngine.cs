@@ -24,7 +24,7 @@ namespace Laya;
 /// one <see cref="InferenceSession"/> runs the whole forward pass. For the split layout (the
 /// laya-ts exporter's output), two sessions run in sequence: the encoder produces
 /// <c>last_hidden_state</c>, which is fed straight into the head. Both cases go through
-/// <see cref="Run"/>, so batching, calibration and <see cref="Predict"/> do not know which
+/// <see cref="Run"/>, so batching, calibration and <see cref="Predict(object?, QuestionSet)"/> do not know which
 /// layout is loaded.
 /// </para>
 /// </remarks>
@@ -205,6 +205,21 @@ public sealed class LayaEngine : IDisposable, ILayaLongPredictor, ILayaBatchPred
     }
 
     /// <summary>
+    /// <see cref="Predict(object?, QuestionSet)"/> with per-call options. Ports the <c>min_confidence</c>
+    /// argument of Python's <c>system_one</c>: with <see cref="LayaPredictOptions.MinConfidence"/> set, every answer
+    /// reports <see cref="Answer.Abstention"/> and <see cref="Answer.AbstentionThreshold"/>, and carries
+    /// <see cref="Answer.LowConfidence"/> when it falls below the threshold. The threshold is validated before
+    /// anything else, as in Python, where it is the first thing <c>predict_batch</c> checks.
+    /// </summary>
+    /// <exception cref="ArgumentException">The threshold is invalid, with Python's <c>ValueError</c> text.</exception>
+    public LayaResult Predict(object? state, QuestionSet questions, LayaPredictOptions? options)
+    {
+        var gate = options?.MinConfidence?.Check();
+        var result = Predict(state, questions);
+        return gate is { } g ? ConfidenceGate.Apply(result, g) : result;
+    }
+
+    /// <summary>
     /// Scan a long state in overlapping token windows. Ports Python ONNXAgent.predict_long:
     /// noul selects the greatest P(true); choice and score select the greatest answer confidence.
     /// Ties select the first window. A state within the room the questions leave (or within an
@@ -272,9 +287,19 @@ public sealed class LayaEngine : IDisposable, ILayaLongPredictor, ILayaBatchPred
     /// <param name="questions">The questions answered about every state. With no questions each state
     /// gets an empty answer set and zero usage, as in Python.</param>
     /// <param name="options">Batch size and ordering; see <see cref="LayaBatchOptions"/>.</param>
-    /// <exception cref="ArgumentException">A null state, or a question whose options cannot fit the head budget.</exception>
+    /// <exception cref="ArgumentException">A null state, an invalid <see cref="LayaBatchOptions.MinConfidence"/>,
+    /// or a question whose options cannot fit the head budget.</exception>
     public IReadOnlyList<LayaResult> PredictBatch(
         IReadOnlyList<object?> states, QuestionSet questions, LayaBatchOptions? options = null)
+    {
+        // onnx_agent.py:386: the threshold is validated before the states or the questions are looked at.
+        var gate = options?.MinConfidence?.Check();
+        var results = PredictBatchUngated(states, questions, options);
+        return gate is { } g ? [.. results.Select(r => ConfidenceGate.Apply(r, g))] : results;
+    }
+
+    private IReadOnlyList<LayaResult> PredictBatchUngated(
+        IReadOnlyList<object?> states, QuestionSet questions, LayaBatchOptions? options)
     {
         ArgumentNullException.ThrowIfNull(states);
         ArgumentNullException.ThrowIfNull(questions);
