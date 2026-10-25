@@ -252,6 +252,10 @@ def _gate(answers, threshold):
 
 
 def build_confidence_probe():
+    # jev_confidence sums floats; CPython 3.12 made sum() compensated, and the SDKs reproduce that.
+    if sys.version_info < (3, 12):
+        sys.exit("confidence_probe.json must be recorded with Python 3.12 or later "
+                 "(sum() of floats is compensated from 3.12 on), got %d.%d" % sys.version_info[:2])
     scalars = [dict(value=v, **_checked(confidence.check_min_confidence, v)) for v in cc.SCALAR_THRESHOLDS]
 
     maps = []
