@@ -53,10 +53,10 @@ regenerated from laya (Python) 0.4.14 for the supported paths (see the known gap
   requests by checkpoint and then by question schema, restores request order, attaches each
   request's `routing`, and honours each request's `model`, `task`, `lang` and `lang_guess`;
   `route_batch` loads nothing. New `BatchOptions`, `BatchRequest` (both `#[non_exhaustive]`, with
-  chained setters, so hooks, `min_confidence`, `lang` and per-request token budgets can be added
+  chained setters, so hooks, `lang` and per-request token budgets can be added
   later), `LayaBatchPredictor` with the provided method `LayaPredictor::as_batch_predictor` (a
   default of `None`, so existing implementors keep compiling) and `LayaError::InvalidState`, raised
-  for a `null` state as Python raises `TypeError`. Hooks, `min_confidence`, per-call `lang` and
+  for a `null` state as Python raises `TypeError`. Hooks, per-call `lang` and
   `max_len` / `head_max_len` and the router's `diagnostics` report are not part of it. `LayaError`
   is not `#[non_exhaustive]`, so an exhaustive `match` on it outside the crate needs an arm for the
   new variant.
